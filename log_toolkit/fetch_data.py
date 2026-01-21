@@ -72,7 +72,11 @@ def verify_md5(
 def extract_zip(zip_path: Path, dst_dir: Path) -> None:
     logger.info("Extracting %s to %s", zip_path, dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
+
     with zipfile.ZipFile(zip_path) as z:
+        bad = z.testzip()
+        if bad is not None:
+            raise zipfile.BadZipFile(f"Corrupt file in zip: {bad}")
         z.extractall(dst_dir)
 
 
