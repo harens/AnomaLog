@@ -81,6 +81,8 @@ class _DownloadProgress:
 class Dataset(ABC):
     url: URL
     md5_checksum: MD5Hex
+    extracted_anomaly_labels_path: Path
+    extracted_raw_logs_path: Path
     root_dir: Path = Path("data")
 
     @property
@@ -108,13 +110,14 @@ class Dataset(ABC):
 
         verify_md5(self.zip_path, self.md5_checksum)
 
-        extract_zip(self.zip_path, self.root_dir)
+        extract_zip(self.zip_path, self.extracted_path)
 
         logger.info("Removing zip file %s", self.zip_path)
         self.zip_path.unlink()
 
         return self.extracted_path
 
+    # TODO: Neatly handle urllib.error.HTTPError: HTTP Error 503: Service Unavailable
     def _download_dataset(self) -> None:
         logger.info("Downloading %s from %s", self.name, self.url)
 
@@ -153,9 +156,14 @@ class Dataset(ABC):
             raise
 
 
-class HDFS(Dataset):
+# See LogHub: https://zenodo.org/records/8196385
+# Originally tried using LogHub-2.0 (https://zenodo.org/record/8275861),
+# but HDFS doesn't seem to be annotated
+class HDFS_V1(Dataset):
     def __init__(self) -> None:
         super().__init__(
-            url="https://zenodo.org/records/8275861/files/HDFS.zip",
-            md5_checksum="f23880dd4938379a535ab71a8d27a798",
+            url="https://zenodo.org/records/8196385/files/HDFS_v1.zip",
+            md5_checksum="76a24b4d9a6164d543fb275f89773260",
+            extracted_anomaly_labels_path=Path("preprocessed/anomaly_label.csv"),
+            extracted_raw_logs_path=Path("HDFS.log"),
         )
