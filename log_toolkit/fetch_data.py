@@ -108,7 +108,11 @@ class Dataset(ABC):
 
         verify_md5(self.zip_path, self.md5_checksum)
 
-        extract_zip(self.zip_path, self.extracted_path)
+        extract_zip(self.zip_path, self.root_dir)
+
+        logger.info("Removing zip file %s", self.zip_path)
+        self.zip_path.unlink()
+
         return self.extracted_path
 
     def _download_dataset(self) -> None:
