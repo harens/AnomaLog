@@ -2,8 +2,10 @@ import hashlib
 import logging
 import zipfile
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from urllib.request import urlretrieve
 
 from rich.progress import (
@@ -37,14 +39,18 @@ def make_progress() -> Progress:
 logger = logging.getLogger(__name__)
 
 
-def verify_md5(file_path: Path, expected_hex: MD5Hex) -> None:
+def verify_md5(
+    file_path: Path,
+    expected_hex: MD5Hex,
+    progress_factory: Callable[[], Progress] = make_progress,
+) -> None:
     logger.info("Verifying MD5 checksum for %s", file_path)
     file_size = file_path.stat().st_size
 
     hash_md5 = hashlib.md5()
     CHUNK_SIZE = 4 * 1024 * 1024
 
-    with make_progress() as progress:
+    with progress_factory() as progress:
         task = progress.add_task(
             f"Verifying {file_path.name}",
             total=file_size,
@@ -79,10 +85,10 @@ class _DownloadProgress:
 
 @dataclass(frozen=True)
 class Dataset(ABC):
-    url: URL
-    md5_checksum: MD5Hex
-    extracted_anomaly_labels_path: Path
-    extracted_raw_logs_path: Path
+    url: ClassVar[URL]
+    md5_checksum: ClassVar[MD5Hex]
+    extracted_anomaly_labels_path: ClassVar[Path]
+    extracted_raw_logs_path: ClassVar[Path]
     root_dir: Path = Path("data")
 
     @property
@@ -118,13 +124,15 @@ class Dataset(ABC):
         return self.extracted_path
 
     # TODO: Neatly handle urllib.error.HTTPError: HTTP Error 503: Service Unavailable
-    def _download_dataset(self) -> None:
+    def _download_dataset(
+        self, progress_factory: Callable[[], Progress] = make_progress
+    ) -> None:
         logger.info("Downloading %s from %s", self.name, self.url)
 
         state = _DownloadProgress()
 
         try:
-            with make_progress() as pbar:
+            with progress_factory() as pbar:
 
                 def show_progress(
                     block_num: int, block_size: int, total_size: int
@@ -160,10 +168,7 @@ class Dataset(ABC):
 # Originally tried using LogHub-2.0 (https://zenodo.org/record/8275861),
 # but HDFS doesn't seem to be annotated
 class HDFS_V1(Dataset):
-    def __init__(self) -> None:
-        super().__init__(
-            url="https://zenodo.org/records/8196385/files/HDFS_v1.zip",
-            md5_checksum="76a24b4d9a6164d543fb275f89773260",
-            extracted_anomaly_labels_path=Path("preprocessed/anomaly_label.csv"),
-            extracted_raw_logs_path=Path("HDFS.log"),
-        )
+    url = "https://zenodo.org/records/8196385/files/HDFS_v1.zip"
+    md5_checksum = "76a24b4d9a6164d543fb275f89773260"
+    extracted_anomaly_labels_path = Path("preprocessed/anomaly_label.csv")
+    extracted_raw_logs_path = Path("HDFS.log")
