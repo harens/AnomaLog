@@ -9,12 +9,12 @@ from rich.progress import (
     TaskID,
 )
 
-from anomalog.datasets.sources.base import DatasetSource
-from anomalog.datasets.sources.io_utils import (
+from anomalog.datasets.io_utils import (
     extract_zip,
-    make_progress,
+    make_bounded_progress,
     verify_md5,
 )
+from anomalog.datasets.sources.base import DatasetSource
 from anomalog.type_hints import URL, MD5Hex
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class RemoteZipSource(DatasetSource):
         self,
         dataset_name: str,
         zip_path: Path,
-        progress_factory: Callable[[], Progress] = make_progress,
+        progress_factory: Callable[[], Progress] = make_bounded_progress,
     ) -> None:
         logger.info("Downloading %s from %s", dataset_name, self.url)
 

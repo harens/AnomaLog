@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from anomalog.datasets.io_utils import extract_zip, verify_md5
 from anomalog.datasets.sources.base import DatasetSource
-from anomalog.datasets.sources.io_utils import extract_zip, verify_md5
 from anomalog.type_hints import MD5Hex
 
 

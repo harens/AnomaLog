@@ -8,7 +8,9 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
+    TimeElapsedColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
@@ -18,7 +20,7 @@ from anomalog.type_hints import MD5Hex
 logger = logging.getLogger(__name__)
 
 
-def make_progress() -> Progress:
+def make_bounded_progress() -> Progress:
     return Progress(
         TextColumn("[bold blue]{task.description}"),
         BarColumn(),
@@ -33,10 +35,21 @@ def make_progress() -> Progress:
     )
 
 
+def make_spinner_progress(unit: str = "lines processed") -> Progress:
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        SpinnerColumn(),
+        TextColumn(f"{{task.completed:,}} {unit}"),
+        "•",
+        TimeElapsedColumn(),
+        transient=True,
+    )
+
+
 def verify_md5(
     file_path: Path,
     expected_hex: MD5Hex,
-    progress_factory: Callable[[], Progress] = make_progress,
+    progress_factory: Callable[[], Progress] = make_bounded_progress,
 ) -> None:
     logger.info("Verifying MD5 checksum for %s", file_path)
     file_size = file_path.stat().st_size
