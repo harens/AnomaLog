@@ -174,5 +174,13 @@ class Dataset(ABC):
 class HDFS_V1(Dataset):
     url = "https://zenodo.org/records/8196385/files/HDFS_v1.zip"
     md5_checksum = "76a24b4d9a6164d543fb275f89773260"
+    # TODO: Remove extracted_anomaly_labels_path and have more general
+    # method of determining anomalies (since BGL doesn't have this format)
     extracted_anomaly_labels_path = Path("preprocessed/anomaly_label.csv")
     extracted_raw_logs_path = Path("HDFS.log")
+
+
+class BGL(Dataset):
+    url = "https://zenodo.org/records/8196385/files/BGL.zip"
+    md5_checksum = "4452953c470f2d95fcb32d5f6e733f7a"
+    extracted_raw_logs_path = Path("BGL.log")
