@@ -25,4 +25,4 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = "log_toolkit"
+module-name = "anomalog"

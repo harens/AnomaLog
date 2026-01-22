@@ -18,7 +18,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from log_toolkit.type_hints import URL, MD5Hex
+from anomalog.type_hints import URL, MD5Hex
 
 
 def make_progress() -> Progress:
