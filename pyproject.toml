@@ -21,6 +21,9 @@ dev = [
 [tool.ruff.lint]
 select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
 
+[tool.mypy]
+disable_error_code = ["import-untyped"]
+
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
