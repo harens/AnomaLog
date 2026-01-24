@@ -9,12 +9,12 @@ from rich.progress import (
     TaskID,
 )
 
-from anomalog.datasets.io_utils import (
+from anomalog.io_utils import (
     extract_zip,
     make_bounded_progress,
     verify_md5,
 )
-from anomalog.datasets.sources.base import DatasetSource
+from anomalog.sources.base import DatasetSource
 from anomalog.type_hints import URL, MD5Hex
 
 logger = logging.getLogger(__name__)

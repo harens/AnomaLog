@@ -7,8 +7,8 @@ from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 
-from anomalog.datasets.dataset import ParsedDataset, Parser, RawDataset
-from anomalog.datasets.io_utils import make_spinner_progress
+from anomalog.dataset import ParsedDataset, Parser, RawDataset
+from anomalog.io_utils import make_spinner_progress
 
 logger = logging.getLogger(__name__)
 

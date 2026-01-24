@@ -4,11 +4,11 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Protocol, Self, TypedDict, cast, runtime_checkable
 
-from anomalog.datasets.sources import DatasetSource, RemoteZipSource
+from anomalog.sources import DatasetSource, RemoteZipSource
 
 logger = logging.getLogger(__name__)
 
-# from anomalog.datasets.parsers.base import Parser, ParsedDataset
+# from anomalog.parsers.base import Parser, ParsedDataset
 
 
 # @dataclass(frozen=True, slots=True)
