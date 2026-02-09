@@ -41,6 +41,25 @@ class RawDataset:
         self.source.materialise(self.raw_logs_path.parent)
         return self
 
+    def log_example_line(self, sink: StructuredSink) -> None:
+        # Log examples of the unstructured line content for debugging/verification.
+        logger = get_run_logger()
+        examples = sink.read_unstructured_free_text()
+
+        # get one line
+        try:
+            example_line = next(examples())
+            logger.info(
+                "Example unstructured line content for dataset %s: %r",
+                self.dataset_name,
+                example_line,
+            )
+        except StopIteration:
+            logger.warning(
+                "No unstructured line content found for dataset %s",
+                self.dataset_name,
+            )
+
     def extract_structured_components(
         self,
         sink: StructuredSink | None = None,
@@ -54,6 +73,8 @@ class RawDataset:
             )
 
         sink.write_structured_lines()
+
+        self.log_example_line(sink)
 
         return StructuredDataset(
             sink,
