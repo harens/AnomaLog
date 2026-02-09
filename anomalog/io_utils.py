@@ -29,7 +29,6 @@ def make_bounded_progress() -> Progress:
         TransferSpeedColumn(),
         "•",
         TimeRemainingColumn(),
-        transient=True,
     )
 
 
@@ -40,7 +39,6 @@ def make_spinner_progress(unit: str = "lines processed") -> Progress:
         TextColumn(f"{{task.completed:,}} {unit}"),
         "•",
         TimeElapsedColumn(),
-        transient=True,
     )
 
 
