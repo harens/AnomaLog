@@ -61,6 +61,7 @@ class RemoteZipSource(DatasetSource):
 
         download_dataset_task = materialize(
             asset_from_local_path(dst_dir),
+            asset_deps=[asset_from_local_path(dst_dir)],
             retries=3,
             retry_delay_seconds=[2, 5, 15],
         )(self._download_dataset)
