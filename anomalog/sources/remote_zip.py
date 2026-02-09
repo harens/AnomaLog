@@ -136,6 +136,6 @@ class RemoteZipSource(DatasetSource):
             raise
 
         verify_md5(zip_path, self.md5_checksum)
-        extract_zip(zip_path, zip_path.parent)
+        extract_zip(zip_path, zip_path.with_suffix(""))
         logger.info("Removing zip file %s", zip_path)
         zip_path.unlink()
