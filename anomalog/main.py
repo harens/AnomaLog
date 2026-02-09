@@ -43,5 +43,15 @@ def build_bgl() -> None:
     )
 
 
+@flow
+def build_hdfs_v1() -> None:
+    (
+        hdfs_v1.fetch_if_needed()
+        .extract_structured_components()
+        .mine_templates_with(Drain3Parser("HDFS_V1"))
+    )
+
+
 if __name__ == "__main__":
-    pipeline = build_bgl()
+    # pipeline = build_bgl()
+    pipeline = build_hdfs_v1()
