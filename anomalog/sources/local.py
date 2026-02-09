@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anomalog.io_utils import extract_zip, verify_md5
-from anomalog.sources.base import DatasetSource
+from anomalog.sources import DatasetSource
 from anomalog.type_hints import MD5Hex
 
 
@@ -10,8 +10,7 @@ from anomalog.type_hints import MD5Hex
 class LocalDirSource(DatasetSource):
     path: Path
 
-    def materialise(self, dst_dir: Path) -> Path:
-        # TODO: dst_dir is ignored
+    def materialise(self, dst_dir: Path) -> Path:  # noqa: ARG002 - not used, but part of the interface
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         if not self.path.is_dir():

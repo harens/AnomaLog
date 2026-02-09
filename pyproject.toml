@@ -3,10 +3,15 @@ name = "AnomaLog"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
-    "beartype>=0.22.9",
-    "drain3>=0.9.11",
+    "beartype>=0.22.9",  # TODO: Check how it compares with pydantic, since prefect pulls pydantic
+    "drain3",
+    "duckdb>=1.4.3",
+    "logparser3>=1.0.4",
+    "platformdirs>=4.5.1",
+    "prefect>=3.6.15",
+    "pyarrow>=23.0.0",
     "rich>=14.2.0",
 ]
 
@@ -19,7 +24,9 @@ dev = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
+# select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
+select = ['ALL']
+ignore = ["D", "TD", "FIX002", "ERA001"]
 
 [tool.mypy]
 disable_error_code = ["import-untyped"]
@@ -31,3 +38,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 module-name = "anomalog"
+
+[tool.uv.sources]
+# See https://github.com/logpai/Drain3/issues/98
+drain3 = { git = "https://github.com/logpai/Drain3" }

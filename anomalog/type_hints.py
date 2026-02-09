@@ -3,15 +3,15 @@ from urllib.parse import urlparse
 
 from beartype.vale import Is
 
-IsLen32 = Is[lambda s: len(s) == 32]
+IsLen32 = Is[lambda s: len(s) == 32]  # noqa: PLR2004 - this variable is specifically for 32
 
 
 def _is_hex(s: str) -> bool:
     try:
         bytes.fromhex(s)
-        return True
     except ValueError:
         return False
+    return True
 
 
 IsHex = Is[_is_hex]

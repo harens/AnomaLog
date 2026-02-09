@@ -1,9 +1,9 @@
 import hashlib
-import logging
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+from prefect.logging import get_run_logger
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -16,8 +16,6 @@ from rich.progress import (
 )
 
 from anomalog.type_hints import MD5Hex
-
-logger = logging.getLogger(__name__)
 
 
 def make_bounded_progress() -> Progress:
@@ -51,11 +49,16 @@ def verify_md5(
     expected_hex: MD5Hex,
     progress_factory: Callable[[], Progress] = make_bounded_progress,
 ) -> None:
-    logger.info("Verifying MD5 checksum for %s", file_path)
+    logger = get_run_logger()
+    logger.info(
+        "Verifying MD5 checksum for %s against expected %s",
+        file_path,
+        expected_hex,
+    )
     file_size = file_path.stat().st_size
 
-    hash_md5 = hashlib.md5()
-    CHUNK_SIZE = 4 * 1024 * 1024
+    hash_md5 = hashlib.md5()  # noqa: S324 - MD5 is used by default for zenodo datasets
+    chunk_size = 4 * 1024 * 1024
 
     with progress_factory() as progress:
         task = progress.add_task(
@@ -64,24 +67,29 @@ def verify_md5(
         )
 
         with file_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
+            for chunk in iter(lambda: f.read(chunk_size), b""):
                 hash_md5.update(chunk)
                 progress.update(task, advance=len(chunk))
 
     file_md5 = hash_md5.hexdigest()
     if file_md5 != expected_hex:
-        raise ValueError(
+        msg = (
             f"MD5 checksum mismatch for {file_path}: "
             f"expected {expected_hex}, got {file_md5}"
+        )
+        raise ValueError(
+            msg,
         )
 
 
 def extract_zip(zip_path: Path, dst_dir: Path) -> None:
+    logger = get_run_logger()
     logger.info("Extracting %s to %s", zip_path, dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(zip_path) as z:
         bad = z.testzip()
         if bad is not None:
-            raise zipfile.BadZipFile(f"Corrupt file in zip: {bad}")
+            msg = f"Corrupt file in zip: {bad}"
+            raise zipfile.BadZipFile(msg)
         z.extractall(dst_dir)
