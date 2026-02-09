@@ -1,48 +1,15 @@
 import re
-from dataclasses import dataclass, field
-from functools import partial
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from platformdirs import user_cache_dir, user_data_dir
-from prefect import task as _task
-from prefect.assets import Asset, AssetProperties
-from prefect.assets import materialize as _materialize
-from prefect.cache_policies import INPUTS, TASK_SOURCE, CachePolicy
+from prefect.assets import Asset
+from prefect.cache_policies import CachePolicy
 from prefect.context import AssetContext, TaskRunContext
 from prefect.utilities.hashing import hash_objects
 
-
-@dataclass(frozen=True, slots=True)
-class CachePathsConfig:
-    data_root: Path = field(default_factory=lambda: Path(user_data_dir("anomalog")))
-    cache_root: Path = field(default_factory=lambda: Path(user_cache_dir("anomalog")))
-
-
 _ALLOWED = re.compile(r"[^A-Za-z0-9._/-]")
-
-
-def asset_from_local_path(path: Path) -> Asset:
-    """Create a Prefect Asset from a local filesystem path.
-
-    - Asset key is a sanitized identifier derived from the path
-    - Real path is stored in Asset.properties.url
-    - Deterministic: same path -> same key
-    """
-    path = path.expanduser().resolve()
-
-    # Build a deterministic, Prefect-safe key
-    # NOTE: this is an IDENTIFIER, not a real path
-    safe_key = _ALLOWED.sub("_", path.as_posix())
-
-    return Asset(
-        key=f"localfs://{safe_key}",
-        properties=AssetProperties(
-            name=path.name,
-            url=path.as_uri(),
-        ),
-    )
 
 
 def _try_file_path_from_asset_url(asset_url: str | None) -> Path | None:
@@ -150,10 +117,3 @@ class AssetDepsFingerprintPolicy(CachePolicy):
                 payload.append(("upstream", asset.key, _file_fingerprint(p)))
 
         return hash_objects(payload, raise_on_failure=True)
-
-
-# TODO(harens): Allow users to set this
-CACHE_POLICY = INPUTS + TASK_SOURCE + AssetDepsFingerprintPolicy()
-
-task = partial(_task, persist_result=True, cache_policy=CACHE_POLICY)
-materialize = partial(_materialize, persist_result=True, cache_policy=CACHE_POLICY)
