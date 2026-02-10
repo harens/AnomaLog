@@ -21,10 +21,18 @@ def class_source(cls: type) -> str:
 
 
 def cache_class_key_fn(context: TaskRunContext, params: dict[str, object]) -> str:  # noqa: ARG001 - context is not used, but part of the interface
-    # If any classes are in the params, include their source code hash in the cache key
-    class_hashes = []
+    class_sources: list[str] = []
     for v in params.values():
-        if inspect.isclass(v):
-            source = class_source(v)
-            class_hashes.append(hashlib.sha256(source.encode("utf-8")).hexdigest())
-    return hashlib.sha256("".join(class_hashes).encode("utf-8")).hexdigest()
+        # Skip functions/methods/modules/etc.
+        if inspect.isroutine(v) or inspect.ismodule(v):
+            continue
+
+        cls = type(v)
+
+        # Skip built-in classes like function/int/str/list/...
+        if cls.__module__ == "builtins":
+            continue
+
+        class_sources.append(class_source(cls))
+    combined = "\n".join(sorted(class_sources))
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
