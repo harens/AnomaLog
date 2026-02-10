@@ -41,13 +41,13 @@ def asset_from_local_path(path: Path) -> Asset:
     )
 
 
-# TODO(harens): Allow users to set this
+# TODO(harens): Allow users to set this, move into CachePathsConfig
 CACHE_POLICY = (
     INPUTS
     + TASK_SOURCE
     + AssetDepsFingerprintPolicy()
     + CacheKeyFnPolicy(cache_key_fn=cache_class_key_fn)
-)
+).configure(key_storage=CachePathsConfig().cache_root / "prefect")
 
 task = partial(_task, persist_result=True, cache_policy=CACHE_POLICY)
 materialize = partial(_materialize, persist_result=True, cache_policy=CACHE_POLICY)
