@@ -32,6 +32,7 @@ class WriterWorker:
         rows: list[StructuredLine] = []
         n_read = 0
         n_parsed = 0
+        has_anomaly = False
 
         # Read only this slice; align to newline boundaries
         with Path(self.in_path).open("rb") as f:
@@ -62,6 +63,8 @@ class WriterWorker:
                 if rec is not None:
                     rows.append(rec)
                     n_parsed += 1
+                    if rec.anomalous:
+                        has_anomaly = True
 
         # Always write a file (even if empty) so downstream expects consistent parts
         table = pa.Table.from_pylist([asdict(r) for r in rows])
@@ -74,6 +77,7 @@ class WriterWorker:
             n_parsed=n_parsed,
             start=self.start,
             end=self.end,
+            has_anomaly=has_anomaly,
         )
 
 
@@ -96,13 +100,16 @@ def _run_job(ctx: WriterJobCtx) -> WriterResult:
     return WriterWorker(_STATE.parser, ctx).parse_byte_range_and_write()
 
 
+# TODO: If stale parser cache exists, and we modify the parser to invalidate it
+# and then ctrl+c during parser run and reset code to original, prefect would
+# cache but the files would be missing as we deleted them.
 def extract_structured_components(
     *,
     raw_input_path: Path,
     parser: StructuredParser,
     parquet_out_dir: Path,
     workers: int | None = None,
-) -> None:
+) -> bool:
     logger = get_run_logger()
     if workers is None:
         workers = os.cpu_count() or 8
@@ -191,3 +198,4 @@ def extract_structured_components(
         total_parsed,
         parquet_out_dir,
     )
+    return any(r.has_anomaly for r in results)

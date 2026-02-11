@@ -72,11 +72,12 @@ class RawDataset:
                 cache_paths=self.cache_paths,
             )
 
-        sink.write_structured_lines()
+        anomalies_inline = sink.write_structured_lines()
 
         self.log_example_line(sink)
 
         return StructuredDataset(
             sink,
             cache_paths=self.cache_paths,
+            anomalies_inline=anomalies_inline,
         )

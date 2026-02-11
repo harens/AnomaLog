@@ -32,13 +32,13 @@ class ParquetStructuredSink(StructuredSink):
     def structured_data_cache(self, dataset_name: str) -> Path:
         return self.cache_paths.cache_root / dataset_name / self.cache_dir
 
-    def write_structured_lines(self, workers: int | None = None) -> None:
+    def write_structured_lines(self, workers: int | None = None) -> bool:
         base_extract_structured_components = materialize(
             asset_from_local_path(self.structured_data_cache(self.dataset_name)),
             asset_deps=[asset_from_local_path(self.raw_dataset_path)],
         )(extract_structured_components)
 
-        base_extract_structured_components(
+        return base_extract_structured_components(
             raw_input_path=self.raw_dataset_path,
             parser=self.parser,
             parquet_out_dir=self.structured_data_cache(self.dataset_name),

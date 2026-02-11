@@ -19,3 +19,4 @@ class WriterResult:
     n_parsed: int
     start: int
     end: int
+    has_anomaly: bool

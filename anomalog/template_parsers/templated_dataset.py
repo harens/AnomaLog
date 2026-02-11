@@ -29,3 +29,4 @@ class TemplatedDataset:
     sink: StructuredSink
     cache_paths: CachePathsConfig
     template_parser: TemplateParser
+    anomalies_inline: bool
