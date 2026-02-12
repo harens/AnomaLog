@@ -72,9 +72,15 @@ class Drain3Parser(TemplateParser):
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
-        materialize(asset_from_local_path(self.cache_file_path))(self._train)(
-            untemplated_text_iterator,
-        )
+        # Avoid unstable cache keys from the iterator argument by
+        # capturing it in a closure and running a zero-arg task
+        # (no INPUTS component).
+        # TODO: Handle this more elegantly with a custom CachePolicy
+        # that ignores the iterator argument.
+        def _run_train() -> None:
+            return self._train(untemplated_text_iterator)
+
+        materialize(asset_from_local_path(self.cache_file_path))(_run_train)()
 
     def _train(
         self,

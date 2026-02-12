@@ -81,12 +81,7 @@ def _asset_file_path(asset: Asset) -> Path | None:
 @dataclass
 class AssetDepsFingerprintPolicy(CachePolicy):
     """Cache key component based on:
-      - upstream asset dependencies (upstream_assets + direct_asset_dependencies)
-      - downstream produced assets (downstream_assets), if they exist.
-
-    Rationale:
-      - If outputs drift (deleted/modified), cache key changes
-        -> task reruns -> repairs outputs.
+    - upstream asset dependencies (upstream_assets + direct_asset_dependencies)
     """
 
     include_outputs: bool = True
@@ -105,7 +100,9 @@ class AssetDepsFingerprintPolicy(CachePolicy):
         upstream = asset_ctx.direct_asset_dependencies
 
         if not upstream:
-            return None
+            # Return a deterministic placeholder so the overall cache key
+            # still incorporates other policies (INPUTS, TASK_SOURCE, etc.)
+            return hash_objects([("no_upstream_assets",)], raise_on_failure=True)
 
         payload = []
 
