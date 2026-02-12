@@ -102,7 +102,7 @@ class AssetDepsFingerprintPolicy(CachePolicy):
         if not asset_ctx:
             return None
 
-        upstream = asset_ctx.upstream_assets | asset_ctx.direct_asset_dependencies
+        upstream = asset_ctx.direct_asset_dependencies
 
         if not upstream:
             return None
