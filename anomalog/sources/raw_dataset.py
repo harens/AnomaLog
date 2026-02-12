@@ -4,6 +4,10 @@ from pathlib import Path
 
 from prefect.logging import get_run_logger
 
+from anomalog.anomaly_label_reader import (
+    AnomalyLabelReader,
+    InlineReader,
+)
 from anomalog.cache import CachePathsConfig
 from anomalog.sources import DatasetSource
 from anomalog.structured_parsers.contracts import StructuredParser, StructuredSink
@@ -18,6 +22,7 @@ class RawDataset:
     structured_parser: StructuredParser
     cache_paths: CachePathsConfig = field(default_factory=CachePathsConfig)
     raw_logs_relpath: Path | None = None
+    anomaly_label_reader: AnomalyLabelReader | None = None
 
     @property
     def raw_logs_path(self) -> Path:
@@ -76,8 +81,28 @@ class RawDataset:
 
         self.log_example_line(sink)
 
+        # Decide label reader: inline when parser emits labels,
+        # otherwise require provided reader.
+        if anomalies_inline:
+            label_reader = InlineReader(sink=sink)
+        else:
+            if self.anomaly_label_reader is None:
+                msg = (
+                    "Structured data has no inline anomaly labels and no "
+                    "anomaly_label_reader was provided."
+                )
+                raise ValueError(
+                    msg,
+                )
+            label_reader = self.anomaly_label_reader.with_context(
+                dataset_root=sink.raw_dataset_path.parent,
+                sink=sink,
+            )
+
+        labels = label_reader.load()
+
         return StructuredDataset(
             sink,
             cache_paths=self.cache_paths,
-            anomalies_inline=anomalies_inline,
+            anomaly_labels=labels,
         )

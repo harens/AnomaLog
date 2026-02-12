@@ -2,6 +2,7 @@ from pathlib import Path
 
 from prefect import flow
 
+from anomalog.anomaly_label_reader import CSVReader
 from anomalog.sources import RemoteZipSource
 from anomalog.sources.raw_dataset import RawDataset
 from anomalog.structured_parsers.parsers import BGLParser, HDFSV1Parser
@@ -22,6 +23,11 @@ hdfs_v1 = RawDataset(
         md5_checksum="76a24b4d9a6164d543fb275f89773260",
     ),
     structured_parser=HDFSV1Parser(),
+    anomaly_label_reader=CSVReader(
+        relative_path=Path("preprocessed/anomaly_label.csv"),
+        entity_column="BlockId",
+        label_column="Label",
+    ),
 )
 
 bgl = RawDataset(
