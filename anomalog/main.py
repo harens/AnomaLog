@@ -7,6 +7,7 @@ from anomalog.sources import RemoteZipSource
 from anomalog.sources.raw_dataset import RawDataset
 from anomalog.structured_parsers.parsers import BGLParser, HDFSV1Parser
 from anomalog.template_parsers import Drain3Parser
+from anomalog.template_parsers.templated_dataset import TemplatedDataset
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling
@@ -41,8 +42,8 @@ bgl = RawDataset(
 
 
 @flow
-def build_bgl() -> None:
-    (
+def build_bgl() -> TemplatedDataset:
+    return (
         bgl.fetch_if_needed()
         .extract_structured_components()
         .mine_templates_with(Drain3Parser("BGL"))
@@ -50,8 +51,8 @@ def build_bgl() -> None:
 
 
 @flow
-def build_hdfs_v1() -> None:
-    (
+def build_hdfs_v1() -> TemplatedDataset:
+    return (
         hdfs_v1.fetch_if_needed()
         .extract_structured_components()
         .mine_templates_with(Drain3Parser("HDFS_V1"))
@@ -59,5 +60,5 @@ def build_hdfs_v1() -> None:
 
 
 if __name__ == "__main__":
-    # pipeline = build_bgl()
-    pipeline = build_hdfs_v1()
+    pipeline = build_bgl()
+    # pipeline = build_hdfs_v1()
