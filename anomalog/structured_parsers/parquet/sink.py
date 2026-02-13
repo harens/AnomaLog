@@ -5,12 +5,7 @@ from typing import ClassVar
 
 import pyarrow.dataset as ds
 
-from anomalog.cache import (
-    CachePathsConfig,
-    asset_from_local_path,
-    materialize,
-    task,
-)
+from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
 from anomalog.structured_parsers.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
@@ -73,21 +68,13 @@ class ParquetStructuredSink(StructuredSink):
                 if text is not None:
                     yield text
 
-        return task(
-            _iter,
-            name=f"read-unstructured:{UNTEMPLATED_FIELD}",
-        ).with_options(
-            asset_deps=[
-                asset_from_local_path(self.structured_data_cache(self.dataset_name)),
-            ],
-        )
+        return _iter
 
     def iter_structured_lines(
         self,
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Iterate over StructuredLine objects with optional column projection."""
-
         # Ensure required fields are present; missing columns default to None.
         required = set(StructuredLine.__dataclass_fields__.keys())
         col_list = list(required if columns is None else set(columns) | required)
@@ -107,15 +94,7 @@ class ParquetStructuredSink(StructuredSink):
                     kwargs = {col: table.get(col, [None])[i] for col in col_list}
                     yield StructuredLine(**kwargs)
 
-        col_suffix = ",".join(sorted(col_list))
-        return task(
-            _iter,
-            name=f"iter-structured-lines:{col_suffix}",
-        ).with_options(
-            asset_deps=[
-                asset_from_local_path(self.structured_data_cache(self.dataset_name)),
-            ],
-        )
+        return _iter
 
     def _rows_from_batch(self, table_dict: dict[str, list]) -> Iterator[StructuredLine]:
         n = len(next(iter(table_dict.values()))) if table_dict else 0
@@ -153,14 +132,7 @@ class ParquetStructuredSink(StructuredSink):
             if bucket:
                 yield bucket
 
-        return task(
-            _iter,
-            name="iter-sequence-lines:entity",
-        ).with_options(
-            asset_deps=[
-                asset_from_local_path(self.structured_data_cache(self.dataset_name)),
-            ],
-        )
+        return _iter
 
     def _min_timestamp(self) -> int | None:
         ts_scanner = self._dataset().scanner(columns=[TIMESTAMP_FIELD])
@@ -208,14 +180,7 @@ class ParquetStructuredSink(StructuredSink):
                 bucket.sort(key=lambda r: (r.timestamp_unix_ms or 0, r.line_order or 0))
                 yield bucket
 
-        return task(
-            _iter,
-            name=f"iter-sequence-lines:time-{time_span_ms}",
-        ).with_options(
-            asset_deps=[
-                asset_from_local_path(self.structured_data_cache(self.dataset_name)),
-            ],
-        )
+        return _iter
 
     def iter_fixed_window_sequences(
         self,
@@ -233,32 +198,4 @@ class ParquetStructuredSink(StructuredSink):
             if buffer:
                 yield buffer
 
-        return task(
-            _iter,
-            name=(
-                f"iter-sequence-lines:fixed-{window_size}"
-                f"-step-{step_size or window_size}"
-            ),
-        ).with_options(
-            asset_deps=[
-                asset_from_local_path(self.structured_data_cache(self.dataset_name)),
-            ],
-        )
-
-    def label_for_line(self, line_order: int) -> int | None:
-        return self._scan_label(LINE_FIELD, line_order)
-
-    def label_for_group(self, entity_id: str) -> int | None:
-        return self._scan_label(ENTITY_FIELD, entity_id)
-
-    def _scan_label(self, key_field: str, key_value: object) -> int | None:
-        for row in self.iter_structured_lines(
-            columns=[key_field, ANOMALOUS_FIELD],
-        )():
-            if getattr(row, key_field) == key_value:
-                label = getattr(row, ANOMALOUS_FIELD)
-                try:
-                    return int(label) if label is not None else None
-                except (TypeError, ValueError):
-                    return None
-        return None
+        return _iter

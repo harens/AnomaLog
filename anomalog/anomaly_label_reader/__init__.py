@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 from anomalog.structured_parsers.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
+    LINE_FIELD,
     StructuredSink,
 )
 
@@ -119,11 +120,13 @@ class InlineReader(AnomalyLabelReader):
             raise ValueError(msg)
         sink: StructuredSink = self.sink
 
+        line_labels, group_labels = _load_label_cache(sink)
+
         def _label_for_line(line_order: int) -> int | None:
-            return sink.label_for_line(line_order)
+            return line_labels.get(line_order)
 
         def _label_for_group(entity_id: str) -> int | None:
-            return sink.label_for_group(entity_id)
+            return group_labels.get(entity_id)
 
         return AnomalyLabelLookup(
             label_for_line=_label_for_line,
@@ -139,3 +142,47 @@ class InlineReader(AnomalyLabelReader):
         if self.sink is not None:
             return self
         return replace(self, sink=sink)
+
+
+def _load_label_cache(
+    sink: StructuredSink,
+) -> tuple[dict[int, int], dict[str, int]]:
+    """Materialise label lookups from the sink, staying sparse.
+
+    Strategy:
+    - Scan the dataset once with column projection to id + label fields.
+    - Store only rows where label is non-zero and not None (anomalies are rare).
+    - No attachment to the sink; callers capture the dicts in AnomalyLabelLookup.
+    """
+
+    line_labels: dict[int, int] = {}
+    group_labels: dict[str, int] = {}
+
+    try:
+        iter_rows = sink.iter_structured_lines(
+            columns=[LINE_FIELD, ENTITY_FIELD, ANOMALOUS_FIELD],
+        )()
+    except Exception as exc:  # pragma: no cover - defensive
+        msg = f"Failed to iterate structured lines for labels: {exc}"
+        raise RuntimeError(msg) from exc
+
+    for row in iter_rows:
+        raw_label = getattr(row, ANOMALOUS_FIELD, None)
+        if raw_label is None:
+            continue
+        try:
+            label = int(raw_label)
+        except (TypeError, ValueError):
+            continue
+        if label == 0:
+            continue  # keep cache sparse; missing -> treated as non-anomalous
+
+        line_order = getattr(row, LINE_FIELD, None)
+        if line_order is not None:
+            line_labels[int(line_order)] = label
+
+        entity_id = getattr(row, ENTITY_FIELD, None)
+        if entity_id is not None and entity_id not in group_labels:
+            group_labels[str(entity_id)] = label
+
+    return line_labels, group_labels
