@@ -58,6 +58,48 @@ class Drain3Parser(TemplateParser):
             self.cache_path / f"{self.dataset_name}_drain3_cache_{self.cfg_hash}.db"
         )
 
+    @staticmethod
+    def _make_inference_func(
+        miner: TemplateMiner,
+    ) -> Callable[
+        [UntemplatedText],
+        tuple[LogTemplate, ExtractedParameters],
+    ]:
+        """Build an inference callable bound to a trained Drain3 miner."""
+
+        def get_template_and_params_for_log(
+            miner: TemplateMiner,
+            log_line: str,
+        ) -> tuple[str, Iterable[str]]:
+            match = miner.match(log_line)
+            if match is None:
+                msg = f"Log line did not match any template: {log_line}"
+                raise ValueError(msg)
+
+            template = match.get_template()
+            return template, miner.get_parameter_list(template, log_line)
+
+        return partial(get_template_and_params_for_log, miner)
+
+    def _load_inference_from_cache(self) -> None:
+        """Initialise inference_func from the persisted Drain3 state.
+
+        Prefect's asset caching can skip executing the training function on
+        repeat runs. Without this hook, `self.inference_func` would remain
+        unset even though a trained Drain3 cache exists on disk.
+        """
+
+        if not self.cache_file_path.exists():
+            msg = "No trained Drain3 cache found. Please (re)train the parser first."
+            raise ValueError(msg)
+
+        cache_file = FilePersistence(self.cache_file_path)  # ty:ignore[invalid-argument-type]
+        config = TemplateMinerConfig()
+        config.load(str(self.config_file))
+
+        miner = TemplateMiner(cache_file, config=config)
+        self.inference_func = self._make_inference_func(miner)
+
     def inference(
         self,
         unstructured_text: UntemplatedText,
@@ -81,6 +123,11 @@ class Drain3Parser(TemplateParser):
             return self._train(untemplated_text_iterator)
 
         materialize(asset_from_local_path(self.cache_file_path))(_run_train)()
+
+        # The training task might be skipped if the Prefect asset cache hits.
+        # Ensure we still have a callable bound to the persisted miner state.
+        if self.inference_func is None:
+            self._load_inference_from_cache()
 
     def _train(
         self,
@@ -120,22 +167,7 @@ class Drain3Parser(TemplateParser):
                 result.get("cluster_count", 0),
             )
 
-        def get_template_and_params_for_log(
-            miner: TemplateMiner,
-            log_line: str,
-        ) -> tuple[str, Iterable[str]]:
-            match = miner.match(log_line)
-            if match is None:
-                msg = f"Log line did not match any template: {log_line}"
-                raise ValueError(msg)
-
-            template = match.get_template()
-            return template, miner.get_parameter_list(template, log_line)
-
-        self.inference_func = partial(
-            get_template_and_params_for_log,
-            miner,
-        )
+        self.inference_func = self._make_inference_func(miner)
 
 
 class IdentityTemplateParser(TemplateParser):
