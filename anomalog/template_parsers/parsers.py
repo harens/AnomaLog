@@ -88,7 +88,6 @@ class Drain3Parser(TemplateParser):
         repeat runs. Without this hook, `self.inference_func` would remain
         unset even though a trained Drain3 cache exists on disk.
         """
-
         if not self.cache_file_path.exists():
             msg = "No trained Drain3 cache found. Please (re)train the parser first."
             raise ValueError(msg)
