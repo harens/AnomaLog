@@ -2,7 +2,10 @@ from dataclasses import dataclass
 
 from anomalog.anomaly_label_reader import AnomalyLabelLookup
 from anomalog.cache import CachePathsConfig
-from anomalog.structured_parsers.contracts import StructuredSink
+from anomalog.structured_parsers.contracts import (
+    UNTEMPLATED_FIELD,
+    StructuredSink,
+)
 from anomalog.template_parsers.templated_dataset import TemplatedDataset, TemplateParser
 
 
@@ -15,7 +18,14 @@ class StructuredDataset:
     anomaly_labels: AnomalyLabelLookup
 
     def mine_templates_with(self, template_parser: TemplateParser) -> TemplatedDataset:
-        template_parser.train(self.sink.read_unstructured_free_text())
+        template_parser.train(
+            lambda: (
+                row.untemplated_message_text
+                for row in self.sink.iter_structured_lines(
+                    columns=[UNTEMPLATED_FIELD],
+                )()
+            ),
+        )
 
         return TemplatedDataset(
             sink=self.sink,
