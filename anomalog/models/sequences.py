@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from collections import Counter
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
@@ -81,8 +82,8 @@ class SequenceBuilder:
 
     def __iter__(self) -> Iterator[TemplateSequence]:
         rows_iter = self._rows_iterator()
-        infer = self.infer
-        label_for_group = self.label_for_group
+        infer = functools.lru_cache(maxsize=50_000)(self.infer)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
         for window_id, rows in enumerate(rows_iter):
             seq = self._build_sequence(
@@ -120,7 +121,6 @@ class SequenceBuilder:
         events: list[tuple[str, list[str], int | None]] = []
         counts: Counter[str] = Counter()
         seq_label = 0
-        group_label_cache: dict[str, int | None] = {}
         prev_ts: int | None = None
 
         ids_in_window = [r.entity_id for r in rows if r.entity_id is not None]
@@ -142,13 +142,8 @@ class SequenceBuilder:
                 continue
 
             ent = r.entity_id
-            if ent is not None:
-                label = group_label_cache.get(ent)
-                if label is None:
-                    label = label_for_group(ent)
-                    group_label_cache[ent] = label
-                if label == 1:
-                    seq_label = 1
+            if ent is not None and label_for_group(ent) == 1:
+                seq_label = 1
 
         return TemplateSequence(
             events=events,
