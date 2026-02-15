@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -36,8 +36,6 @@ class StructuredSink(Protocol):
     # Returns whether any of the lines have anomalous label 1 (as opposed to 0 or None).
     def write_structured_lines(self) -> bool: ...
 
-    def read_unstructured_free_text(self) -> Callable[[], Iterator[str]]: ...
-
     # Batched access to structured rows, returned as StructuredLine instances.
     def iter_structured_lines(
         self,
@@ -45,16 +43,18 @@ class StructuredSink(Protocol):
     ) -> Callable[[], Iterator[StructuredLine]]: ...
 
     # Log Grouping Strategies
-    def iter_entity_sequences(self) -> Callable[[], Iterator[list[StructuredLine]]]: ...
+    def iter_entity_sequences(
+        self,
+    ) -> Callable[[], Iterator[Collection[StructuredLine]]]: ...
 
     def iter_fixed_window_sequences(
         self,
         window_size: int,
         step_size: int | None = None,  # defaults to window_size (non-overlapping)
-    ) -> Callable[[], Iterator[list[StructuredLine]]]: ...
+    ) -> Callable[[], Iterator[Collection[StructuredLine]]]: ...
 
     def iter_time_window_sequences(
         self,
         time_span_ms: int,
         step_span_ms: int | None = None,  # defaults to time_span_ms (non-overlapping)
-    ) -> Callable[[], Iterator[list[StructuredLine]]]: ...
+    ) -> Callable[[], Iterator[Collection[StructuredLine]]]: ...
