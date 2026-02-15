@@ -10,7 +10,11 @@ from anomalog.anomaly_label_reader import (
 )
 from anomalog.cache import CachePathsConfig
 from anomalog.sources import DatasetSource
-from anomalog.structured_parsers.contracts import StructuredParser, StructuredSink
+from anomalog.structured_parsers.contracts import (
+    UNTEMPLATED_FIELD,
+    StructuredParser,
+    StructuredSink,
+)
 from anomalog.structured_parsers.parquet.sink import ParquetStructuredSink
 from anomalog.structured_parsers.structured_dataset import StructuredDataset
 
@@ -49,11 +53,13 @@ class RawDataset:
     def log_example_line(self, sink: StructuredSink) -> None:
         # Log examples of the unstructured line content for debugging/verification.
         logger = get_run_logger()
-        examples = sink.read_unstructured_free_text()
+        examples = sink.iter_structured_lines(columns=[UNTEMPLATED_FIELD])
 
         # get one line
         try:
-            example_line = next(examples())
+            example_line = next(
+                (row.untemplated_message_text for row in examples() if row is not None),
+            )
             logger.info(
                 "Example unstructured line content for dataset %s: %r",
                 self.dataset_name,
