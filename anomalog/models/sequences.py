@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import functools
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable, Collection, Iterable, Iterator
 
     from anomalog.structured_parsers.contracts import StructuredLine, StructuredSink
     from anomalog.template_parsers.templated_dataset import TemplatedDataset
@@ -95,7 +96,7 @@ class SequenceBuilder:
             if seq is not None:
                 yield seq
 
-    def _rows_iterator(self) -> Iterator[list[StructuredLine]]:
+    def _rows_iterator(self) -> Iterator[Collection[StructuredLine]]:
         if self.mode == "time":
             return self.sink.iter_time_window_sequences(
                 self.time_span_ms,  # type: ignore[arg-type]
@@ -111,7 +112,7 @@ class SequenceBuilder:
     def _build_sequence(
         self,
         window_id: int,
-        rows: list[StructuredLine],
+        rows: Collection[StructuredLine],
         infer: Callable[[str], tuple[str, Iterable[str]]],
         label_for_group: Callable[[str], int | None],
     ) -> TemplateSequence | None:
