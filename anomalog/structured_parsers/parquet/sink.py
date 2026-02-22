@@ -1,10 +1,11 @@
-import math
-from collections import defaultdict, deque
+import heapq
+from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+import pyarrow as pa
 import pyarrow.dataset as ds
 
 from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
@@ -57,6 +58,7 @@ class ParquetStructuredSink(StructuredSink):
         *,
         filter_expr: ds.Expression | None = None,
         batch_size: int | None = None,
+        use_threads: bool = True,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Iterate over StructuredLine objects with optional column projection."""
 
@@ -66,34 +68,56 @@ class ParquetStructuredSink(StructuredSink):
                 columns=col_list,
                 batch_size=batch_size or self._DEFAULT_BATCH_SIZE,
                 filter=filter_expr,
+                batch_readahead=2,
+                fragment_readahead=1,
+                use_threads=use_threads,
             )
             for batch in scanner.to_batches():
-                yield from self._rows_from_batch(batch.to_pydict())
+                yield from self._rows_from_batch(batch)
 
         return _iter
 
-    def _rows_from_batch(self, table_dict: dict[str, list]) -> Iterator[StructuredLine]:
-        n = len(next(iter(table_dict.values()), []))
+    def _rows_from_batch(self, batch: pa.RecordBatch) -> Iterator[StructuredLine]:
+        """Yield StructuredLine rows without materializing whole batches as dicts."""
 
-        defaults = {
-            LINE_FIELD: None,
-            TIMESTAMP_FIELD: None,
-            ENTITY_FIELD: None,
-            UNTEMPLATED_FIELD: "",
-            ANOMALOUS_FIELD: None,
-        }
-        columns = {
-            name: table_dict.get(name, [default] * n)
-            for name, default in defaults.items()
-        }
+        def column_or_default(name: str) -> pa.Array | None:
+            idx = batch.schema.get_field_index(name)
+            return batch.column(idx) if idx != -1 else None
 
-        for i in range(n):
+        line_col = column_or_default(LINE_FIELD)
+        ts_col = column_or_default(TIMESTAMP_FIELD)
+        entity_col = column_or_default(ENTITY_FIELD)
+        msg_col = column_or_default(UNTEMPLATED_FIELD)
+        anomalous_col = column_or_default(ANOMALOUS_FIELD)
+
+        def value_at_int(arr: pa.Array | None, i: int) -> int | None:
+            if arr is None:
+                return None
+            scalar = arr[i]
+            if not scalar.is_valid:
+                return None
+            return scalar.as_py()
+
+        def value_at_str(
+            arr: pa.Array | None,
+            i: int,
+            *,
+            default: str | None,
+        ) -> str | None:
+            if arr is None:
+                return default
+            scalar = arr[i]
+            if not scalar.is_valid:
+                return default
+            return scalar.as_py()
+
+        for i in range(batch.num_rows):
             yield StructuredLine(
-                line_order=columns[LINE_FIELD][i],
-                timestamp_unix_ms=columns[TIMESTAMP_FIELD][i],
-                entity_id=columns[ENTITY_FIELD][i],
-                untemplated_message_text=columns[UNTEMPLATED_FIELD][i],
-                anomalous=columns[ANOMALOUS_FIELD][i],
+                line_order=value_at_int(line_col, i) or 0,
+                timestamp_unix_ms=value_at_int(ts_col, i),
+                entity_id=value_at_str(entity_col, i, default=None),
+                untemplated_message_text=value_at_str(msg_col, i, default="") or "",
+                anomalous=value_at_int(anomalous_col, i),
             )
 
     def _dataset(self) -> ds.Dataset:
@@ -116,10 +140,6 @@ class ParquetStructuredSink(StructuredSink):
     def _structured_columns() -> tuple[str, ...]:
         return tuple(StructuredLine.__dataclass_fields__.keys())
 
-    @staticmethod
-    def _row_sort_key(row: StructuredLine) -> tuple[int, int]:
-        return (row.timestamp_unix_ms or 0, row.line_order or 0)
-
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
@@ -134,7 +154,6 @@ class ParquetStructuredSink(StructuredSink):
                     by_entity.setdefault(row.entity_id, []).append(row)
 
                 for _, rows in sorted(by_entity.items()):
-                    rows.sort(key=self._row_sort_key)
                     yield rows
 
         return _iter
@@ -155,6 +174,8 @@ class ParquetStructuredSink(StructuredSink):
         ts_scanner = self._dataset().scanner(
             columns=[TIMESTAMP_FIELD],
             batch_size=self._DEFAULT_BATCH_SIZE,
+            batch_readahead=2,
+            fragment_readahead=1,
         )
 
         min_ts: int | None = None
@@ -175,6 +196,43 @@ class ParquetStructuredSink(StructuredSink):
 
         return min_ts, max_ts
 
+    @staticmethod
+    def _stream_time_windows(
+        rows: Iterator[StructuredLine],
+        *,
+        first_ts: int,
+        last_ts: int,
+        time_span_ms: int,
+        step: int,
+    ) -> Iterator[list[StructuredLine]]:
+        buffer: deque[StructuredLine] = deque()
+        window_start = first_ts
+        window_end = window_start + time_span_ms
+
+        for row in rows:
+            ts = row.timestamp_unix_ms
+            if ts is None:
+                continue
+
+            while ts >= window_end:
+                if buffer:
+                    yield buffer
+
+                window_start += step
+                window_end = window_start + time_span_ms
+                while buffer and (buffer[0].timestamp_unix_ms or 0) < window_start:
+                    buffer.popleft()
+
+            buffer.append(row)
+
+        while window_start <= last_ts:
+            if buffer:
+                yield buffer
+            window_start += step
+            window_end = window_start + time_span_ms
+            while buffer and (buffer[0].timestamp_unix_ms or 0) < window_start:
+                buffer.popleft()
+
     def iter_time_window_sequences(
         self,
         time_span_ms: int,
@@ -191,30 +249,15 @@ class ParquetStructuredSink(StructuredSink):
                 msg = "time_span_ms and step_span_ms must be positive integers"
                 raise ValueError(msg)
 
-            windowed_rows: dict[int, list[StructuredLine]] = defaultdict(list)
-            scanner = self._dataset().scanner(batch_size=self._DEFAULT_BATCH_SIZE)
-
-            for batch in scanner.to_batches():
-                for row in self._rows_from_batch(batch.to_pydict()):
-                    ts = row.timestamp_unix_ms
-                    if ts is None:
-                        continue
-
-                    max_idx = (ts - first_ts) // step
-                    min_idx = max(
-                        0,
-                        math.ceil((ts - first_ts - time_span_ms + 1) / step),
-                    )
-
-                    for idx in range(min_idx, max_idx + 1):
-                        windowed_rows[idx].append(row)
-
-            for idx in sorted(windowed_rows.keys()):
-                bucket = windowed_rows[idx]
-                if not bucket:
-                    continue
-                bucket.sort(key=self._row_sort_key)
-                yield bucket
+            yield from self._stream_time_windows(
+                self._iter_structured_lines_ordered(
+                    key_field=TIMESTAMP_FIELD,
+                )(),
+                first_ts=first_ts,
+                last_ts=last_ts,
+                time_span_ms=time_span_ms,
+                step=step,
+            )
 
         return _iter
 
@@ -230,8 +273,8 @@ class ParquetStructuredSink(StructuredSink):
                 raise ValueError(msg)
 
             buffer: deque[StructuredLine] = deque()
-            for row in self.iter_structured_lines(
-                batch_size=self._DEFAULT_BATCH_SIZE,
+            for row in self._iter_structured_lines_ordered(
+                key_field=LINE_FIELD,
             )():
                 buffer.append(row)
                 if len(buffer) == window_size:
@@ -243,6 +286,69 @@ class ParquetStructuredSink(StructuredSink):
                         buffer.popleft()
 
             if buffer:
-                yield buffer
+                yield list(buffer)
+
+        return _iter
+
+    def _iter_structured_lines_ordered(
+        self,
+        *,
+        key_field: str = LINE_FIELD,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Merge bucketed parquet fragments into a globally ordered stream."""
+
+        def _iter() -> Iterator[StructuredLine]:
+            buckets = sorted(self._iter_buckets())
+            buckets_with_null = [*buckets, None]
+
+            def _key_for_row(row: StructuredLine) -> tuple[int, int, int]:
+                if key_field == TIMESTAMP_FIELD:
+                    ts = row.timestamp_unix_ms
+                    # Missing timestamps go after those with timestamps; line_order
+                    # acts as a deterministic tiebreaker.
+                    return (1 if ts is None else 0, int(ts or 0), row.line_order)
+                return (0, row.line_order, 0)
+
+            bucket_iters: list[Iterator[StructuredLine]] = []
+            for bucket in buckets_with_null:
+                if bucket is None:
+                    expr = ds.field(ENTITY_BUCKET_FIELD).is_null()
+                else:
+                    expr = ds.field(ENTITY_BUCKET_FIELD) == bucket
+
+                bucket_iters.append(
+                    self.iter_structured_lines(
+                        filter_expr=expr,
+                        batch_size=self._DEFAULT_BATCH_SIZE,
+                        use_threads=False,
+                    )(),
+                )
+
+            heap: list[
+                tuple[
+                    tuple[int, int, int],
+                    int,
+                    StructuredLine,
+                    Iterator[StructuredLine],
+                ]
+            ] = []
+
+            for idx, it in enumerate(bucket_iters):
+                try:
+                    first = next(it)
+                except StopIteration:
+                    continue
+                heap.append((_key_for_row(first), idx, first, it))
+
+            heapq.heapify(heap)
+
+            while heap:
+                _, idx, row, it = heapq.heappop(heap)
+                yield row
+                try:
+                    nxt = next(it)
+                except StopIteration:
+                    continue
+                heapq.heappush(heap, (_key_for_row(nxt), idx, nxt, it))
 
         return _iter
