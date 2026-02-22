@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import functools
 from collections import Counter
-from collections.abc import Collection
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
+
+from anomalog.models.naive_bayes import NBConfig, run_naive_bayes
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable, Collection, Iterable, Iterator
@@ -164,3 +165,8 @@ class SequenceBuilder:
         if prev_ts is None:
             return None, ts
         return int(ts) - int(prev_ts), ts
+
+    def naive_bayes(self, config: NBConfig | None = None) -> dict:
+        cfg = config or NBConfig()
+        cfg = replace(cfg, mode=self.mode)
+        return run_naive_bayes(self, cfg)
