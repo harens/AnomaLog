@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Literal
 from anomalog.models.sequences import GroupingMode
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
     from anomalog.models.sequences import TemplateSequence
 
 SplitLabel = Literal["train", "test"]
@@ -34,15 +36,23 @@ class ModeAwareSplit:
             return self._chrono_assign(seq)
         return self._entity_assign(seq)
 
-    def _entity_assign(self, seq: TemplateSequence) -> SplitLabel:
-        key = seq.entity_id if seq.entity_id else f"window-{seq.window_id}"
+    def _assign_cached(self, key: str, compute: Callable[[], SplitLabel]) -> SplitLabel:
         if key not in self._cache:
-            self._cache[key] = (
-                "train" if self._rng.random() < self.train_frac else "test"
-            )
+            self._cache[key] = compute()
         return self._cache[key]
 
+    def _entity_assign(self, seq: TemplateSequence) -> SplitLabel:
+        key = seq.entity_id if seq.entity_id else f"window-{seq.window_id}"
+        return self._assign_cached(
+            key,
+            lambda: "train" if self._rng.random() < self.train_frac else "test",
+        )
+
     def _chrono_assign(self, seq: TemplateSequence) -> SplitLabel:
+        key = f"time-{seq.window_id}"
+        return self._assign_cached(key, lambda: self._chrono_label(seq))
+
+    def _chrono_label(self, seq: TemplateSequence) -> SplitLabel:
         if self.cutoff_window is not None:
             return "train" if seq.window_id < self.cutoff_window else "test"
 

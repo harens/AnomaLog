@@ -32,20 +32,20 @@ class ExperimentConfig:
     builders: list[SequenceBuilder]
     models: list[tuple[str, Callable[[object | None], SequenceModel], object | None]]
     artifact_root: Path
-    split_name: str = "default"
-    split: ModeAwareSplit | None = None
     show_progress: bool = True
+    train_frac: float = 0.8
 
 
 class ExperimentRunner:
     def __init__(self, cfg: ExperimentConfig) -> None:
         self.cfg = cfg
         self.logger = get_logger("anomalog.experiment")
-        self.split = cfg.split or ModeAwareSplit()
 
     def run(self) -> list[EvaluationResult]:
         results: list[EvaluationResult] = []
         for builder in self.cfg.builders:
+            # Fresh split per builder to avoid cross-builder state leakage.
+            split = ModeAwareSplit(train_frac=self.cfg.train_frac)
             grouping = builder.mode
             self.logger.info("Running experiments for grouping=%s", grouping)
             builder_name = f"group-{grouping}"
@@ -53,7 +53,7 @@ class ExperimentRunner:
                 model = factory(cfg)
                 model.id = model_id
                 model.setup()
-                result = self._run_single(model, builder, grouping)
+                result = self._run_single(model, builder, grouping, split)
                 self._persist(result, builder_name)
                 results.append(result)
         return results
@@ -63,21 +63,20 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
+        split: ModeAwareSplit,
     ) -> EvaluationResult:
-        train_total, train_pos = self._train_pass(model, builder, grouping)
+        train_total, train_pos = self._train_pass(model, builder, grouping, split)
         model.finalize()
-        metric_set = self._eval_pass(model, builder, grouping)
+        metric_set = self._eval_pass(model, builder, grouping, split)
 
         return EvaluationResult(
             model_id=model.id,
             grouping=grouping,
-            split_name=self.cfg.split_name,
             metrics=metric_set,
             class_balance={
                 "train_total": train_total,
                 "train_positive": train_pos,
             },
-            artifacts={},
         )
 
     def _train_pass(
@@ -85,6 +84,7 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
+        split: ModeAwareSplit,
     ) -> tuple[int, int]:
         train_total = 0
         train_pos = 0
@@ -98,7 +98,7 @@ class ExperimentRunner:
                 else None
             )
             for seq in builder:
-                if self.split(seq, builder.mode) != "train":
+                if split(seq, builder.mode) != "train":
                     continue
                 buffer.append(seq)
                 if len(buffer) >= TRAIN_BATCH:
@@ -121,6 +121,7 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
+        split: ModeAwareSplit,
     ) -> MetricSet:
         metrics = MetricsComputer()
         eval_buffer: list[TemplateSequence] = []
@@ -133,7 +134,7 @@ class ExperimentRunner:
                 else None
             )
             for seq in builder:
-                if self.split(seq, builder.mode) != "test":
+                if split(seq, builder.mode) != "test":
                     continue
                 eval_buffer.append(seq)
                 if len(eval_buffer) >= EVAL_BATCH:

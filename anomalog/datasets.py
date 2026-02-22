@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from prefect import flow
 
@@ -7,7 +10,9 @@ from anomalog.sources import RemoteZipSource
 from anomalog.sources.raw_dataset import RawDataset
 from anomalog.structured_parsers.parsers import BGLParser, HDFSV1Parser
 from anomalog.template_parsers import Drain3Parser
-from anomalog.template_parsers.templated_dataset import TemplatedDataset
+
+if TYPE_CHECKING:  # pragma: no cover
+    from anomalog.template_parsers.templated_dataset import TemplatedDataset
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling
@@ -16,6 +21,8 @@ from anomalog.template_parsers.templated_dataset import TemplatedDataset
 # # Originally tried using LogHub-2.0 (https://zenodo.org/record/8275861),
 # # but HDFS doesn't seem to be annotated
 
+
+# Raw dataset definitions
 hdfs_v1 = RawDataset(
     dataset_name="HDFS_V1",
     raw_logs_relpath=Path("HDFS.log"),
@@ -42,7 +49,9 @@ bgl = RawDataset(
 
 
 @flow
-def build_bgl() -> TemplatedDataset:
+def build_bgl_dataset() -> TemplatedDataset:
+    """Fetch, parse, and template the BGL dataset."""
+
     return (
         bgl.fetch_if_needed()
         .extract_structured_components()
@@ -51,14 +60,11 @@ def build_bgl() -> TemplatedDataset:
 
 
 @flow
-def build_hdfs_v1() -> TemplatedDataset:
+def build_hdfs_v1_dataset() -> TemplatedDataset:
+    """Fetch, parse, and template the HDFS v1 dataset."""
+
     return (
         hdfs_v1.fetch_if_needed()
         .extract_structured_components()
         .mine_templates_with(Drain3Parser("HDFS_V1"))
     )
-
-
-if __name__ == "__main__":
-    pipeline = build_bgl()
-    # pipeline = build_hdfs_v1()

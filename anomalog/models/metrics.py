@@ -34,7 +34,6 @@ class MetricSet:
 class EvaluationResult:
     model_id: str
     grouping: str
-    split_name: str
     metrics: MetricSet
     class_balance: dict[str, Any]
     artifacts: dict[str, str] = field(default_factory=dict)
