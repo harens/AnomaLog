@@ -3,15 +3,20 @@ from __future__ import annotations
 import functools
 from collections import Counter
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal
-
-from anomalog.models.naive_bayes import NBConfig, run_naive_bayes
+from enum import Enum
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable, Collection, Iterable, Iterator
 
     from anomalog.structured_parsers.contracts import StructuredLine, StructuredSink
     from anomalog.template_parsers.templated_dataset import TemplatedDataset
+
+
+class GroupingMode(str, Enum):
+    ENTITY = "entity"
+    FIXED = "fixed"
+    TIME = "time"
 
 
 @dataclass(slots=True)
@@ -41,7 +46,7 @@ class SequenceBuilder:
     sink: StructuredSink
     infer: Callable[[str], tuple[str, Iterable[str]]]
     label_for_group: Callable[[str], int | None]
-    mode: Literal["entity", "fixed", "time"]
+    mode: GroupingMode
     window_size: int | None = None
     time_span_ms: int | None = None
     step: int | None = None
@@ -52,13 +57,13 @@ class SequenceBuilder:
             sink=td.sink,
             infer=td.template_parser.inference,
             label_for_group=td.anomaly_labels.label_for_group,
-            mode="entity",
+            mode=GroupingMode.ENTITY,
         )
 
     def fixed(self, size: int, step: int | None = None) -> SequenceBuilder:
         return replace(
             self,
-            mode="fixed",
+            mode=GroupingMode.FIXED,
             window_size=size,
             time_span_ms=None,
             step=step,
@@ -67,7 +72,7 @@ class SequenceBuilder:
     def time(self, span_ms: int, step_ms: int | None = None) -> SequenceBuilder:
         return replace(
             self,
-            mode="time",
+            mode=GroupingMode.TIME,
             window_size=None,
             time_span_ms=span_ms,
             step=step_ms,
@@ -76,7 +81,7 @@ class SequenceBuilder:
     def entity(self) -> SequenceBuilder:
         return replace(
             self,
-            mode="entity",
+            mode=GroupingMode.ENTITY,
             window_size=None,
             time_span_ms=None,
             step=None,
@@ -165,8 +170,3 @@ class SequenceBuilder:
         if prev_ts is None:
             return None, ts
         return int(ts) - int(prev_ts), ts
-
-    def naive_bayes(self, config: NBConfig | None = None) -> dict:
-        cfg = config or NBConfig()
-        cfg = replace(cfg, mode=self.mode)
-        return run_naive_bayes(self, cfg)
