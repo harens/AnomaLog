@@ -12,7 +12,11 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from prefect.logging import get_run_logger
 
-from anomalog.structured_parsers.contracts import ANOMALOUS_FIELD, StructuredParser
+from anomalog.structured_parsers.contracts import (
+    ANOMALOUS_FIELD,
+    StructuredLine,
+    StructuredParser,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -50,13 +54,14 @@ def _iter_record_batches(
     total_rows = 0
     with raw_input_path.open("r", encoding="utf-8", errors="replace") as f:
         for line_no, raw_line in enumerate(f):
-            rec = parser.parse_line(
-                raw_line.rstrip("\n").rstrip("\r"),
-                line_order=line_no,
-            )
-            if rec is None:
+            base_rec = parser.parse_line(raw_line.rstrip("\n").rstrip("\r"))
+            if base_rec is None:
                 continue
 
+            rec = StructuredLine.with_line_order(
+                line_order=line_no,
+                base=base_rec,
+            )
             row_dict = asdict(rec)
             if rec.entity_id is not None:
                 row_dict[ENTITY_BUCKET_FIELD] = _stable_bucket(

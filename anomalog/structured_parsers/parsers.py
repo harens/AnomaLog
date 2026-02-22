@@ -5,7 +5,7 @@ from typing import ClassVar
 
 from prefect.logging import get_logger
 
-from anomalog.structured_parsers.contracts import StructuredLine, StructuredParser
+from anomalog.structured_parsers.contracts import BaseStructuredLine, StructuredParser
 
 UTC = timezone.utc
 
@@ -43,13 +43,13 @@ class HDFSV1Parser(StructuredParser):
         except ValueError:
             return None
 
-    def parse_line(self, raw_line: str, line_order: int) -> StructuredLine | None:
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         s = raw_line.rstrip("\n")
         logger = get_logger()
 
         m = self._HDFS_RE.match(s)
         if not m:
-            logger.warning("Cannot parse HDFS line %d: %r", line_order, s)
+            logger.warning("Cannot parse HDFS line: %r", s)
             return None
 
         d = m.groupdict()
@@ -72,8 +72,7 @@ class HDFSV1Parser(StructuredParser):
 
         untemplated = f"{d['level']} {component}: {content}".strip()
 
-        return StructuredLine(
-            line_order=line_order,
+        return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
             entity_id=entity_id,
             untemplated_message_text=untemplated,
@@ -115,13 +114,13 @@ class BGLParser(StructuredParser):
         except ValueError:
             return None
 
-    def parse_line(self, raw_line: str, line_order: int) -> StructuredLine | None:
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         s = raw_line.rstrip("\n")
         logger = get_logger()
 
         m = BGLParser._BGL_RE.match(s)
         if not m:
-            logger.warning("Cannot parse BGL line %d: %r", line_order, s)
+            logger.warning("Cannot parse BGL line: %r", s)
             return None
 
         d = m.groupdict()
@@ -145,8 +144,7 @@ class BGLParser(StructuredParser):
 
         untemplated = d["tail"].strip()
 
-        return StructuredLine(
-            line_order=line_order,
+        return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
             entity_id=entity_id,
             untemplated_message_text=untemplated,

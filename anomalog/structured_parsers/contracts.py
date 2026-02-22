@@ -12,18 +12,39 @@ ANOMALOUS_FIELD = "anomalous"
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredLine:
-    line_order: int
+class BaseStructuredLine:
     timestamp_unix_ms: int | None
     entity_id: str | None
     untemplated_message_text: str
     anomalous: int | None  # 0/1/None (but also different anomalous categories)
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredLine(BaseStructuredLine):
+    line_order: int
+
+    @classmethod
+    def with_line_order(
+        cls,
+        *,
+        line_order: int,
+        base: BaseStructuredLine,
+    ) -> "StructuredLine":
+        return cls(
+            timestamp_unix_ms=base.timestamp_unix_ms,
+            entity_id=base.entity_id,
+            untemplated_message_text=base.untemplated_message_text,
+            anomalous=base.anomalous,
+            line_order=line_order,
+        )
+
+
 @runtime_checkable
 class StructuredParser(Protocol):
-    # line_order: e.g. byte offset or line number
-    def parse_line(self, raw_line: str, line_order: int) -> StructuredLine | None: ...
+    def parse_line(
+        self,
+        raw_line: str,
+    ) -> BaseStructuredLine | None: ...
 
 
 # TODO: Add visualisation methods
