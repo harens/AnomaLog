@@ -131,19 +131,35 @@ class ParquetStructuredSink(StructuredSink):
     def count_rows(self) -> int:
         return self._dataset().count_rows()
 
-    def count_entities(self) -> int:
+    def count_entities_by_label(
+        self,
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[int, int]:
+        """Return counts of (normal, total) distinct entity ids."""
+
         scanner = self._dataset().scanner(
             columns=[ENTITY_FIELD],
             batch_size=self._DEFAULT_BATCH_SIZE,
         )
-        entities: set[str] = set()
+        normals = 0
+        entities_seen: set[str] = set()
+
         for batch in scanner.to_batches():
             col = batch.column(0)
             for val in col.to_pylist():
                 if val is None:
                     continue
-                entities.add(str(val))
-        return len(entities)
+                entity_id = str(val)
+                if entity_id in entities_seen:
+                    continue
+                entities_seen.add(entity_id)
+                label = label_for_group(entity_id)
+                if label == 1:
+                    continue
+                normals += 1
+
+        total = len(entities_seen)
+        return normals, total
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
         ts_scanner = self._dataset().scanner(
