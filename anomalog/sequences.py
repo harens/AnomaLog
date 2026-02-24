@@ -58,6 +58,7 @@ class SequenceBuilder:
     time_span_ms: int | None = None
     step: int | None = None
     train_frac: float = 0.8
+    train_on_normal_entities_only: bool = False
 
     @classmethod
     def from_dataset(cls, td: TemplatedDataset) -> SequenceBuilder:
@@ -98,17 +99,74 @@ class SequenceBuilder:
     def with_train_fraction(self, train_frac: float) -> SequenceBuilder:
         return replace(self, train_frac=train_frac)
 
+    def with_train_on_normal_entities_only(
+        self,
+        *,
+        enabled: bool = True,
+    ) -> SequenceBuilder:
+        return replace(self, train_on_normal_entities_only=enabled)
+
     def __iter__(self) -> Iterator[TemplateSequence]:
         rows_iter = self._rows_iterator()
         infer = functools.lru_cache(maxsize=50_000)(self.infer)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
-        total = self._total_sequences_for_mode()
-        train_cutoff = math.ceil(self.train_frac * total) if total else 0
+        if self.mode is GroupingMode.ENTITY:
+            normals, total = self.sink.count_entities_by_label(label_for_group)
+            base = normals if self.train_on_normal_entities_only else total
+            target_in_train = math.ceil(self.train_frac * base) if base else 0
+            normals_seen_in_train = 0
+
+            for window_id, rows in enumerate(rows_iter):
+                if self.train_on_normal_entities_only:
+                    entity_is_anomalous = any(
+                        label_for_group(r.entity_id) == 1
+                        for r in rows
+                        if r.entity_id is not None
+                    )
+                    split_label = (
+                        SplitLabel.TRAIN
+                        if (not entity_is_anomalous)
+                        and (normals_seen_in_train < target_in_train)
+                        else SplitLabel.TEST
+                    )
+                else:
+                    split_label = (
+                        SplitLabel.TRAIN
+                        if window_id < target_in_train
+                        else SplitLabel.TEST
+                    )
+
+                seq = self._build_sequence(
+                    window_id,
+                    rows,
+                    infer,
+                    label_for_group,
+                    split_label,
+                )
+                if seq is not None:
+                    if (
+                        self.train_on_normal_entities_only
+                        and split_label is SplitLabel.TRAIN
+                        and seq.label == 0
+                    ):
+                        normals_seen_in_train += 1
+                    yield seq
+            return
+
+        # Non-entity grouping: simple positional cutoff
+        total_sequences = (
+            self._count_fixed_windows()
+            if self.mode is GroupingMode.FIXED
+            else self._count_time_windows()
+        )
+        target_in_train = (
+            math.ceil(self.train_frac * total_sequences) if total_sequences else 0
+        )
 
         for window_id, rows in enumerate(rows_iter):
-            split_label: SplitLabel = (
-                SplitLabel.TRAIN if window_id < train_cutoff else SplitLabel.TEST
+            split_label = (
+                SplitLabel.TRAIN if window_id < target_in_train else SplitLabel.TEST
             )
             seq = self._build_sequence(
                 window_id,
@@ -190,13 +248,6 @@ class SequenceBuilder:
         if prev_ts is None:
             return None, ts
         return int(ts) - int(prev_ts), ts
-
-    def _total_sequences_for_mode(self) -> int:
-        if self.mode == GroupingMode.ENTITY:
-            return self.sink.count_entities()
-        if self.mode == GroupingMode.FIXED:
-            return self._count_fixed_windows()
-        return self._count_time_windows()
 
     def _count_fixed_windows(self) -> int:
         if self.window_size is None or self.window_size <= 0:
