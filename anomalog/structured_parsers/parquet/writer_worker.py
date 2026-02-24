@@ -1,3 +1,5 @@
+"""Worker routines to parse raw logs and write Parquet partitions."""
+
 from __future__ import annotations
 
 import itertools
@@ -24,6 +26,8 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class WriterConfig:
+    """Tuning parameters for converting raw logs to parquet."""
+
     buckets: int = 32
     batch_rows: int = 400_000
     max_rows_per_file: int = 5_000_000
@@ -37,8 +41,13 @@ ENTITY_BUCKET_FIELD = "entity_bucket"
 
 
 def _stable_bucket(entity_id: str, *, buckets: int) -> int:
-    """Stable, deterministic hash bucket for an entity ID."""
+    """Stable, deterministic hash bucket for an entity ID.
 
+    >>> _stable_bucket("foo", buckets=4) == _stable_bucket("foo", buckets=4)
+    True
+    >>> 0 <= _stable_bucket("bar", buckets=3) < 3
+    True
+    """
     digest = blake2s(entity_id.encode("utf-8"), digest_size=4).digest()
     return int.from_bytes(digest, "big") % buckets
 
@@ -49,6 +58,7 @@ def _iter_record_batches(
     *,
     cfg: WriterConfig,
 ) -> Generator[pa.RecordBatch, None, None]:
+    """Stream record batches parsed from the raw log file."""
     logger = get_run_logger()
     rows: list[dict] = []
     total_rows = 0
@@ -102,8 +112,9 @@ def extract_structured_components(
 
     - Hive partitions on entity_id for fast pruning on entity lookups.
     - Order per file follows input order; pick large row groups to keep scans fast.
-    """
 
+    Returns True if at least one anomalous row is observed; otherwise False.
+    """
     logger = get_run_logger()
     cfg = config or WriterConfig()
 

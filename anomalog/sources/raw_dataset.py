@@ -1,3 +1,5 @@
+"""Representation of a dataset before template mining and model training."""
+
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +23,8 @@ from anomalog.structured_parsers.structured_dataset import StructuredDataset
 
 @dataclass(slots=True, frozen=True)
 class RawDataset:
+    """Encapsulate raw log sources and structured parsing configuration."""
+
     dataset_name: str
     source: DatasetSource
     structured_parser: StructuredParser
@@ -30,17 +34,25 @@ class RawDataset:
 
     @property
     def raw_logs_path(self) -> Path:
+        """Return the expected path to the raw log file.
+
+        >>> ds = RawDataset("demo", source=None, structured_parser=None)
+        >>> ds.raw_logs_path.name
+        'demo.log'
+        """
         dir_name = self.cache_paths.data_root / self.dataset_name
         if self.raw_logs_relpath is None:
             return dir_name / f"{self.dataset_name}.log"
         return dir_name / self.raw_logs_relpath
 
     def iter_lines(self) -> Iterator[str]:
+        """Yield raw log lines with newlines stripped."""
         with Path.open(self.raw_logs_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 yield line.rstrip("\n")
 
     def fetch_if_needed(self) -> "RawDataset":
+        """Materialise the dataset locally if missing and return self."""
         logger = get_run_logger()
         logger.info(
             "Fetching dataset %s to %s",
@@ -51,6 +63,7 @@ class RawDataset:
         return self
 
     def log_example_line(self, sink: StructuredSink) -> None:
+        """Log an example unstructured line for debugging purposes."""
         # Log examples of the unstructured line content for debugging/verification.
         logger = get_run_logger()
         examples = sink.iter_structured_lines(columns=[UNTEMPLATED_FIELD])
@@ -75,6 +88,7 @@ class RawDataset:
         self,
         sink: StructuredSink | None = None,
     ) -> StructuredDataset:
+        """Parse raw logs, load labels, and return a structured dataset view."""
         if sink is None:
             sink = ParquetStructuredSink(
                 dataset_name=self.dataset_name,

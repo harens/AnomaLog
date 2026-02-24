@@ -35,14 +35,16 @@ class AnomalyLabelLookup:
 class AnomalyLabelReader(Protocol):
     """Loads anomaly label lookups."""
 
-    def load(self) -> AnomalyLabelLookup: ...
+    def load(self) -> AnomalyLabelLookup:
+        """Return callables that map line or group identifiers to labels."""
 
     def with_context(
         self,
         *,
         dataset_root: Path,
         sink: StructuredSink,
-    ) -> "AnomalyLabelReader": ...
+    ) -> "AnomalyLabelReader":
+        """Bind dataset context and return a configured reader instance."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,7 @@ class CSVReader(AnomalyLabelReader):
     label_column: str = ANOMALOUS_FIELD
 
     def load(self) -> AnomalyLabelLookup:
+        """Load labels from the configured CSV file into lookup callables."""
         if self.dataset_root is None:
             msg = "CSVReader.dataset_root was not set."
             raise ValueError(msg)
@@ -102,6 +105,7 @@ class CSVReader(AnomalyLabelReader):
         dataset_root: Path,
         sink: StructuredSink,
     ) -> "CSVReader":
+        """Attach dataset context when missing and return a new reader."""
         _ = sink  # sink not used for CSV-based labels
         if self.dataset_root is not None:
             return self
@@ -115,6 +119,7 @@ class InlineReader(AnomalyLabelReader):
     sink: StructuredSink | None = None
 
     def load(self) -> AnomalyLabelLookup:
+        """Collect inline labels from the sink and return lookup callables."""
         if self.sink is None:
             msg = "InlineReader requires a StructuredSink to read labels."
             raise ValueError(msg)
@@ -139,6 +144,7 @@ class InlineReader(AnomalyLabelReader):
         dataset_root: Path,  # noqa: ARG002 - not needed for inline reader
         sink: StructuredSink,
     ) -> "InlineReader":
+        """Attach sink context when missing and return a new reader."""
         if self.sink is not None:
             return self
         return replace(self, sink=sink)
@@ -153,8 +159,24 @@ def _load_label_cache(
     - Scan the dataset once with column projection to id + label fields.
     - Store only rows where label is non-zero and not None (anomalies are rare).
     - No attachment to the sink; callers capture the dicts in AnomalyLabelLookup.
-    """
 
+    >>> class _Row:
+    ...     def __init__(self, line, entity, anomalous):
+    ...         self.line_order = line
+    ...         self.entity_id = entity
+    ...         self.anomalous = anomalous
+    ...
+    >>> class _Sink:
+    ...     def iter_structured_lines(self, columns=None):
+    ...         def _iter():
+    ...             yield _Row(1, "a", 0)
+    ...             yield _Row(2, "b", 1)
+    ...             yield _Row(3, "a", None)
+    ...         return _iter
+    ...
+    >>> _load_label_cache(_Sink())
+    ({2: 1}, {'b': 1})
+    """
     line_labels: dict[int, int] = {}
     group_labels: dict[str, int] = {}
 

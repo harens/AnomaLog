@@ -1,3 +1,5 @@
+"""Parquet-backed implementation of StructuredSink."""
+
 import heapq
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
@@ -28,6 +30,12 @@ from anomalog.structured_parsers.parquet.writer_worker import (
 
 @dataclass(frozen=True, slots=True)
 class ParquetStructuredSink(StructuredSink):
+    """StructuredSink backed by partitioned Parquet datasets.
+
+    Provides efficient iteration, windowing helpers, and label-aware counts
+    for downstream anomaly workflows.
+    """
+
     _DEFAULT_BATCH_SIZE: ClassVar[int] = 65_536
     dataset_name: str
     raw_dataset_path: Path
@@ -37,9 +45,11 @@ class ParquetStructuredSink(StructuredSink):
     cache_dir: ClassVar[str] = "structured_parquet"
 
     def structured_data_cache(self, dataset_name: str) -> Path:
+        """Return the cache directory for this dataset."""
         return self.cache_paths.cache_root / dataset_name / self.cache_dir
 
     def write_structured_lines(self, _workers: int | None = None) -> bool:
+        """Parse raw logs and persist structured lines to Parquet."""
         base_extract_structured_components = materialize(
             asset_from_local_path(self.structured_data_cache(self.dataset_name)),
             asset_deps=[asset_from_local_path(self.raw_dataset_path)],
@@ -121,6 +131,7 @@ class ParquetStructuredSink(StructuredSink):
             )
 
     def _dataset(self) -> ds.Dataset:
+        """Return the underlying PyArrow dataset instance."""
         return ds.dataset(
             self.structured_data_cache(self.dataset_name),
             format="parquet",
@@ -129,6 +140,7 @@ class ParquetStructuredSink(StructuredSink):
 
     # Statistics helpers
     def count_rows(self) -> int:
+        """Return total number of structured rows."""
         return self._dataset().count_rows()
 
     def count_entities_by_label(
@@ -136,7 +148,6 @@ class ParquetStructuredSink(StructuredSink):
         label_for_group: Callable[[str], int | None],
     ) -> tuple[int, int]:
         """Return counts of (normal, total) distinct entity ids."""
-
         scanner = self._dataset().scanner(
             columns=[ENTITY_FIELD],
             batch_size=self._DEFAULT_BATCH_SIZE,
@@ -162,6 +173,7 @@ class ParquetStructuredSink(StructuredSink):
         return normals, total
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
+        """Return min and max timestamps present in the dataset."""
         ts_scanner = self._dataset().scanner(
             columns=[TIMESTAMP_FIELD],
             batch_size=self._DEFAULT_BATCH_SIZE,
@@ -203,6 +215,8 @@ class ParquetStructuredSink(StructuredSink):
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
+        """Yield sequences grouped by entity bucket preserving input order."""
+
         def _iter() -> Iterator[Collection[StructuredLine]]:
             for bucket_id in sorted(self._iter_buckets()):
                 by_entity: dict[str, list[StructuredLine]] = {}
@@ -219,6 +233,7 @@ class ParquetStructuredSink(StructuredSink):
         return _iter
 
     def _iter_buckets(self) -> set[int]:
+        """Enumerate bucket ids present in the parquet dataset."""
         buckets: set[int] = set()
         scanner = self._dataset().scanner(
             columns=[ENTITY_BUCKET_FIELD],
@@ -239,9 +254,12 @@ class ParquetStructuredSink(StructuredSink):
         time_span_ms: int,
         step: int,
     ) -> Iterator[list[StructuredLine]]:
+        """Slide a time window over rows, yielding buffered windows."""
         buffer: deque[StructuredLine] = deque()
         window_start = first_ts
         window_end = window_start + time_span_ms
+
+        # TODO: Handle case where time_span_ms is larger than the total timestamp range
 
         for row in rows:
             ts = row.timestamp_unix_ms
@@ -272,6 +290,8 @@ class ParquetStructuredSink(StructuredSink):
         time_span_ms: int,
         step_span_ms: int | None = None,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
+        """Yield sequences grouped by sliding time windows."""
+
         def _iter() -> Iterator[Collection[StructuredLine]]:
             first_ts, last_ts = self.timestamp_bounds()
             if first_ts is None or last_ts is None:
@@ -300,6 +320,8 @@ class ParquetStructuredSink(StructuredSink):
         window_size: int,
         step_size: int | None = None,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
+        """Yield sequences of fixed window size over ordered rows."""
+
         def _iter() -> Iterator[Collection[StructuredLine]]:
             step = step_size or window_size
             if window_size <= 0 or step <= 0:

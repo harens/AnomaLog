@@ -1,3 +1,5 @@
+"""Dataset sources backed by local directories or zip files."""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,9 +10,12 @@ from anomalog.type_hints import MD5Hex
 
 @dataclass(frozen=True)
 class LocalDirSource(DatasetSource):
+    """Use an existing local directory as the dataset source."""
+
     path: Path
 
     def materialise(self, dst_dir: Path) -> Path:  # noqa: ARG002 - not used, but part of the interface
+        """Return the directory path after validating existence."""
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         if not self.path.is_dir():
@@ -20,10 +25,13 @@ class LocalDirSource(DatasetSource):
 
 @dataclass(frozen=True)
 class LocalZipSource(DatasetSource):
+    """Use a local zip archive as the dataset source."""
+
     zip_path: Path
     md5_checksum: MD5Hex | None = None
 
     def materialise(self, dst_dir: Path) -> Path:
+        """Extract the zip file into dst_dir, verifying checksum when provided."""
         dst_dir.mkdir(parents=True, exist_ok=True)
 
         # fast path

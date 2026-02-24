@@ -1,3 +1,5 @@
+"""Helpers for hashing class definitions to build cache keys."""
+
 import hashlib
 import importlib
 import inspect
@@ -7,6 +9,15 @@ from prefect.context import TaskRunContext
 
 
 def class_source(cls: type) -> str:
+    """Return source code string for a class or a fallback identifier.
+
+    >>> class _Tmp:
+    ...     def foo(self): ...
+    ...
+    >>> src = class_source(_Tmp)
+    >>> isinstance(src, str) and len(src) > 0
+    True
+    """
     try:
         return inspect.getsource(cls)
     except OSError:
@@ -21,6 +32,7 @@ def class_source(cls: type) -> str:
 
 
 def cache_class_key_fn(context: TaskRunContext, params: dict[str, object]) -> str:  # noqa: ARG001 - context is not used, but part of the interface
+    """Build a stable hash for cache keying based on class definitions."""
     class_sources: list[str] = []
     for v in params.values():
         # Skip functions/methods/modules/etc.

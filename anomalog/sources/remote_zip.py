@@ -1,3 +1,5 @@
+"""Remote ZIP dataset source with progress reporting and checksum verification."""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -26,6 +28,8 @@ _ALLOWED_SCHEMES = {"https", "http"}
 
 @dataclass
 class _DownloadProgress:
+    """Track download progress for callback-based reporting."""
+
     task_id: TaskID | None = None
     last_downloaded: int = 0
     total: int | None = None
@@ -33,11 +37,14 @@ class _DownloadProgress:
 
 @dataclass(frozen=True)
 class RemoteZipSource(DatasetSource):
+    """Download a dataset zip from a remote URL and extract it locally."""
+
     url: URL
     md5_checksum: MD5Hex
 
     @staticmethod
     def _validate_remote_url(url: URL) -> None:
+        """Validate URL scheme and presence of network location."""
         p = urlparse(url)
         if p.scheme not in _ALLOWED_SCHEMES:
             msg = f"Unsupported URL scheme: {p.scheme!r}"
@@ -48,6 +55,7 @@ class RemoteZipSource(DatasetSource):
             raise ValueError(msg)
 
     def materialise(self, dst_dir: Path) -> Path:
+        """Fetch, checksum, and extract the dataset into dst_dir."""
         dataset_name = dst_dir.name
         root_dir = dst_dir.parent
         zip_path = dst_dir.with_suffix(".zip")
@@ -76,6 +84,7 @@ class RemoteZipSource(DatasetSource):
         zip_path: Path,
         progress_factory: Callable[[], Progress] = make_bounded_progress,
     ) -> None:
+        """Download the dataset archive with a progress bar and verify checksum."""
         logger = get_run_logger()
         logger.info("Starting download of %s dataset from %s", dataset_name, self.url)
 

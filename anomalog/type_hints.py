@@ -1,3 +1,5 @@
+"""Shared Annotated types and validators used across AnomaLog."""
+
 from typing import Annotated
 from urllib.parse import urlparse
 

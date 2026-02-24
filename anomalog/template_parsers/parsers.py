@@ -1,3 +1,5 @@
+"""Template parser implementations (Drain3 and identity)."""
+
 import hashlib
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
@@ -27,12 +29,15 @@ from anomalog.template_parsers.templated_dataset import (
 # built with practical enhancements for production scenarios.
 # Whilst other toolkits only provide LogParser
 class Drain3Parser(TemplateParser):
+    """Drain3-based template miner with Prefect asset caching."""
+
     def __init__(
         self,
         dataset_name: str,
         config_file: Path | None = None,
         cache_path: Path | None = None,
     ) -> None:
+        """Initialise the parser with dataset name and optional config/cache paths."""
         if config_file is None:
             self.config_file = Path(f"{Path(__file__).parent}/drain3.ini")
         else:
@@ -103,6 +108,7 @@ class Drain3Parser(TemplateParser):
         self,
         unstructured_text: UntemplatedText,
     ) -> tuple[LogTemplate, ExtractedParameters]:
+        """Return template and parameters for a single unstructured log line."""
         if self.inference_func is None:
             msg = "Parser has not been trained yet"
             raise ValueError(msg)
@@ -113,6 +119,8 @@ class Drain3Parser(TemplateParser):
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
+        """Train Drain3 on an iterator of untemplated log lines."""
+
         # Avoid unstable cache keys from the iterator argument by
         # capturing it in a closure and running a zero-arg task
         # (no INPUTS component).
@@ -170,21 +178,29 @@ class Drain3Parser(TemplateParser):
 
 
 class IdentityTemplateParser(TemplateParser):
+    """No-op template parser that returns the input string as its template."""
+
     def __init__(self, dataset_name: str) -> None:
+        """Store dataset name; no additional setup required."""
         self.dataset_name = dataset_name
 
     def inference(
         self,
         unstructured_text: UntemplatedText,
     ) -> tuple[LogTemplate, ExtractedParameters]:
+        """Return the raw text as the template with no parameters.
+
+        >>> IdentityTemplateParser("demo").inference("hello")
+        ('hello', [])
+        """
         return unstructured_text, []
 
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
+        """No-op training for identity parser."""
         # No training needed for the identity parser
-        pass
 
 
 # class LogParser(Parser):

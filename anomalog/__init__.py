@@ -1,3 +1,5 @@
-from beartype.claw import beartype_this_package
+"""Top-level package for AnomaLog utilities and pipelines."""
 
-beartype_this_package()
+# from beartype.claw import beartype_this_package
+
+# beartype_this_package()

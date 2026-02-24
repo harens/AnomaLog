@@ -1,3 +1,9 @@
+"""Utilities for building template sequences from structured log lines.
+
+The module groups parsed log lines into windows (entity, fixed-size, or
+time-based) and decorates them with inferred templates and anomaly labels.
+"""
+
 from __future__ import annotations
 
 import functools
@@ -15,18 +21,24 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 class GroupingMode(str, Enum):
+    """Strategy for grouping structured lines into sequences."""
+
     ENTITY = "entity"
     FIXED = "fixed"
     TIME = "time"
 
 
 class SplitLabel(str, Enum):
+    """Dataset split membership for a sequence."""
+
     TRAIN = "train"
     TEST = "test"
 
 
 @dataclass(slots=True)
 class TemplateSequence:
+    """Sequence of templated events used by downstream models."""
+
     events: list[
         tuple[str, list[str], int | None]
     ]  # (template, parameters, dt_prev_ms)
@@ -43,6 +55,11 @@ class TemplateSequence:
 
     @property
     def entity_id(self) -> str | None:
+        """Return a single entity id if the sequence is homogenous.
+
+        If multiple entities appear in the window, None is returned to avoid
+        implying a dominant entity.
+        """
         if len(self.entity_ids) == 1:
             return self.entity_ids[0]
         return None
@@ -50,6 +67,8 @@ class TemplateSequence:
 
 @dataclass(slots=True, frozen=True)
 class SequenceBuilder:
+    """Build sequences from a structured sink and template inference function."""
+
     sink: StructuredSink
     infer: Callable[[str], tuple[str, Iterable[str]]]
     label_for_group: Callable[[str], int | None]
@@ -62,6 +81,7 @@ class SequenceBuilder:
 
     @classmethod
     def from_dataset(cls, td: TemplatedDataset) -> SequenceBuilder:
+        """Create a builder using configuration from a templated dataset."""
         return cls(
             sink=td.sink,
             infer=td.template_parser.inference,
@@ -70,6 +90,7 @@ class SequenceBuilder:
         )
 
     def fixed(self, size: int, step: int | None = None) -> SequenceBuilder:
+        """Return a builder configured for fixed-size windows."""
         return replace(
             self,
             mode=GroupingMode.FIXED,
@@ -79,6 +100,7 @@ class SequenceBuilder:
         )
 
     def time(self, span_ms: int, step_ms: int | None = None) -> SequenceBuilder:
+        """Return a builder configured for time-based windows."""
         return replace(
             self,
             mode=GroupingMode.TIME,
@@ -88,6 +110,7 @@ class SequenceBuilder:
         )
 
     def entity(self) -> SequenceBuilder:
+        """Return a builder configured for per-entity windows."""
         return replace(
             self,
             mode=GroupingMode.ENTITY,
@@ -97,6 +120,7 @@ class SequenceBuilder:
         )
 
     def with_train_fraction(self, train_frac: float) -> SequenceBuilder:
+        """Return a copy with an updated train/test split fraction."""
         return replace(self, train_frac=train_frac)
 
     def with_train_on_normal_entities_only(
@@ -104,9 +128,11 @@ class SequenceBuilder:
         *,
         enabled: bool = True,
     ) -> SequenceBuilder:
+        """Limit training sequences to entities without anomalies."""
         return replace(self, train_on_normal_entities_only=enabled)
 
     def __iter__(self) -> Iterator[TemplateSequence]:
+        """Iterate over template sequences yielded by the configured grouping."""
         rows_iter = self._rows_iterator()
         infer = functools.lru_cache(maxsize=50_000)(self.infer)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
@@ -179,6 +205,7 @@ class SequenceBuilder:
                 yield seq
 
     def _rows_iterator(self) -> Iterator[Collection[StructuredLine]]:
+        """Return an iterator over grouped rows based on the current mode."""
         if self.mode is GroupingMode.TIME:
             return self.sink.iter_time_window_sequences(
                 self.time_span_ms,  # type: ignore[arg-type]
@@ -199,6 +226,7 @@ class SequenceBuilder:
         label_for_group: Callable[[str], int | None],
         split_label: SplitLabel,
     ) -> TemplateSequence | None:
+        """Convert a window of rows into a TemplateSequence if not empty."""
         if not rows:
             return None
 
@@ -243,6 +271,15 @@ class SequenceBuilder:
         prev_ts: int | None,
         ts: int | None,
     ) -> tuple[int | None, int | None]:
+        """Compute delta time between events while preserving previous ts.
+
+        >>> SequenceBuilder._compute_dt(None, 1000)
+        (None, 1000)
+        >>> SequenceBuilder._compute_dt(1000, 1250)
+        (250, 1250)
+        >>> SequenceBuilder._compute_dt(2000, None)
+        (None, 2000)
+        """
         if ts is None:
             return None, prev_ts
         if prev_ts is None:
@@ -250,6 +287,24 @@ class SequenceBuilder:
         return int(ts) - int(prev_ts), ts
 
     def _count_fixed_windows(self) -> int:
+        """Estimate number of fixed windows given window and step sizes.
+
+        >>> class _Sink:
+        ...     def count_rows(self):
+        ...         return 10
+        ...
+        >>> sb = SequenceBuilder(
+        ...     sink=_Sink(),
+        ...     infer=lambda s: (s, ()),
+        ...     label_for_group=lambda _: 0,
+        ...     mode=GroupingMode.FIXED,
+        ...     window_size=4,
+        ...     time_span_ms=None,
+        ...     step=2,
+        ... )
+        >>> sb._count_fixed_windows()
+        4
+        """
         if self.window_size is None or self.window_size <= 0:
             return 0
         step = self.step or self.window_size
@@ -264,6 +319,24 @@ class SequenceBuilder:
         return 1 + math.ceil((n - self.window_size) / step)
 
     def _count_time_windows(self) -> int:
+        """Estimate number of time windows from sink timestamp bounds.
+
+        >>> class _Sink:
+        ...     def timestamp_bounds(self):
+        ...         return 1_000, 3_500
+        ...
+        >>> sb = SequenceBuilder(
+        ...     sink=_Sink(),
+        ...     infer=lambda s: (s, ()),
+        ...     label_for_group=lambda _: 0,
+        ...     mode=GroupingMode.TIME,
+        ...     window_size=None,
+        ...     time_span_ms=1_000,
+        ...     step=500,
+        ... )
+        >>> sb._count_time_windows()
+        4
+        """
         if self.time_span_ms is None or self.time_span_ms <= 0:
             return 0
         step = self.step or self.time_span_ms
@@ -274,4 +347,10 @@ class SequenceBuilder:
             return 0
         if last_ts < first_ts:
             return 0
-        return (last_ts - first_ts) // step + 1
+        span = self.time_span_ms
+        duration = last_ts - first_ts
+
+        if duration < span:
+            return 1
+
+        return (duration - span) // step + 1

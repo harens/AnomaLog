@@ -1,3 +1,5 @@
+"""File-based cache helpers for Prefect assets."""
+
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,16 +15,21 @@ _ALLOWED = re.compile(r"[^A-Za-z0-9._/-]")
 
 
 def _try_file_path_from_asset_url(asset_url: str | None) -> Path | None:
-    """Accepts URLs like:
-      - "file:///abs/path/to/data.csv"
-      - "file://localhost/abs/path/to/data.csv"  (common variant).
+    """Return a local Path if the URL looks like a file URI.
 
-    Returns a local Path if it looks like a file URI; otherwise None.
+    Accepts URLs like:
+    - "file:///abs/path/to/data.csv"
+    - "file://localhost/abs/path/to/data.csv" (common variant).
 
     Notes:
     - Prefect asset keys cannot contain spaces or '%' so you should not depend on keys
       being reversible file URIs. Use Asset.properties.url (or Asset.url if present).
     - We URL-decode percent escapes (e.g. %20) so paths with spaces work.
+
+    >>> _try_file_path_from_asset_url("file:///tmp/example.txt").name
+    'example.txt'
+    >>> _try_file_path_from_asset_url("http://example.com") is None
+    True
 
     """
     if not asset_url:
@@ -46,6 +53,15 @@ def _file_fingerprint(path: Path) -> tuple[str, int, int, int]:
     """(exists_flag, mtime_ns, size_bytes, inode).
 
     inode helps detect atomic-save editors that replace the file.
+
+    >>> tmp = Path("/tmp/anomalog_fp.txt")
+    >>> _ = tmp.write_text("hi")
+    >>> fp = _file_fingerprint(tmp)
+    >>> fp[0] == "1" and fp[2] == 2
+    True
+    >>> tmp.unlink()
+    >>> _file_fingerprint(tmp)[0]  # missing file
+    '0'
     """
     try:
         st = path.stat()
@@ -57,8 +73,14 @@ def _file_fingerprint(path: Path) -> tuple[str, int, int, int]:
 
 
 def _asset_file_path(asset: Asset) -> Path | None:
-    """Resolve a local file Path from an Asset by looking at properties.url (preferred)
-    or asset.url (fallback). Returns None for non-file assets / missing urls.
+    """Resolve a local file path from an Asset URL.
+
+    Returns None for non-file assets or missing URLs.
+
+    >>> from anomalog.cache import asset_from_local_path
+    >>> asset = asset_from_local_path(Path("/tmp/example"))
+    >>> _asset_file_path(asset).as_posix().endswith('/tmp/example')
+    True
     """
     asset_url = None
     props = getattr(asset, "properties", None)
@@ -80,9 +102,7 @@ def _asset_file_path(asset: Asset) -> Path | None:
 
 @dataclass
 class AssetDepsFingerprintPolicy(CachePolicy):
-    """Cache key component based on:
-    - upstream asset dependencies (upstream_assets + direct_asset_dependencies)
-    """
+    """Cache key component based on upstream asset dependencies."""
 
     include_outputs: bool = True
 
@@ -93,6 +113,7 @@ class AssetDepsFingerprintPolicy(CachePolicy):
         flow_parameters: dict[str, Any],  # noqa: ARG002 - not used, but part of the interface
         **kwargs: object,  # noqa: ARG002 - not used, but part of the interface
     ) -> str | None:
+        """Fingerprint upstream assets (including file metadata) for cache keys."""
         asset_ctx = AssetContext.get()
         if not asset_ctx:
             return None

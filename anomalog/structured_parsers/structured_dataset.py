@@ -1,3 +1,5 @@
+"""StructuredDataset wraps parsed logs prior to template mining."""
+
 from dataclasses import dataclass
 
 from anomalog.anomaly_label_reader import AnomalyLabelLookup
@@ -13,11 +15,14 @@ from anomalog.template_parsers.templated_dataset import TemplatedDataset, Templa
 # various stages of processing? Maybe a more explicit pipeline definition?
 @dataclass(slots=True)
 class StructuredDataset:
+    """Structured dataset with labels ready for template mining."""
+
     sink: StructuredSink
     cache_paths: CachePathsConfig
     anomaly_labels: AnomalyLabelLookup
 
     def mine_templates_with(self, template_parser: TemplateParser) -> TemplatedDataset:
+        """Train a template parser and return a templated dataset view."""
         template_parser.train(
             lambda: (
                 row.untemplated_message_text

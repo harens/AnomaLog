@@ -1,3 +1,5 @@
+"""Cache utilities and Prefect helpers for AnomaLog flows."""
+
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -15,6 +17,8 @@ from .files import _ALLOWED, AssetDepsFingerprintPolicy
 
 @dataclass(frozen=True, slots=True)
 class CachePathsConfig:
+    """Resolved locations for data and cache storage."""
+
     data_root: Path = field(default_factory=lambda: Path(user_data_dir("anomalog")))
     cache_root: Path = field(default_factory=lambda: Path(user_cache_dir("anomalog")))
 
@@ -25,6 +29,10 @@ def asset_from_local_path(path: Path) -> Asset:
     - Asset key is a sanitized identifier derived from the path
     - Real path is stored in Asset.properties.url
     - Deterministic: same path -> same key
+
+    >>> asset = asset_from_local_path(Path("/tmp/demo.txt"))
+    >>> asset.properties.url.endswith("/tmp/demo.txt")
+    True
     """
     path = path.expanduser().resolve()
 

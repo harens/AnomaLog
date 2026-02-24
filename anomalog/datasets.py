@@ -1,3 +1,5 @@
+"""Prefect flows and dataset definitions for common benchmark logs."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,7 +53,6 @@ bgl = RawDataset(
 @flow
 def build_bgl_dataset() -> TemplatedDataset:
     """Fetch, parse, and template the BGL dataset."""
-
     return (
         bgl.fetch_if_needed()
         .extract_structured_components()
@@ -62,7 +63,6 @@ def build_bgl_dataset() -> TemplatedDataset:
 @flow
 def build_hdfs_v1_dataset() -> TemplatedDataset:
     """Fetch, parse, and template the HDFS v1 dataset."""
-
     return (
         hdfs_v1.fetch_if_needed()
         .extract_structured_components()

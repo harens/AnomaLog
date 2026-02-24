@@ -1,3 +1,5 @@
+"""Concrete StructuredParser implementations for HDFS and BGL log formats."""
+
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +14,8 @@ UTC = timezone.utc
 
 @dataclass(frozen=True, slots=True)
 class HDFSV1Parser(StructuredParser):
+    """Parse HDFS v1 log lines into structured fields."""
+
     # Canonical HDFS v1 format:
     #   <Date> <Time> <Pid> <Level> <Component>: <Content>
     # e.g. 081109 203518 143 INFO dfs.DataNode$DataXceiver:
@@ -35,6 +39,11 @@ class HDFSV1Parser(StructuredParser):
 
     @staticmethod
     def _yymmdd_hhmmss_to_unix_ms(date_s: str, time_s: str) -> int | None:
+        """Convert YYMMDD and HHMMSS strings to epoch milliseconds.
+
+        >>> HDFSV1Parser._yymmdd_hhmmss_to_unix_ms("240101", "000000")
+        1704067200000
+        """
         try:
             dt = datetime.strptime(f"{date_s} {time_s}", "%y%m%d %H%M%S").replace(
                 tzinfo=UTC,
@@ -44,6 +53,16 @@ class HDFSV1Parser(StructuredParser):
             return None
 
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse a single HDFS v1 line; return None for unparseable lines.
+
+        >>> line = (
+        ...     "081109 203518 143 INFO dfs.DataNode$DataXceiver: "
+        ...     "Receiving block blk_-160 src: /10.0.0.1:54106 dest: /10.0.0.2:50010"
+        ... )
+        >>> parsed = HDFSV1Parser().parse_line(line)
+        >>> parsed.entity_id, parsed.anomalous, parsed.untemplated_message_text[:13]
+        ('blk_-160', None, 'INFO dfs.Data')
+        """
         s = raw_line.rstrip("\n")
         logger = get_logger()
 
@@ -82,6 +101,8 @@ class HDFSV1Parser(StructuredParser):
 
 @dataclass(frozen=True, slots=True)
 class BGLParser(StructuredParser):
+    """Parse Blue Gene/L log lines into structured fields with anomaly flag."""
+
     # Matches both:
     #   - <epoch> <date> <loc> <hires_ts> <loc> <tail>
     #   <prefix> <epoch> <date> <loc> <hires_ts> <tail>
@@ -107,6 +128,13 @@ class BGLParser(StructuredParser):
 
     @staticmethod
     def _hires_ts_to_unix_ms(ts: str) -> int | None:
+        """Convert high-resolution timestamp string to epoch milliseconds.
+
+        >>> BGLParser._hires_ts_to_unix_ms("2005-06-03-15.42.50.363779")
+        1117813370363
+        >>> BGLParser._hires_ts_to_unix_ms("invalid") is None
+        True
+        """
         # BGL tooling usually treats these as UTC; adjust if you decide otherwise.
         try:
             dt = datetime.strptime(ts, "%Y-%m-%d-%H.%M.%S.%f").replace(tzinfo=UTC)
@@ -115,6 +143,17 @@ class BGLParser(StructuredParser):
             return None
 
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse a single BGL line; return None for unparseable lines.
+
+        >>> sample = (
+        ...     "- 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 "
+        ...     "2005-06-03-15.42.50.363779 R02-M1-N0-C:J12-U11 "
+        ...     "RAS KERNEL INFO cache parity corrected"
+        ... )
+        >>> parsed = BGLParser().parse_line(sample)
+        >>> (parsed.entity_id, parsed.anomalous)  # dash prefix => normal
+        ('R02-M1-N0-C:J12-U11', 0)
+        """
         s = raw_line.rstrip("\n")
         logger = get_logger()
 
