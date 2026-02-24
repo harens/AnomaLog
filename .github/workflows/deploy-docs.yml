@@ -1,0 +1,63 @@
+name: Deploy Sphinx documentation to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: true
+
+      # - name: Install system dependencies
+      #   run: |
+      #     sudo apt update
+      #     # sudo apt install -y texlive-latex-extra graphviz
+
+      - name: Install Python dependencies (docs group)
+        run: |
+          uv sync --group docs
+
+      - name: Build Sphinx (dirhtml)
+        run: |
+          uv run sphinx-build -b dirhtml docs/source docs/_build/dirhtml
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/dirhtml
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
