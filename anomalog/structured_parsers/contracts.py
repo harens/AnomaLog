@@ -63,6 +63,13 @@ class StructuredSink(Protocol):
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]: ...
 
+    # Dataset statistics / bounds
+    def count_rows(self) -> int: ...
+
+    def count_entities(self) -> int: ...
+
+    def timestamp_bounds(self) -> tuple[int | None, int | None]: ...
+
     # Log Grouping Strategies
     def iter_entity_sequences(
         self,

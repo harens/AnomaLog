@@ -127,6 +127,50 @@ class ParquetStructuredSink(StructuredSink):
             partitioning="hive",
         )
 
+    # Statistics helpers
+    def count_rows(self) -> int:
+        return self._dataset().count_rows()
+
+    def count_entities(self) -> int:
+        scanner = self._dataset().scanner(
+            columns=[ENTITY_FIELD],
+            batch_size=self._DEFAULT_BATCH_SIZE,
+        )
+        entities: set[str] = set()
+        for batch in scanner.to_batches():
+            col = batch.column(0)
+            for val in col.to_pylist():
+                if val is None:
+                    continue
+                entities.add(str(val))
+        return len(entities)
+
+    def timestamp_bounds(self) -> tuple[int | None, int | None]:
+        ts_scanner = self._dataset().scanner(
+            columns=[TIMESTAMP_FIELD],
+            batch_size=self._DEFAULT_BATCH_SIZE,
+            batch_readahead=2,
+            fragment_readahead=1,
+        )
+
+        min_ts: int | None = None
+        max_ts: int | None = None
+
+        for batch in ts_scanner.to_batches():
+            col = batch.column(0)
+            if len(col) == 0:
+                continue
+
+            batch_min = col.min()
+            batch_max = col.max()
+
+            if batch_min is not None:
+                min_ts = batch_min if min_ts is None else min(min_ts, batch_min)
+            if batch_max is not None:
+                max_ts = batch_max if max_ts is None else max(max_ts, batch_max)
+
+        return min_ts, max_ts
+
     def _projected_columns(
         self,
         columns: Sequence[str] | None,
@@ -169,32 +213,6 @@ class ParquetStructuredSink(StructuredSink):
                 if bucket is not None:
                     buckets.add(bucket)
         return buckets
-
-    def _timestamp_bounds(self) -> tuple[int | None, int | None]:
-        ts_scanner = self._dataset().scanner(
-            columns=[TIMESTAMP_FIELD],
-            batch_size=self._DEFAULT_BATCH_SIZE,
-            batch_readahead=2,
-            fragment_readahead=1,
-        )
-
-        min_ts: int | None = None
-        max_ts: int | None = None
-
-        for batch in ts_scanner.to_batches():
-            col = batch.column(0)
-            if len(col) == 0:
-                continue
-
-            batch_min = col.min()
-            batch_max = col.max()
-
-            if batch_min is not None:
-                min_ts = batch_min if min_ts is None else min(min_ts, batch_min)
-            if batch_max is not None:
-                max_ts = batch_max if max_ts is None else max(max_ts, batch_max)
-
-        return min_ts, max_ts
 
     @staticmethod
     def _stream_time_windows(
@@ -239,7 +257,7 @@ class ParquetStructuredSink(StructuredSink):
         step_span_ms: int | None = None,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
         def _iter() -> Iterator[Collection[StructuredLine]]:
-            first_ts, last_ts = self._timestamp_bounds()
+            first_ts, last_ts = self.timestamp_bounds()
             if first_ts is None or last_ts is None:
                 msg = "No timestamps available for time-based windowing."
                 raise ValueError(msg)

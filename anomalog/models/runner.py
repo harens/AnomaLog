@@ -11,7 +11,7 @@ from prefect.logging import get_logger
 
 from anomalog.io_utils import make_spinner_progress
 from anomalog.models.metrics import EvaluationResult, MetricsComputer, MetricSet
-from anomalog.models.split import ModeAwareSplit
+from anomalog.models.sequences import SplitLabel
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
@@ -43,9 +43,8 @@ class ExperimentRunner:
 
     def run(self) -> list[EvaluationResult]:
         results: list[EvaluationResult] = []
-        for builder in self.cfg.builders:
-            # Fresh split per builder to avoid cross-builder state leakage.
-            split = ModeAwareSplit(train_frac=self.cfg.train_frac)
+        for base_builder in self.cfg.builders:
+            builder = base_builder.with_train_fraction(self.cfg.train_frac)
             grouping = builder.mode
             self.logger.info("Running experiments for grouping=%s", grouping)
             builder_name = f"group-{grouping}"
@@ -53,7 +52,7 @@ class ExperimentRunner:
                 model = factory(cfg)
                 model.id = model_id
                 model.setup()
-                result = self._run_single(model, builder, grouping, split)
+                result = self._run_single(model, builder, grouping)
                 self._persist(result, builder_name)
                 results.append(result)
         return results
@@ -63,11 +62,10 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
-        split: ModeAwareSplit,
     ) -> EvaluationResult:
-        train_total, train_pos = self._train_pass(model, builder, grouping, split)
+        train_total, train_pos = self._train_pass(model, builder, grouping)
         model.finalize()
-        metric_set = self._eval_pass(model, builder, grouping, split)
+        metric_set = self._eval_pass(model, builder, grouping)
 
         return EvaluationResult(
             model_id=model.id,
@@ -84,7 +82,6 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
-        split: ModeAwareSplit,
     ) -> tuple[int, int]:
         train_total = 0
         train_pos = 0
@@ -98,7 +95,7 @@ class ExperimentRunner:
                 else None
             )
             for seq in builder:
-                if split(seq, builder.mode) != "train":
+                if seq.split_label is not SplitLabel.TRAIN:
                     continue
                 buffer.append(seq)
                 if len(buffer) >= TRAIN_BATCH:
@@ -121,7 +118,6 @@ class ExperimentRunner:
         model: SequenceModel,
         builder: SequenceBuilder,
         grouping: str,
-        split: ModeAwareSplit,
     ) -> MetricSet:
         metrics = MetricsComputer()
         eval_buffer: list[TemplateSequence] = []
@@ -134,7 +130,7 @@ class ExperimentRunner:
                 else None
             )
             for seq in builder:
-                if split(seq, builder.mode) != "test":
+                if seq.split_label is not SplitLabel.TEST:
                     continue
                 eval_buffer.append(seq)
                 if len(eval_buffer) >= EVAL_BATCH:
