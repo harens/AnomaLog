@@ -4,7 +4,7 @@ from typing import Protocol, TypeAlias, runtime_checkable
 
 from anomalog.anomaly_label_reader import AnomalyLabelLookup
 from anomalog.cache import CachePathsConfig
-from anomalog.models.sequences import SequenceBuilder
+from anomalog.sequences import SequenceBuilder
 from anomalog.structured_parsers.contracts import StructuredSink
 
 UntemplatedText: TypeAlias = str
