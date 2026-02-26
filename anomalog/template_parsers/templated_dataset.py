@@ -48,11 +48,11 @@ class TemplatedDataset:
         """Return a SequenceBuilder configured from this dataset."""
         return SequenceBuilder.from_dataset(self)
 
-    def group_entity(self) -> SequenceBuilder:
+    def group_by_entity(self) -> SequenceBuilder:
         """Group sequences by entity id."""
         return self.sequence_builder.entity()
 
-    def group_fixed_window(
+    def group_by_fixed_window(
         self,
         window_size: int,
         step_size: int | None = None,
@@ -60,7 +60,7 @@ class TemplatedDataset:
         """Group sequences in fixed-size windows."""
         return self.sequence_builder.fixed(size=window_size, step=step_size)
 
-    def group_time_window(
+    def group_by_time_window(
         self,
         time_span_ms: int,
         step_span_ms: int | None = None,
