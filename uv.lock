@@ -84,7 +84,6 @@ name = "anomalog"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "beartype" },
     { name = "drain3" },
     { name = "logparser3" },
     { name = "platformdirs" },
@@ -116,7 +115,6 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "beartype", specifier = ">=0.22.9" },
     { name = "drain3", git = "https://github.com/logpai/Drain3" },
     { name = "logparser3", specifier = ">=1.0.4" },
     { name = "platformdirs", specifier = ">=4.5.1" },

@@ -21,7 +21,6 @@ from anomalog.io_utils import (
     verify_md5,
 )
 from anomalog.sources import DatasetSource
-from anomalog.type_hints import URL, MD5Hex
 
 _ALLOWED_SCHEMES = {"https", "http"}
 
@@ -39,11 +38,11 @@ class _DownloadProgress:
 class RemoteZipSource(DatasetSource):
     """Download a dataset zip from a remote URL and extract it locally."""
 
-    url: URL
-    md5_checksum: MD5Hex
+    url: str
+    md5_checksum: str
 
     @staticmethod
-    def _validate_remote_url(url: URL) -> None:
+    def _validate_remote_url(url: str) -> None:
         """Validate URL scheme and presence of network location."""
         p = urlparse(url)
         if p.scheme not in _ALLOWED_SCHEMES:

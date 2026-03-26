@@ -18,8 +18,6 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from anomalog.type_hints import MD5Hex
-
 
 def make_bounded_progress() -> Progress:
     """Create a progress bar suitable for bounded downloads."""
@@ -49,7 +47,7 @@ def make_spinner_progress(unit: str = "lines processed") -> Progress:
 
 def verify_md5(
     file_path: Path,
-    expected_hex: MD5Hex,
+    expected_hex: str,
     progress_factory: Callable[[], Progress] = make_bounded_progress,
 ) -> None:
     """Validate a file's MD5 checksum, raising on mismatch.

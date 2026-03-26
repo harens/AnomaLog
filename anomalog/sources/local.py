@@ -5,7 +5,6 @@ from pathlib import Path
 
 from anomalog.io_utils import extract_zip, verify_md5
 from anomalog.sources import DatasetSource
-from anomalog.type_hints import MD5Hex
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,7 @@ class LocalZipSource(DatasetSource):
     """Use a local zip archive as the dataset source."""
 
     zip_path: Path
-    md5_checksum: MD5Hex | None = None
+    md5_checksum: str | None = None
 
     def materialise(self, dst_dir: Path) -> Path:
         """Extract the zip file into dst_dir, verifying checksum when provided."""

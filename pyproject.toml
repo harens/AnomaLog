@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "beartype>=0.22.9",  # TODO: Check how it compares with pydantic, since prefect pulls pydantic
     "drain3",
     "logparser3>=1.0.4",
     "platformdirs>=4.5.1",
