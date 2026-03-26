@@ -16,6 +16,10 @@ from prefect.logging import get_run_logger
 
 from anomalog.structured_parsers.contracts import (
     ANOMALOUS_FIELD,
+    ENTITY_FIELD,
+    LINE_FIELD,
+    TIMESTAMP_FIELD,
+    UNTEMPLATED_FIELD,
     StructuredLine,
     StructuredParser,
 )
@@ -38,6 +42,17 @@ class WriterConfig:
 
 
 ENTITY_BUCKET_FIELD = "entity_bucket"
+
+STRUCTURED_BATCH_SCHEMA = pa.schema(
+    [
+        pa.field(TIMESTAMP_FIELD, pa.int64()),
+        pa.field(ENTITY_FIELD, pa.string()),
+        pa.field(UNTEMPLATED_FIELD, pa.string()),
+        pa.field(ANOMALOUS_FIELD, pa.int64()),
+        pa.field(LINE_FIELD, pa.int64()),
+        pa.field(ENTITY_BUCKET_FIELD, pa.int32()),
+    ],
+)
 
 
 def _stable_bucket(entity_id: str, *, buckets: int) -> int:
@@ -92,11 +107,11 @@ def _iter_record_batches(
                     len(rows),
                     total_rows,
                 )
-                yield pa.RecordBatch.from_pylist(rows)
+                yield pa.RecordBatch.from_pylist(rows, schema=STRUCTURED_BATCH_SCHEMA)
                 rows = []
 
     if rows:
-        yield pa.RecordBatch.from_pylist(rows)
+        yield pa.RecordBatch.from_pylist(rows, schema=STRUCTURED_BATCH_SCHEMA)
 
     logger.info("Finished parsing %d structured rows", total_rows)
 
@@ -188,6 +203,7 @@ def extract_structured_components(
         max_partitions=max(cfg.max_partitions, cfg.buckets),
         existing_data_behavior="delete_matching",
         use_threads=True,
+        preserve_order=True,
         max_rows_per_file=cfg.max_rows_per_file,
         max_rows_per_group=cfg.max_rows_per_group,
         max_open_files=cfg.max_open_files,
