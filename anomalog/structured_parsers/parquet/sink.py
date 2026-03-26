@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.dataset as ds
 
 from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
@@ -68,7 +69,6 @@ class ParquetStructuredSink(StructuredSink):
         *,
         filter_expr: ds.Expression | None = None,
         batch_size: int | None = None,
-        use_threads: bool = True,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Iterate over StructuredLine objects with optional column projection."""
 
@@ -80,7 +80,7 @@ class ParquetStructuredSink(StructuredSink):
                 filter=filter_expr,
                 batch_readahead=2,
                 fragment_readahead=1,
-                use_threads=use_threads,
+                use_threads=True,
             )
             for batch in scanner.to_batches():
                 yield from self._rows_from_batch(batch)
@@ -135,7 +135,10 @@ class ParquetStructuredSink(StructuredSink):
         return ds.dataset(
             self.structured_data_cache(self.dataset_name),
             format="parquet",
-            partitioning="hive",
+            partitioning=ds.partitioning(
+                schema=pa.schema([pa.field(ENTITY_BUCKET_FIELD, pa.int32())]),
+                flavor="hive",
+            ),
         )
 
     # Statistics helpers
@@ -183,19 +186,23 @@ class ParquetStructuredSink(StructuredSink):
 
         min_ts: int | None = None
         max_ts: int | None = None
+        pc_min_max = getattr(pc, "min_max")  # noqa: B009 - stubs miss this function
 
         for batch in ts_scanner.to_batches():
             col = batch.column(0)
             if len(col) == 0:
                 continue
 
-            batch_min = col.min()
-            batch_max = col.max()
+            stats = pc_min_max(col)
+            batch_min = stats["min"]
+            batch_max = stats["max"]
 
-            if batch_min is not None:
-                min_ts = batch_min if min_ts is None else min(min_ts, batch_min)
-            if batch_max is not None:
-                max_ts = batch_max if max_ts is None else max(max_ts, batch_max)
+            if batch_min.is_valid:
+                min_value = batch_min.as_py()
+                min_ts = min_value if min_ts is None else min(min_ts, min_value)
+            if batch_max.is_valid:
+                max_value = batch_max.as_py()
+                max_ts = max_value if max_ts is None else max(max_ts, max_value)
 
         return min_ts, max_ts
 
@@ -253,7 +260,7 @@ class ParquetStructuredSink(StructuredSink):
         last_ts: int,
         time_span_ms: int,
         step: int,
-    ) -> Iterator[list[StructuredLine]]:
+    ) -> Iterator[tuple[StructuredLine, ...]]:
         """Slide a time window over rows, yielding buffered windows."""
         buffer: deque[StructuredLine] = deque()
         window_start = first_ts
@@ -268,7 +275,7 @@ class ParquetStructuredSink(StructuredSink):
 
             while ts >= window_end:
                 if buffer:
-                    yield buffer
+                    yield tuple(buffer)
 
                 window_start += step
                 window_end = window_start + time_span_ms
@@ -279,7 +286,7 @@ class ParquetStructuredSink(StructuredSink):
 
         while window_start <= last_ts:
             if buffer:
-                yield buffer
+                yield tuple(buffer)
             window_start += step
             window_end = window_start + time_span_ms
             while buffer and (buffer[0].timestamp_unix_ms or 0) < window_start:
@@ -298,15 +305,13 @@ class ParquetStructuredSink(StructuredSink):
                 msg = "No timestamps available for time-based windowing."
                 raise ValueError(msg)
 
-            step = step_span_ms or time_span_ms
+            step = time_span_ms if step_span_ms is None else step_span_ms
             if time_span_ms <= 0 or step <= 0:
                 msg = "time_span_ms and step_span_ms must be positive integers"
                 raise ValueError(msg)
 
             yield from self._stream_time_windows(
-                self._iter_structured_lines_ordered(
-                    key_field=TIMESTAMP_FIELD,
-                )(),
+                self._iter_structured_lines_by_timestamp()(),
                 first_ts=first_ts,
                 last_ts=last_ts,
                 time_span_ms=time_span_ms,
@@ -323,18 +328,18 @@ class ParquetStructuredSink(StructuredSink):
         """Yield sequences of fixed window size over ordered rows."""
 
         def _iter() -> Iterator[Collection[StructuredLine]]:
-            step = step_size or window_size
+            step = window_size if step_size is None else step_size
             if window_size <= 0 or step <= 0:
                 msg = "window_size and step_size must be positive integers"
                 raise ValueError(msg)
 
             buffer: deque[StructuredLine] = deque()
-            for row in self._iter_structured_lines_ordered(
-                key_field=LINE_FIELD,
+            for row in self.iter_structured_lines(
+                batch_size=self._DEFAULT_BATCH_SIZE,
             )():
                 buffer.append(row)
                 if len(buffer) == window_size:
-                    yield buffer
+                    yield tuple(buffer)
 
                     for _ in range(step):
                         if not buffer:
@@ -342,28 +347,18 @@ class ParquetStructuredSink(StructuredSink):
                         buffer.popleft()
 
             if buffer:
-                yield list(buffer)
+                yield tuple(buffer)
 
         return _iter
 
-    def _iter_structured_lines_ordered(
+    def _iter_structured_lines_by_timestamp(
         self,
-        *,
-        key_field: str = LINE_FIELD,
     ) -> Callable[[], Iterator[StructuredLine]]:
-        """Merge bucketed parquet fragments into a globally ordered stream."""
+        """Merge bucketed parquet fragments into global timestamp order."""
 
         def _iter() -> Iterator[StructuredLine]:
             buckets = sorted(self._iter_buckets())
             buckets_with_null = [*buckets, None]
-
-            def _key_for_row(row: StructuredLine) -> tuple[int, int, int]:
-                if key_field == TIMESTAMP_FIELD:
-                    ts = row.timestamp_unix_ms
-                    # Missing timestamps go after those with timestamps; line_order
-                    # acts as a deterministic tiebreaker.
-                    return (1 if ts is None else 0, int(ts or 0), row.line_order)
-                return (0, row.line_order, 0)
 
             bucket_iters: list[Iterator[StructuredLine]] = []
             for bucket in buckets_with_null:
@@ -376,7 +371,6 @@ class ParquetStructuredSink(StructuredSink):
                     self.iter_structured_lines(
                         filter_expr=expr,
                         batch_size=self._DEFAULT_BATCH_SIZE,
-                        use_threads=False,
                     )(),
                 )
 
@@ -394,7 +388,7 @@ class ParquetStructuredSink(StructuredSink):
                     first = next(it)
                 except StopIteration:
                     continue
-                heap.append((_key_for_row(first), idx, first, it))
+                heap.append((self._timestamp_row_key(first), idx, first, it))
 
             heapq.heapify(heap)
 
@@ -405,6 +399,13 @@ class ParquetStructuredSink(StructuredSink):
                     nxt = next(it)
                 except StopIteration:
                     continue
-                heapq.heappush(heap, (_key_for_row(nxt), idx, nxt, it))
+                heapq.heappush(heap, (self._timestamp_row_key(nxt), idx, nxt, it))
 
         return _iter
+
+    @staticmethod
+    def _timestamp_row_key(row: StructuredLine) -> tuple[int, int, int]:
+        ts = row.timestamp_unix_ms
+        # Missing timestamps go after those with timestamps; line_order
+        # acts as a deterministic tiebreaker.
+        return (1 if ts is None else 0, int(ts or 0), row.line_order)
