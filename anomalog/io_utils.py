@@ -107,11 +107,11 @@ def extract_zip(zip_path: Path, dst_dir: Path) -> None:
     """Extract a zip file to a destination directory after integrity check."""
     logger = get_run_logger()
     logger.info("Extracting %s to %s", zip_path, dst_dir)
-    dst_dir.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(zip_path) as z:
         bad = z.testzip()
         if bad is not None:
             msg = f"Corrupt file in zip: {bad}"
             raise zipfile.BadZipFile(msg)
+        dst_dir.mkdir(parents=True, exist_ok=True)
         z.extractall(dst_dir)

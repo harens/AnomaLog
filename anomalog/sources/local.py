@@ -31,8 +31,6 @@ class LocalZipSource(DatasetSource):
 
     def materialise(self, dst_dir: Path) -> Path:
         """Extract the zip file into dst_dir, verifying checksum when provided."""
-        dst_dir.mkdir(parents=True, exist_ok=True)
-
         # fast path
         if dst_dir.exists() and dst_dir.is_dir() and any(dst_dir.iterdir()):
             return dst_dir
