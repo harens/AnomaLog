@@ -19,6 +19,7 @@ dev = [
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
     "ruff>=0.14.13",
     "ty>=0.0.13",
 ]
@@ -34,6 +35,9 @@ docs = [
 # select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
 select = ['ALL']
 ignore = ["TD", "FIX002", "ERA001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
 
 [tool.mypy]
 disable_error_code = ["import-untyped"]
