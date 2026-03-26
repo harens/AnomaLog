@@ -32,7 +32,24 @@ def class_source(cls: type) -> str:
 
 
 def cache_class_key_fn(context: TaskRunContext, params: dict[str, object]) -> str:  # noqa: ARG001 - context is not used, but part of the interface
-    """Build a stable hash for cache keying based on class definitions."""
+    """Build a stable hash for cache keying based on class definitions.
+
+    Builtins and routines are ignored, and the result is independent of
+    parameter ordering.
+
+    >>> class _A:
+    ...     pass
+    ...
+    >>> class _B:
+    ...     pass
+    ...
+    >>> first = cache_class_key_fn(None, {"a": _A(), "b": _B(), "n": 1, "fn": len})
+    >>> second = cache_class_key_fn(None, {"b": _B(), "a": _A()})
+    >>> first == second
+    True
+    >>> len(first)
+    64
+    """
     class_sources: list[str] = []
     for v in params.values():
         # Skip functions/methods/modules/etc.
