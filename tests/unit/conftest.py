@@ -1,0 +1,88 @@
+"""Project-wide pytest hooks."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import coverage
+import pytest
+
+_TEST_REPORTS_KEY = pytest.StashKey[dict[str, pytest.TestReport]]()
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from typing import Any
+
+
+def _coverage_snapshot(cov: coverage.Coverage) -> dict[str, frozenset[int]]:
+    """Capture the currently executed lines for each measured file."""
+    data = cov.get_data()
+    return {
+        filename: frozenset(data.lines(filename) or ())
+        for filename in data.measured_files()
+    }
+
+
+def _introduces_new_coverage(
+    before: dict[str, frozenset[int]],
+    after: dict[str, frozenset[int]],
+) -> bool:
+    """Return whether any new covered lines were added."""
+    return any(
+        lines - before.get(filename, frozenset()) for filename, lines in after.items()
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers",
+        "allow_no_new_coverage: suppress the warning for tests that only "
+        "exercise already-covered lines",
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item,
+    call: pytest.CallInfo[None],
+) -> Generator[None, Any, pytest.TestReport]:
+    """Store the phase reports for each test item."""
+    del call
+    report = yield
+    reports = item.stash.setdefault(_TEST_REPORTS_KEY, {})
+    reports[report.when] = report
+    return report
+
+
+@pytest.fixture(autouse=True)
+def warn_when_test_adds_no_new_coverage(
+    request: pytest.FixtureRequest,
+) -> Generator[None]:
+    """Warn when a test does not increase cumulative line coverage."""
+    if request.node.get_closest_marker("allow_no_new_coverage") is not None:
+        yield
+        return
+
+    cov = coverage.Coverage.current()
+    if cov is None:
+        yield
+        return
+
+    before = _coverage_snapshot(cov)
+    yield
+
+    report = request.node.stash.get(_TEST_REPORTS_KEY, {}).get("call")
+    if report is None or report.skipped:
+        return
+
+    after = _coverage_snapshot(cov)
+    if _introduces_new_coverage(before, after):
+        return
+
+    request.node.warn(
+        pytest.PytestWarning(
+            "test did not introduce new line coverage; add assertions for "
+            "uncovered behavior or mark with @pytest.mark.allow_no_new_coverage",
+        ),
+    )
