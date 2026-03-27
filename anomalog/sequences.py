@@ -215,13 +215,19 @@ class SequenceBuilder:
     def _rows_iterator(self) -> Iterator[Collection[StructuredLine]]:
         """Return an iterator over grouped rows based on the current mode."""
         if self.mode is GroupingMode.TIME:
+            if self.time_span_ms is None:
+                msg = "time_span_ms must be set for time-based grouping"
+                raise ValueError(msg)
             return self.sink.iter_time_window_sequences(
-                self.time_span_ms,  # type: ignore[arg-type]
+                self.time_span_ms,
                 step_span_ms=self.step,
             )()
         if self.mode is GroupingMode.FIXED:
+            if self.window_size is None:
+                msg = "window_size must be set for fixed-size grouping"
+                raise ValueError(msg)
             return self.sink.iter_fixed_window_sequences(
-                self.window_size,  # type: ignore[arg-type]
+                self.window_size,
                 step_size=self.step,
             )()
         return self.sink.iter_entity_sequences()()

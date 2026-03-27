@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from prefect.logging import disable_run_logger
+from typing_extensions import Self
 
 from anomalog.io_utils import extract_zip, verify_md5
 
@@ -14,7 +15,7 @@ class _TrackingProgress:
         self.task_total: int | None = None
         self.advanced = 0
 
-    def __enter__(self) -> "_TrackingProgress":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> bool:
@@ -83,7 +84,7 @@ def test_extract_zip_raises_for_corrupt_member(
         def __init__(self, opened_path: Path) -> None:
             assert opened_path == zip_path
 
-        def __enter__(self) -> "_CorruptArchive":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_args: object) -> bool:

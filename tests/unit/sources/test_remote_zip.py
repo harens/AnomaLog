@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 from prefect.logging import disable_run_logger
 from rich.progress import Progress
+from typing_extensions import Self
 
 from anomalog.sources.remote_zip import RemoteZipSource
 
@@ -48,7 +49,7 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
     verified: list[tuple[Path, str]] = []
 
     class _Progress:
-        def __enter__(self) -> "_Progress":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_args: object) -> None:

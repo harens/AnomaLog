@@ -265,3 +265,35 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
     assert test_window.entity_ids == ["c"]
     assert test_window.events == [("THREE", ["three"], None)]
     assert test_window.label == 1
+
+
+def test_fixed_grouping_requires_window_size() -> None:
+    """Fixed grouping rejects builders without a configured window size."""
+    builder = SequenceBuilder(
+        sink=_sink(),
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        mode=GroupingMode.FIXED,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="window_size must be set for fixed-size grouping",
+    ):
+        list(builder)
+
+
+def test_time_grouping_requires_time_span() -> None:
+    """Time grouping rejects builders without a configured time span."""
+    builder = SequenceBuilder(
+        sink=_sink(),
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        mode=GroupingMode.TIME,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="time_span_ms must be set for time-based grouping",
+    ):
+        list(builder)
