@@ -42,7 +42,7 @@ ignore = ["TD", "FIX002", "ERA001"]
 disable_error_code = ["import-untyped"]
 
 [build-system]
-requires = ["uv_build>=0.9.26,<0.10.0"]
+requires = ["uv_build>=0.9.26,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
