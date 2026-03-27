@@ -1,0 +1,54 @@
+.hero {
+  margin: 0 0 1.2rem 0;
+}
+
+.hero h1 {
+  margin-bottom: 0.5rem;
+}
+
+.hero p {
+  max-width: 42rem;
+  margin-top: 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.hero .md-button {
+  margin-right: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding: 0.38em 0.85em;
+  border-radius: 0.45rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.pipeline-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem 0.3rem;
+  border-radius: 6px;
+  background: var(--md-default-fg-color--lightest);
+  border: 1px solid var(--md-default-fg-color--lighter);
+  font-weight: 500;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.pipeline-arrow {
+  opacity: 0.6;
+}
+
+.pipeline-step:hover {
+  background: var(--md-accent-fg-color--transparent);
+  border-color: var(--md-accent-fg-color);
+}
