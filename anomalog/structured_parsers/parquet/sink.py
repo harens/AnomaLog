@@ -18,6 +18,7 @@ from anomalog.structured_parsers.contracts import (
     LINE_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
+    EntityLabelCounts,
     StructuredLine,
     StructuredParser,
     StructuredSink,
@@ -149,8 +150,8 @@ class ParquetStructuredSink(StructuredSink):
     def count_entities_by_label(
         self,
         label_for_group: Callable[[str], int | None],
-    ) -> tuple[int, int]:
-        """Return counts of (normal, total) distinct entity ids."""
+    ) -> EntityLabelCounts:
+        """Return counts of normal and total distinct entity ids."""
         scanner = self._dataset().scanner(
             columns=[ENTITY_FIELD],
             batch_size=self._DEFAULT_BATCH_SIZE,
@@ -173,7 +174,7 @@ class ParquetStructuredSink(StructuredSink):
                 normals += 1
 
         total = len(entities_seen)
-        return normals, total
+        return EntityLabelCounts(normal_entities=normals, total_entities=total)
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
         """Return min and max timestamps present in the dataset."""

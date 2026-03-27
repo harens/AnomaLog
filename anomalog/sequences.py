@@ -14,10 +14,14 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Callable, Collection, Iterable, Iterator
+    from collections.abc import Callable, Collection, Iterator
 
     from anomalog.structured_parsers.contracts import StructuredLine, StructuredSink
-    from anomalog.template_parsers.templated_dataset import TemplatedDataset
+    from anomalog.template_parsers.templated_dataset import (
+        ExtractedParameters,
+        LogTemplate,
+        TemplatedDataset,
+    )
 
 
 class GroupingMode(str, Enum):
@@ -70,7 +74,7 @@ class SequenceBuilder:
     """Build sequences from a structured sink and template inference function."""
 
     sink: StructuredSink
-    infer: Callable[[str], tuple[str, Iterable[str]]]
+    infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
     mode: GroupingMode
     window_size: int | None = None
@@ -84,7 +88,7 @@ class SequenceBuilder:
         """Create a builder using configuration from a templated dataset."""
         return cls(
             sink=td.sink,
-            infer=td.template_parser.inference,
+            infer_template=td.template_parser.inference,
             label_for_group=td.anomaly_labels.label_for_group,
             mode=GroupingMode.ENTITY,
         )
@@ -134,12 +138,16 @@ class SequenceBuilder:
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping."""
         rows_iter = self._rows_iterator()
-        infer = functools.lru_cache(maxsize=50_000)(self.infer)
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
         if self.mode is GroupingMode.ENTITY:
-            normals, total = self.sink.count_entities_by_label(label_for_group)
-            base = normals if self.train_on_normal_entities_only else total
+            entity_counts = self.sink.count_entities_by_label(label_for_group)
+            base = (
+                entity_counts.normal_entities
+                if self.train_on_normal_entities_only
+                else entity_counts.total_entities
+            )
             target_in_train = math.ceil(self.train_frac * base) if base else 0
             normals_seen_in_train = 0
 
@@ -166,7 +174,7 @@ class SequenceBuilder:
                 seq = self._build_sequence(
                     window_id,
                     rows,
-                    infer,
+                    infer_template,
                     label_for_group,
                     split_label,
                 )
@@ -197,7 +205,7 @@ class SequenceBuilder:
             seq = self._build_sequence(
                 window_id,
                 rows,
-                infer,
+                infer_template,
                 label_for_group,
                 split_label,
             )
@@ -222,7 +230,7 @@ class SequenceBuilder:
         self,
         window_id: int,
         rows: Collection[StructuredLine],
-        infer: Callable[[str], tuple[str, Iterable[str]]],
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
         label_for_group: Callable[[str], int | None],
         split_label: SplitLabel,
     ) -> TemplateSequence | None:
@@ -239,7 +247,7 @@ class SequenceBuilder:
         unique_ids = sorted(set(ids_in_window))
 
         for r in rows:
-            template, params = infer(r.untemplated_message_text)
+            template, params = infer_template(r.untemplated_message_text)
             dt, prev_ts = self._compute_dt(prev_ts, r.timestamp_unix_ms)
 
             events.append((template, list(params), dt))
@@ -295,7 +303,7 @@ class SequenceBuilder:
         ...
         >>> sb = SequenceBuilder(
         ...     sink=_Sink(),
-        ...     infer=lambda s: (s, ()),
+        ...     infer_template=lambda s: (s, ()),
         ...     label_for_group=lambda _: 0,
         ...     mode=GroupingMode.FIXED,
         ...     window_size=4,
@@ -327,7 +335,7 @@ class SequenceBuilder:
         ...
         >>> sb = SequenceBuilder(
         ...     sink=_Sink(),
-        ...     infer=lambda s: (s, ()),
+        ...     infer_template=lambda s: (s, ()),
         ...     label_for_group=lambda _: 0,
         ...     mode=GroupingMode.TIME,
         ...     window_size=None,

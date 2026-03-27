@@ -1,7 +1,7 @@
 """Template parser implementations (Drain3 and identity)."""
 
 import hashlib
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
 from pathlib import Path
 
@@ -74,8 +74,8 @@ class Drain3Parser(TemplateParser):
 
         def get_template_and_params_for_log(
             miner: TemplateMiner,
-            log_line: str,
-        ) -> tuple[str, Iterable[str]]:
+            log_line: UntemplatedText,
+        ) -> tuple[LogTemplate, ExtractedParameters]:
             match = miner.match(log_line)
             if match is None:
                 msg = f"Log line did not match any template: {log_line}"

@@ -3,7 +3,7 @@
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import NamedTuple, Protocol, runtime_checkable
 
 # Shared field names to avoid magic strings elsewhere.
 LINE_FIELD = "line_order"
@@ -11,6 +11,13 @@ TIMESTAMP_FIELD = "timestamp_unix_ms"
 ENTITY_FIELD = "entity_id"
 UNTEMPLATED_FIELD = "untemplated_message_text"
 ANOMALOUS_FIELD = "anomalous"
+
+
+class EntityLabelCounts(NamedTuple):
+    """Distinct entity counts partitioned by anomaly label."""
+
+    normal_entities: int
+    total_entities: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +96,8 @@ class StructuredSink(Protocol):
     def count_entities_by_label(
         self,
         label_for_group: Callable[[str], int | None],
-    ) -> tuple[int, int]:
-        """Return counts of (normal, total) distinct entity IDs."""
+    ) -> EntityLabelCounts:
+        """Return counts of normal and total distinct entity IDs."""
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
         """Return (min_ts, max_ts) in milliseconds if available."""
