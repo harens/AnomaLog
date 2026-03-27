@@ -1,5 +1,11 @@
 # AnomaLog
 
+[![Codecov](https://img.shields.io/codecov/c/github/harens/anomalog?style=flat-square&logo=codecov)](https://app.codecov.io/gh/harens/AnomaLog)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/harens/anomalog/ci.yml?style=flat-square&logo=github&label=tests)](https://github.com/harens/AnomaLog/actions/workflows/ci.yml)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/harens/anomalog/deploy-docs.yml?style=flat-square&logo=googledocs&logoColor=white&label=docs)](https://harens.github.io/AnomaLog/)
+![GitHub License](https://img.shields.io/github/license/harens/AnomaLog?style=flat-square&color=blue)
+
+
 An orchestration-driven research framework for reproducible log anomaly detection pipelines. Converts raw logs into deterministic, template-mapped sequences ready for controlled detector experiments.
 
 Built on [Prefect](https://www.prefect.io/), AnomaLog emphasises end-to-end reproducibility - from raw log ingestion to model-ready sequences.
@@ -16,19 +22,19 @@ This enables controlled ablation studies, fair model comparisons, and fully repe
 
 ## Key Features
 
-- **Deterministic pipeline execution.**  
+- **Deterministic pipeline execution.**
   Workflow stages are fingerprinted and cached, ensuring that only modified components are recomputed. This enables rapid iteration while preserving experiment traceability and artifact lineage.
 
-- **Protocol-driven modularity.**  
+- **Protocol-driven modularity.**
   All preprocessing stages implement explicit protocol interfaces, enabling parsers, template miners (e.g. [Drain3](https://github.com/logpai/Drain3)), and sequencing strategies to be swapped without altering downstream logic.
 
-- **Explicit sequencing strategies.**  
+- **Explicit sequencing strategies.**
   Supports entity-based, fixed-length, and time-windowed sequences with deterministic train/test controls, including “train-on-normal-entities-only” protocols.
 
-- **Dataset-first workflows.**  
+- **Dataset-first workflows.**
   Built-in flows for common log anomaly benchmarks (MD5-verified Zenodo mirrors) with a consistent schema for custom datasets and inline or external labels.
 
-- **Scalable, artifact-first storage.**  
+- **Scalable, artifact-first storage.**
   Structured events are persisted in columnar [Parquet](https://parquet.apache.org/) format, decoupling expensive parsing from downstream modeling. Entity-level bucketing bounds peak memory and enables streaming-scale preprocessing of large log corpora.
 
 ## Research Usage
@@ -44,7 +50,7 @@ Determinism is a property of the pipeline, not the random number generator. Even
 
 ```python
 from anomalog.datasets import build_bgl_dataset
-from anomalog.sequences import SplitLabel 
+from anomalog.sequences import SplitLabel
 
 dataset = build_bgl_dataset()
 sequence_view = dataset.group_by_entity().split_train_fraction(0.2)
