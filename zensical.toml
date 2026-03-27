@@ -15,6 +15,7 @@ nav = [
 ]
 
 extra_css = ["stylesheets/extra.css"]
+edit_uri = "edit/main/docs/"
 
 [project.theme]
 features = [
