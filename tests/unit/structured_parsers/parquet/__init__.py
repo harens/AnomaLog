@@ -1,0 +1,1 @@
+"""Parquet structured sink tests."""
