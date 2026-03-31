@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.2.0](https://github.com/harens/AnomaLog/compare/v0.1.0...v0.2.0) (2026-03-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* documentation now targets DatasetSpec and anomalog.presets instead of the previous RawDataset and anomalog.datasets examples
+* **api:** replaced RawDataset and anomalog.datasets entrypoints with DatasetSpec(...).from_source(...).parse_with(...).label_with(...).template_with(...).build(); moved anomaly label readers to anomalog.labels; custom DatasetSource implementations must implement raw_logs_path/raw_logs_relpath and custom template parsers must accept dataset_name=... at runtime
+* **parsers:** moved structured and template parser imports from anomalog.structured_parsers and anomalog.template_parsers to anomalog.parsers.*
+
+### Features
+
+* **api:** add DatasetSpec builder and dataset presets ([bab9df9](https://github.com/harens/AnomaLog/commit/bab9df92119ef47204a0ac5e8c70c386d9a41678))
+
+
+### Bug Fixes
+
+* **cache:** rerun materialized work when local artifacts are missing ([60635ae](https://github.com/harens/AnomaLog/commit/60635aef9ce5a0fac6f4c9d94a65c5fd9056d4af))
+* **tests:** gitignore include integration log file ([8355a90](https://github.com/harens/AnomaLog/commit/8355a902231176b7d8fd1100f69437268d161737))
+
+
+### Documentation
+
+* rewrite README and quickstart for fluent DatasetSpec API ([76a7b4e](https://github.com/harens/AnomaLog/commit/76a7b4e1e525c5327631294b681447d56eef77a2))
+
+
+### Miscellaneous Chores
+
+* release 0.2.0 ([b4df838](https://github.com/harens/AnomaLog/commit/b4df838bef05dffb469a5eda6a7fc0104f309fd7))
+
+
+### Code Refactoring
+
+* **parsers:** move parser modules under anomalog.parsers ([9ced56d](https://github.com/harens/AnomaLog/commit/9ced56d30fc0192cae0104664d00c2e22bba9457))
+
 ## 0.1.0 (2026-03-27)
 
 
