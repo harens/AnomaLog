@@ -2,6 +2,7 @@
 
 import zipfile
 from pathlib import Path
+from types import TracebackType
 
 import pytest
 from prefect.logging import disable_run_logger
@@ -18,10 +19,17 @@ class _TrackingProgress:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *_args: object) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        del exc_type, exc, traceback
         return False
 
-    def add_task(self, *_args: object, total: int, **_kwargs: object) -> int:
+    def add_task(self, description: str, total: int, unit: str | None = None) -> int:
+        del description, unit
         self.task_total = total
         return 1
 
@@ -87,7 +95,13 @@ def test_extract_zip_raises_for_corrupt_member(
         def __enter__(self) -> Self:
             return self
 
-        def __exit__(self, *_args: object) -> bool:
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> bool:
+            del exc_type, exc, traceback
             return False
 
         def testzip(self) -> str:
