@@ -320,3 +320,4 @@ pyrightconfig.json
 **/_autosummary
 *.pdf
 /tex
+!tests/integration/logs/**
