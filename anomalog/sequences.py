@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable, Collection, Iterator
 
-    from anomalog.structured_parsers.contracts import StructuredLine, StructuredSink
-    from anomalog.template_parsers.templated_dataset import (
+    from anomalog.parsers.structured.contracts import StructuredLine, StructuredSink
+    from anomalog.parsers.template.dataset import (
         ExtractedParameters,
         LogTemplate,
         TemplatedDataset,

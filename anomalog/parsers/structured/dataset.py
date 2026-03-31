@@ -2,13 +2,13 @@
 
 from dataclasses import dataclass
 
-from anomalog.anomaly_label_reader import AnomalyLabelLookup
 from anomalog.cache import CachePathsConfig
-from anomalog.structured_parsers.contracts import (
+from anomalog.labels import AnomalyLabelLookup
+from anomalog.parsers.structured.contracts import (
     UNTEMPLATED_FIELD,
     StructuredSink,
 )
-from anomalog.template_parsers.templated_dataset import TemplatedDataset, TemplateParser
+from anomalog.parsers.template.dataset import TemplatedDataset, TemplateParser
 
 
 # TODO: Better way of managing the flow of data through the

@@ -89,6 +89,14 @@ class StructuredSink(Protocol):
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Return a callable yielding StructuredLine rows, optionally projected."""
 
+    def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
+        """Return sparse per-line and per-group inline anomaly labels.
+
+        This exists alongside `iter_structured_lines()` because some sinks can
+        build these sparse maps much more efficiently from projected columns or
+        batches than by materializing full `StructuredLine` objects row-by-row.
+        """
+
     # Dataset statistics / bounds
     def count_rows(self) -> int:
         """Count total rows in the dataset."""

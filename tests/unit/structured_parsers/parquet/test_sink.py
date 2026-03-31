@@ -1,13 +1,15 @@
 """Tests for `ParquetStructuredSink`."""
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pytest
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import CachePathsConfig
-from anomalog.structured_parsers.contracts import (
+from anomalog.parsers.structured.contracts import (
     LINE_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
@@ -15,8 +17,8 @@ from anomalog.structured_parsers.contracts import (
     StructuredLine,
     StructuredParser,
 )
-from anomalog.structured_parsers.parquet.sink import ParquetStructuredSink
-from anomalog.structured_parsers.parquet.writer_worker import (
+from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
+from anomalog.parsers.structured.parquet.writer_worker import (
     WriterConfig,
     extract_structured_components,
 )
@@ -175,10 +177,14 @@ ENTITY_GROUP_ROWS = [
 ]
 
 
+@pytest.mark.allow_no_new_coverage
 def test_rows_from_batch_applies_defaults_for_missing_and_null_columns(
     tmp_path: Path,
 ) -> None:
     """Row decoding should fall back to current defaults for missing columns."""
+    # This locks in the row-decoding defaults for missing projected columns. The
+    # remaining uncovered lines in this area belong to parquet scan paths rather
+    # than the batch-decoding contract exercised here.
     sink = _make_sink(tmp_path)
     batch = pa.record_batch(
         [
@@ -282,8 +288,12 @@ def test_sink_entity_grouping_skips_null_entity_rows(
 
     def _iter_structured_lines(
         _self: ParquetStructuredSink,
-        **_kwargs: object,
-    ) -> object:
+        columns: list[str] | None = None,
+        *,
+        filter_expr: ds.Expression | None = None,
+        batch_size: int | None = None,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        del columns, filter_expr, batch_size
         return lambda: iter(
             [
                 WINDOW_AND_BATCH_ROWS[2],
@@ -313,10 +323,14 @@ def test_sink_entity_grouping_skips_null_entity_rows(
     ]
 
 
+@pytest.mark.allow_no_new_coverage
 def test_sink_timestamp_bounds_reads_min_and_max_from_real_dataset(
     tmp_path: Path,
 ) -> None:
     """Timestamp bounds should scan persisted parquet data for min and max."""
+    # This guards the externally visible min/max contract. Nearby uncovered
+    # branches are empty-batch and null-handling details that do not replace
+    # this persisted-dataset regression check.
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,

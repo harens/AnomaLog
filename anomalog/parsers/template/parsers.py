@@ -2,6 +2,7 @@
 
 import hashlib
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
@@ -12,11 +13,10 @@ from prefect.logging import get_run_logger
 
 from anomalog.cache import (
     CachePathsConfig,
-    asset_from_local_path,
     materialize,
 )
 from anomalog.io_utils import make_spinner_progress
-from anomalog.template_parsers.templated_dataset import (
+from anomalog.parsers.template.dataset import (
     ExtractedParameters,
     LogTemplate,
     TemplateParser,
@@ -33,34 +33,44 @@ class Drain3Parser(TemplateParser):
 
     def __init__(
         self,
-        dataset_name: str,
+        dataset_name: str | None = None,
         config_file: Path | None = None,
         cache_path: Path | None = None,
     ) -> None:
-        """Initialise the parser with dataset name and optional config/cache paths."""
-        if config_file is None:
-            self.config_file = Path(f"{Path(__file__).parent}/drain3.ini")
-        else:
-            self.config_file = config_file
-
+        """Initialise the parser with optional dataset name and cache paths."""
+        self.config_file = (
+            Path(f"{Path(__file__).parent}/drain3.ini")
+            if config_file is None
+            else config_file
+        )
         self.dataset_name = dataset_name
-        if cache_path is None:
-            self.cache_path = (
-                CachePathsConfig().cache_root / self.dataset_name / "drain3"
-            )
-        else:
-            self.cache_path = cache_path
-
-        self.cache_path.mkdir(parents=True, exist_ok=True)
-
+        self.cache_path = cache_path
         self.cfg_hash = hashlib.sha256(self.config_file.read_bytes()).hexdigest()[:12]
-
         self.inference_func: (
             Callable[[UntemplatedText], tuple[LogTemplate, ExtractedParameters]] | None
         ) = None
+        if self.dataset_name is not None:
+            self.resolved_cache_path.mkdir(parents=True, exist_ok=True)
 
-        self.cache_file_path = (
-            self.cache_path / f"{self.dataset_name}_drain3_cache_{self.cfg_hash}.db"
+    @property
+    def resolved_cache_path(self) -> Path:
+        """Return the on-disk cache directory for this parser instance."""
+        if self.dataset_name is None:
+            msg = "Drain3Parser requires a dataset name before runtime use."
+            raise ValueError(msg)
+        if self.cache_path is not None:
+            return self.cache_path
+        return CachePathsConfig().cache_root / self.dataset_name / "drain3"
+
+    @property
+    def cache_file_path(self) -> Path:
+        """Return the resolved cache file path for this parser instance."""
+        if self.dataset_name is None:
+            msg = "Drain3Parser requires a dataset name before runtime use."
+            raise ValueError(msg)
+        return (
+            self.resolved_cache_path
+            / f"{self.dataset_name}_drain3_cache_{self.cfg_hash}.db"
         )
 
     @staticmethod
@@ -97,7 +107,7 @@ class Drain3Parser(TemplateParser):
             msg = "No trained Drain3 cache found. Please (re)train the parser first."
             raise ValueError(msg)
 
-        cache_file = FilePersistence(self.cache_file_path)  # ty:ignore[invalid-argument-type]
+        cache_file = FilePersistence(str(self.cache_file_path))
         config = TemplateMinerConfig()
         config.load(str(self.config_file))
 
@@ -120,6 +130,7 @@ class Drain3Parser(TemplateParser):
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
         """Train Drain3 on an iterator of untemplated log lines."""
+        self.resolved_cache_path.mkdir(parents=True, exist_ok=True)
 
         # Avoid unstable cache keys from the iterator argument by
         # capturing it in a closure and running a zero-arg task
@@ -129,7 +140,7 @@ class Drain3Parser(TemplateParser):
         def _run_train() -> None:
             return self._train(untemplated_text_iterator)
 
-        materialize(asset_from_local_path(self.cache_file_path))(_run_train)()
+        materialize(self.cache_file_path)(_run_train)()
 
         # The training task might be skipped if the Prefect asset cache hits.
         # Ensure we still have a callable bound to the persisted miner state.
@@ -142,7 +153,7 @@ class Drain3Parser(TemplateParser):
     ) -> None:
         logger = get_run_logger()
 
-        cache_file = FilePersistence(self.cache_file_path)  # ty:ignore[invalid-argument-type]
+        cache_file = FilePersistence(str(self.cache_file_path))
 
         config = TemplateMinerConfig()
         config.load(str(self.config_file))
@@ -157,7 +168,7 @@ class Drain3Parser(TemplateParser):
 
         result = None
         with make_spinner_progress() as progress:
-            task_id = progress.add_task("Parsing logs", total=None)
+            task_id = progress.add_task("Mining logs", total=None)
             for i, log_line in enumerate(untemplated_text_iterator()):
                 result = miner.add_log_message(log_line)
 
@@ -177,12 +188,11 @@ class Drain3Parser(TemplateParser):
         self.inference_func = self._make_inference_func(miner)
 
 
+@dataclass(slots=True)
 class IdentityTemplateParser(TemplateParser):
     """No-op template parser that returns the input string as its template."""
 
-    def __init__(self, dataset_name: str) -> None:
-        """Store dataset name; no additional setup required."""
-        self.dataset_name = dataset_name
+    dataset_name: str | None = None
 
     def inference(
         self,

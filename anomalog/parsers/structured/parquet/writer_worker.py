@@ -14,7 +14,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from prefect.logging import get_run_logger
 
-from anomalog.structured_parsers.contracts import (
+from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,

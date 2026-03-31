@@ -2,12 +2,14 @@
 
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
-from anomalog.anomaly_label_reader import AnomalyLabelLookup
 from anomalog.cache import CachePathsConfig
+from anomalog.parsers.structured.contracts import StructuredSink
 from anomalog.sequences import SequenceBuilder
-from anomalog.structured_parsers.contracts import StructuredSink
+
+if TYPE_CHECKING:
+    from anomalog.labels import AnomalyLabelLookup
 
 UntemplatedText: TypeAlias = str
 LogTemplate: TypeAlias = str
@@ -15,11 +17,13 @@ ExtractedParameters: TypeAlias = Iterable[str]
 
 
 # TODO: Add visualisation methods
-@runtime_checkable
 class TemplateParser(Protocol):
     """Protocol describing template mining and inference behaviour."""
 
-    dataset_name: str
+    dataset_name: str | None
+
+    def __init__(self, dataset_name: str | None = None) -> None:
+        """Initialise the parser with an optional bound dataset name."""
 
     def inference(
         self,
@@ -41,7 +45,7 @@ class TemplatedDataset:
     sink: StructuredSink
     cache_paths: CachePathsConfig
     template_parser: TemplateParser
-    anomaly_labels: AnomalyLabelLookup
+    anomaly_labels: "AnomalyLabelLookup"
 
     @property
     def sequence_builder(self) -> SequenceBuilder:

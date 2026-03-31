@@ -11,8 +11,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
 
-from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
-from anomalog.structured_parsers.contracts import (
+from anomalog.cache import (
+    CachePathsConfig,
+    asset_from_local_path,
+    materialize,
+)
+from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,
@@ -23,7 +27,7 @@ from anomalog.structured_parsers.contracts import (
     StructuredParser,
     StructuredSink,
 )
-from anomalog.structured_parsers.parquet.writer_worker import (
+from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
     WriterConfig,
     extract_structured_components,
@@ -53,7 +57,7 @@ class ParquetStructuredSink(StructuredSink):
     def write_structured_lines(self, _workers: int | None = None) -> bool:
         """Parse raw logs and persist structured lines to Parquet."""
         base_extract_structured_components = materialize(
-            asset_from_local_path(self.structured_data_cache(self.dataset_name)),
+            self.structured_data_cache(self.dataset_name),
             asset_deps=[asset_from_local_path(self.raw_dataset_path)],
         )(extract_structured_components)
 
@@ -87,6 +91,51 @@ class ParquetStructuredSink(StructuredSink):
                 yield from self._rows_from_batch(batch)
 
         return _iter
+
+    def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
+        """Load sparse inline labels directly from parquet batches."""
+        line_labels: dict[int, int] = {}
+        group_labels: dict[str, int] = {}
+
+        scanner = self._dataset().scanner(
+            columns=[LINE_FIELD, ENTITY_FIELD, ANOMALOUS_FIELD],
+            batch_size=self._DEFAULT_BATCH_SIZE,
+            batch_readahead=2,
+            fragment_readahead=1,
+            use_threads=True,
+        )
+
+        for batch in scanner.to_batches():
+            line_values = batch.column(
+                batch.schema.get_field_index(LINE_FIELD),
+            ).to_pylist()
+            entity_values = batch.column(
+                batch.schema.get_field_index(ENTITY_FIELD),
+            ).to_pylist()
+            label_values = batch.column(
+                batch.schema.get_field_index(ANOMALOUS_FIELD),
+            ).to_pylist()
+
+            for line_order, entity_id, raw_label in zip(
+                line_values,
+                entity_values,
+                label_values,
+                strict=True,
+            ):
+                if raw_label is None:
+                    continue
+
+                label = int(raw_label)
+                if label == 0:
+                    continue
+
+                if line_order is not None:
+                    line_labels[int(line_order)] = label
+
+                if entity_id is not None:
+                    group_labels.setdefault(str(entity_id), label)
+
+        return line_labels, group_labels
 
     def _rows_from_batch(self, batch: pa.RecordBatch) -> Iterator[StructuredLine]:
         """Yield StructuredLine rows without materializing whole batches as dicts."""

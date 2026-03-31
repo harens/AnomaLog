@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from anomalog.sequences import GroupingMode, SequenceBuilder, SplitLabel
-from anomalog.structured_parsers.contracts import StructuredLine
-from anomalog.template_parsers.templated_dataset import (
+from anomalog.parsers.structured.contracts import StructuredLine
+from anomalog.parsers.template.dataset import (
     ExtractedParameters,
     LogTemplate,
     UntemplatedText,
 )
+from anomalog.sequences import GroupingMode, SequenceBuilder, SplitLabel
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -39,8 +39,12 @@ def _upper_template_with_source_param(
     return text.upper(), [text]
 
 
+@pytest.mark.allow_no_new_coverage
 def test_entity_sequences_train_only_normals() -> None:
     """Group labels alone can keep anomalous entities out of the training split."""
+    # This protects the policy that anomalous entities must be held out even when
+    # `train_frac=1.0`. Nearby uncovered branches are separate grouping modes and
+    # do not express this entity-level split contract.
     sink = _sink(
         structured_line(
             line_order=0,

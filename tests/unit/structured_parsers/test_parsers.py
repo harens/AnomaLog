@@ -1,6 +1,6 @@
 """Tests for concrete structured parsers."""
 
-from anomalog.structured_parsers.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000

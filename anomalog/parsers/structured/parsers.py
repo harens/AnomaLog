@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from prefect.logging import get_logger
 
-from anomalog.structured_parsers.contracts import BaseStructuredLine, StructuredParser
+from anomalog.parsers.structured.contracts import BaseStructuredLine, StructuredParser
 
 UTC = timezone.utc
 
