@@ -1,18 +1,23 @@
 """Additional tests for cache helper functions."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from prefect.assets import Asset, AssetProperties
+from prefect.logging import disable_run_logger
 
-from anomalog.cache import asset_from_local_path
+from anomalog.cache import asset_from_local_path, materialize
 from anomalog.cache.files import (
     AssetDepsFingerprintPolicy,
     _asset_file_path,
     _try_file_path_from_asset_url,
 )
 from tests.unit.helpers import task_run_context
+
+ZeroArgFn = Callable[[], str]
+MaterializeDecorator = Callable[[ZeroArgFn], ZeroArgFn]
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,16 @@ class _FallbackAsset(Asset):
 
 class _MissingUrlAsset(Asset):
     url: str | None = None
+
+
+def _skip_materialize(*_args: object, **_kwargs: object) -> MaterializeDecorator:
+    def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+        def _skip() -> str:
+            return "cached"
+
+        return _skip
+
+    return _decorate
 
 
 def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
@@ -113,3 +128,22 @@ def test_asset_deps_fingerprint_policy_changes_when_local_file_metadata_changes(
     assert first is not None
     assert second is not None
     assert first != second
+
+
+def test_materialize_reruns_function_when_output_path_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-output materialization should recover from stale Prefect cache hits."""
+    output_path = tmp_path / "artifact.txt"
+
+    monkeypatch.setattr("anomalog.cache.materialize", _skip_materialize)
+
+    @materialize(output_path)
+    def _build() -> str:
+        output_path.write_text("hello", encoding="utf-8")
+        return "rebuilt"
+
+    with disable_run_logger():
+        assert _build() == "rebuilt"
+    assert output_path.read_text(encoding="utf-8") == "hello"

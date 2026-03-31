@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 from urllib.parse import unquote, urlparse
 
 from prefect.assets import Asset
@@ -12,6 +12,7 @@ from prefect.context import AssetContext, TaskRunContext
 from prefect.utilities.hashing import hash_objects
 
 _ALLOWED = re.compile(r"[^A-Za-z0-9._/-]")
+CachePolicyKwarg: TypeAlias = str | int | float | bool | None
 
 
 def _try_file_path_from_asset_url(asset_url: str | None) -> Path | None:
@@ -111,7 +112,7 @@ class AssetDepsFingerprintPolicy(CachePolicy):
         task_ctx: TaskRunContext,  # noqa: ARG002 - not used, but part of the interface
         inputs: dict[str, Any],  # noqa: ARG002 - not used, but part of the interface
         flow_parameters: dict[str, Any],  # noqa: ARG002 - not used, but part of the interface
-        **kwargs: object,  # noqa: ARG002 - not used, but part of the interface
+        **kwargs: CachePolicyKwarg,  # noqa: ARG002 - not used, but part of the interface
     ) -> str | None:
         """Fingerprint upstream assets (including file metadata) for cache keys."""
         asset_ctx = AssetContext.get()
