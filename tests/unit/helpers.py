@@ -7,8 +7,8 @@ from unittest.mock import create_autospec
 
 from prefect.context import TaskRunContext
 
-from anomalog.anomaly_label_reader import AnomalyLabelLookup
-from anomalog.structured_parsers.contracts import (
+from anomalog.labels import AnomalyLabelLookup
+from anomalog.parsers.structured.contracts import (
     BaseStructuredLine,
     EntityLabelCounts,
     StructuredLine,
@@ -89,6 +89,20 @@ class InMemoryStructuredSink(StructuredSink):
             yield from self.rows
 
         return _iter
+
+    def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
+        """Build sparse inline label lookups from the stored rows."""
+        line_labels: dict[int, int] = {}
+        group_labels: dict[str, int] = {}
+
+        for row in self.rows:
+            if row.anomalous is None or row.anomalous == 0:
+                continue
+            line_labels[row.line_order] = row.anomalous
+            if row.entity_id is not None:
+                group_labels.setdefault(row.entity_id, row.anomalous)
+
+        return line_labels, group_labels
 
     def count_rows(self) -> int:
         """Return the number of stored rows."""

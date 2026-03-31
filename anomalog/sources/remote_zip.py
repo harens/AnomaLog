@@ -20,7 +20,7 @@ from anomalog.io_utils import (
     make_bounded_progress,
     verify_md5,
 )
-from anomalog.sources import DatasetSource
+from anomalog.sources.contracts import DatasetSource
 
 _ALLOWED_SCHEMES = {"https", "http"}
 
@@ -40,6 +40,7 @@ class RemoteZipSource(DatasetSource):
 
     url: str
     md5_checksum: str
+    raw_logs_relpath: Path | None = None
 
     @staticmethod
     def _validate_remote_url(url: str) -> None:
@@ -53,7 +54,11 @@ class RemoteZipSource(DatasetSource):
             msg = "URL must be absolute (include scheme and host)"
             raise ValueError(msg)
 
-    def materialise(self, dst_dir: Path) -> Path:
+    def materialise(
+        self,
+        *,
+        dst_dir: Path,
+    ) -> Path:
         """Fetch, checksum, and extract the dataset into dst_dir."""
         dataset_name = dst_dir.name
         root_dir = dst_dir.parent
@@ -67,24 +72,23 @@ class RemoteZipSource(DatasetSource):
         root_dir.mkdir(parents=True, exist_ok=True)
 
         download_dataset_task = materialize(
-            asset_from_local_path(dst_dir),
+            dst_dir,
             asset_deps=[asset_from_local_path(dst_dir)],
             retries=3,
             retry_delay_seconds=[2, 5, 15],
         )(self._download_dataset)
 
-        download_dataset_task(dataset_name, zip_path)
-
+        download_dataset_task(zip_path)
         return dst_dir
 
     def _download_dataset(
         self,
-        dataset_name: str,
         zip_path: Path,
         progress_factory: Callable[[], Progress] = make_bounded_progress,
     ) -> None:
         """Download the dataset archive with a progress bar and verify checksum."""
         logger = get_run_logger()
+        dataset_name = zip_path.stem
         logger.info("Starting download of %s dataset from %s", dataset_name, self.url)
 
         state = _DownloadProgress()

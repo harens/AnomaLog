@@ -4,15 +4,15 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from anomalog.anomaly_label_reader import AnomalyLabelLookup
 from anomalog.cache import CachePathsConfig
-from anomalog.sequences import GroupingMode
-from anomalog.structured_parsers.structured_dataset import StructuredDataset
-from anomalog.template_parsers.templated_dataset import (
+from anomalog.labels import AnomalyLabelLookup
+from anomalog.parsers.structured.dataset import StructuredDataset
+from anomalog.parsers.template.dataset import (
     ExtractedParameters,
     LogTemplate,
     TemplateParser,
 )
+from anomalog.sequences import GroupingMode
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -28,8 +28,8 @@ TIME_STEP_MS = 250
 
 @dataclass(frozen=True)
 class _RecordingTemplateParser(TemplateParser):
-    dataset_name: str
     seen_lines: list[str]
+    dataset_name: str | None = None
 
     def inference(
         self,
@@ -79,7 +79,7 @@ def test_structured_dataset_mine_templates_trains_parser_from_sink_rows() -> Non
             ),
         ],
     )
-    parser = _RecordingTemplateParser(dataset_name="demo", seen_lines=[])
+    parser = _RecordingTemplateParser(seen_lines=[])
     dataset = StructuredDataset(
         sink=sink,
         cache_paths=_cache_paths(),
@@ -101,7 +101,7 @@ def test_templated_dataset_grouping_helpers_configure_sequence_builder() -> None
         parser=NullStructuredParser(),
         rows=[],
     )
-    parser = _RecordingTemplateParser(dataset_name="demo", seen_lines=[])
+    parser = _RecordingTemplateParser(seen_lines=[])
     templated = StructuredDataset(
         sink=sink,
         cache_paths=_cache_paths(),

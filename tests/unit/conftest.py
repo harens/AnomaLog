@@ -1,4 +1,4 @@
-"""Project-wide pytest hooks."""
+"""Unit-test-specific pytest hooks."""
 
 from __future__ import annotations
 
@@ -33,15 +33,6 @@ def _introduces_new_coverage(
     )
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers",
-        "allow_no_new_coverage: suppress the warning for tests that only "
-        "exercise already-covered lines",
-    )
-
-
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item,
@@ -59,7 +50,7 @@ def pytest_runtest_makereport(
 def warn_when_test_adds_no_new_coverage(
     request: pytest.FixtureRequest,
 ) -> Generator[None]:
-    """Warn when a test does not increase cumulative line coverage."""
+    """Warn when a unit test does not increase cumulative line coverage."""
     if request.node.get_closest_marker("allow_no_new_coverage") is not None:
         yield
         return

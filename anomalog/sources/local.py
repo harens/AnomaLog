@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anomalog.io_utils import extract_zip, verify_md5
-from anomalog.sources import DatasetSource
+from anomalog.sources.contracts import DatasetSource
 
 
 @dataclass(frozen=True)
@@ -12,9 +12,15 @@ class LocalDirSource(DatasetSource):
     """Use an existing local directory as the dataset source."""
 
     path: Path
+    raw_logs_relpath: Path | None = None
 
-    def materialise(self, dst_dir: Path) -> Path:  # noqa: ARG002 - not used, but part of the interface
-        """Return the directory path after validating existence."""
+    def materialise(
+        self,
+        *,
+        dst_dir: Path,
+    ) -> Path:
+        """Validate directory existence and return the dataset root."""
+        del dst_dir
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         if not self.path.is_dir():
@@ -27,11 +33,15 @@ class LocalZipSource(DatasetSource):
     """Use a local zip archive as the dataset source."""
 
     zip_path: Path
+    raw_logs_relpath: Path | None = None
     md5_checksum: str | None = None
 
-    def materialise(self, dst_dir: Path) -> Path:
-        """Extract the zip file into dst_dir, verifying checksum when provided."""
-        # fast path
+    def materialise(
+        self,
+        *,
+        dst_dir: Path,
+    ) -> Path:
+        """Extract the zip file into dst_dir and return the dataset root."""
         if dst_dir.exists() and dst_dir.is_dir() and any(dst_dir.iterdir()):
             return dst_dir
 

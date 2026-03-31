@@ -2,12 +2,10 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
 import pytest
 from prefect.logging import disable_run_logger
 from rich.progress import Progress
-from typing_extensions import Self
 
 from anomalog.sources.remote_zip import RemoteZipSource
 
@@ -19,19 +17,29 @@ def test_remote_zip_source_materialise_short_circuits_existing_directory(
     """Existing extracted datasets are reused without attempting a download."""
     dst_dir = tmp_path / "dataset"
     dst_dir.mkdir()
+    (dst_dir / "demo.log").write_text("hello\n", encoding="utf-8")
     source = RemoteZipSource(
         url="https://example.com/data.zip",
         md5_checksum="d41d8cd98f00b204e9800998ecf8427e",
+        raw_logs_relpath=Path("demo.log"),
     )
     msg = "download should not be scheduled when dst_dir exists"
 
-    def _fail_if_called(*_args: object, **_kwargs: object) -> object:
+    def _fail_if_called() -> None:
         raise AssertionError(msg)
 
-    monkeypatch.setattr("anomalog.sources.remote_zip.materialize", _fail_if_called)
+    monkeypatch.setattr(
+        "anomalog.sources.remote_zip.materialize",
+        _fail_if_called,
+    )
 
     with disable_run_logger():
-        assert source.materialise(dst_dir) == dst_dir
+        dataset_root = source.materialise(dst_dir=dst_dir)
+
+    assert dataset_root == dst_dir
+    assert source.raw_logs_path(dataset_name="demo", dataset_root=dataset_root) == (
+        dst_dir / "demo.log"
+    )
 
 
 def test_remote_zip_source_materialise_downloads_and_extracts_archive(
@@ -44,22 +52,10 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
     source = RemoteZipSource(
         url="https://example.com/data.zip",
         md5_checksum="expected-md5",
+        raw_logs_relpath=Path("demo.log"),
     )
     extracted: list[tuple[Path, Path]] = []
     verified: list[tuple[Path, str]] = []
-
-    class _Progress:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def add_task(self, *_args: object, **_kwargs: object) -> int:
-            return 1
-
-        def update(self, *_args: object, **_kwargs: object) -> None:
-            return None
 
     def _fake_urlretrieve(
         url: str,
@@ -78,17 +74,17 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
     def _fake_extract_zip(path: Path, output_dir: Path) -> None:
         extracted.append((path, output_dir))
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "demo.log").write_text("hello\n", encoding="utf-8")
 
     monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
     monkeypatch.setattr("anomalog.sources.remote_zip.verify_md5", _fake_verify_md5)
     monkeypatch.setattr("anomalog.sources.remote_zip.extract_zip", _fake_extract_zip)
 
     def _progress_factory() -> Progress:
-        return cast("Progress", _Progress())
+        return Progress()
 
     with disable_run_logger():
         source._download_dataset(  # noqa: SLF001 - exercising the download side effect directly
-            "dataset",
             zip_path,
             progress_factory=_progress_factory,
         )
@@ -97,3 +93,37 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
     assert extracted == [(zip_path, dst_dir)]
     assert dst_dir.is_dir()
     assert not zip_path.exists()
+
+
+def test_remote_zip_source_rejects_missing_resolved_raw_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolved raw log paths are validated after extraction."""
+    dst_dir = tmp_path / "dataset"
+    source = RemoteZipSource(
+        url="https://example.com/data.zip",
+        md5_checksum="expected-md5",
+        raw_logs_relpath=Path("missing.log"),
+    )
+
+    def _fake_urlretrieve(
+        _url: str,
+        target: Path,
+        reporthook: Callable[[int, int, int], None] | None = None,
+    ) -> None:
+        del reporthook
+        target.write_text("zip-bytes", encoding="utf-8")
+
+    monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr("anomalog.sources.remote_zip.verify_md5", lambda *_args: None)
+    monkeypatch.setattr(
+        "anomalog.sources.remote_zip.extract_zip",
+        lambda _path, output_dir: output_dir.mkdir(parents=True, exist_ok=True),
+    )
+
+    with disable_run_logger():
+        dataset_root = source.materialise(dst_dir=dst_dir)
+
+    with pytest.raises(FileNotFoundError):
+        source.raw_logs_path(dataset_name="demo", dataset_root=dataset_root)
