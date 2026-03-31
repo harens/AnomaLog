@@ -8,11 +8,11 @@
 
 An orchestration-driven research framework for reproducible log anomaly detection pipelines. Converts raw logs into deterministic, template-mapped sequences ready for controlled detector experiments.
 
-Built on [Prefect](https://www.prefect.io/), AnomaLog emphasises end-to-end reproducibility - from raw log ingestion to model-ready sequences.
+Built on [Prefect](https://www.prefect.io/), AnomaLog emphasises end-to-end reproducibility from raw log ingestion to model-ready sequences.
 
 ## Motivation
 
-Many log anomaly detection implementations focus primarily on modeling techniques while omitting the full preprocessing pipeline. Parsing details are often described but not fully reproducible from code, and experiments frequently rely on preprocessed datasets without documenting raw log handling.
+Many log anomaly detection implementations focus primarily on modelling techniques while omitting the full preprocessing pipeline. Parsing details are often described but not fully reproducible from code, and experiments frequently rely on preprocessed datasets without documenting raw log handling.
 
 “The same dataset” is not always the same once parsing choices, windowing rules, entity grouping, and leakage controls are considered.
 
@@ -23,19 +23,19 @@ This enables controlled ablation studies, fair model comparisons, and fully repe
 ## Key Features
 
 - **Deterministic pipeline execution.**
-  Workflow stages are fingerprinted and cached, ensuring that only modified components are recomputed. This enables rapid iteration while preserving experiment traceability and artifact lineage.
+  Workflow stages are fingerprinted and cached so only modified components are recomputed.
 
 - **Protocol-driven modularity.**
   All preprocessing stages implement explicit protocol interfaces, enabling parsers, template miners (e.g. [Drain3](https://github.com/logpai/Drain3)), and sequencing strategies to be swapped without altering downstream logic.
 
 - **Explicit sequencing strategies.**
-  Supports entity-based, fixed-length, and time-windowed sequences with deterministic train/test controls, including “train-on-normal-entities-only” protocols.
+  Entity-based, fixed-length, and time-windowed sequences are built with deterministic split controls.
 
 - **Dataset-first workflows.**
-  Built-in flows for common log anomaly benchmarks (MD5-verified Zenodo mirrors) with a consistent schema for custom datasets and inline or external labels.
+  Built-in benchmark presets and custom datasets share the same public interface.
 
 - **Scalable, artifact-first storage.**
-  Structured events are persisted in columnar [Parquet](https://parquet.apache.org/) format, decoupling expensive parsing from downstream modeling. Entity-level bucketing bounds peak memory and enables streaming-scale preprocessing of large log corpora.
+  Structured events are persisted in Parquet by default so expensive parsing can be reused.
 
 ## Research Usage
 
@@ -49,81 +49,61 @@ AnomaLog makes preprocessing part of the research surface. A typical workflow is
 Determinism is a property of the pipeline, not the random number generator. Event ordering is defined by the default dataset backend and preserved through sequencing. This allows for reproducible train/test splits across runs without requiring random seeds.
 
 ```python
-from anomalog.datasets import build_bgl_dataset
-from anomalog.sequences import SplitLabel
+from anomalog import SplitLabel
+from anomalog.presets import bgl
 
-dataset = build_bgl_dataset()
-sequence_view = dataset.group_by_entity().split_train_fraction(0.2)
+dataset = bgl.build()
+sequence_view = dataset.group_by_entity().with_train_fraction(0.2)
 
 for seq in sequence_view:
     if seq.split_label == SplitLabel.TRAIN:
-        # seq.events: [(template: str, parameters: list[str], dt_prev_ms: int | None), ...]
-        # seq.counts: Counter[str] of template IDs
-        # seq.label: int ground-truth label
-        # seq.entity_ids: list[str] entities present in the window
-        # seq.window_id: stable window identifier
         ...
 ```
 
-### Custom Dataset Definition
+## Custom Dataset Definition
 
-To add a dataset, define a `RawDataset` by specifying (i) the source, (ii) a structured parser, and (iii) optional label alignment. This makes dataset provenance and preprocessing assumptions explicit and versionable.
-
-<!---
-TODO: Make import paths nicer
--->
+To add a dataset, define a `DatasetSpec` by specifying the source, structured parser, optional label alignment, and template parser. This makes dataset provenance and preprocessing assumptions explicit and versionable.
 
 ```python
-# Below BGL definition provided by default in anomalog.datasets
-
 from pathlib import Path
 
-from anomalog.sources import RemoteZipSource
-from anomalog.sources.raw_dataset import RawDataset
-from anomalog.structured_parsers.parsers import BGLParser
+from anomalog import DatasetSpec
+from anomalog.labels import CSVReader
+from anomalog.parsers import HDFSV1Parser
+from anomalog.sources import LocalZipSource
 
-# BGL definition below provided and importable from anomalog.dataset
-bgl = RawDataset(
-    dataset_name="BGL",
-    # Swap custom dataset sources from local ZIPs/dirs or online.
-    source=RemoteZipSource(
-        url="https://zenodo.org/records/8196385/files/BGL.zip",
-        md5_checksum="4452953c470f2d95fcb32d5f6e733f7a",
-    ),
-    # Regex parser for an individual line
-    structured_parser=BGLParser(),
-    # Optional: align anomaly labels by entity/session ID.
-    # anomaly_label_reader=CSVReader(
-    #     relative_path=Path("preprocessed/anomaly_label.csv"),
-    #     entity_column="Node",
-    #     label_column="Label",
-    # ),
+dataset = (
+    DatasetSpec("my-hdfs")
+    .from_source(LocalZipSource(Path("HDFS_v1.zip"), raw_logs_relpath=Path("HDFS.log")))
+    .parse_with(HDFSV1Parser())
+    .label_with(
+        CSVReader(
+            relative_path=Path("preprocessed/anomaly_label.csv"),
+            entity_column="BlockId",
+            label_column="Label",
+        ),
+    )
+    .build()
 )
 ```
 
-### Preprocessing Ablation Studies
-
-Preprocessing decisions (e.g. template miner, windowing strategy, label alignment) can be treated as experimental variables rather than hidden implementation details. This allows controlled ablation studies where only a single preprocessing component is changed while the remainder of the pipeline remains identical.
-
-<!---
-TODO: Actually show Ablation
--->
+### Built-in presets
 
 ```python
-# Below BGL flow provided by default in anomalog.datasets
+from anomalog.presets import bgl, hdfs_v1
 
-from prefect import flow
+bgl_dataset = bgl.build()
+hdfs_dataset = hdfs_v1.build()
+```
 
-from anomalog.datasets import bgl  # Or use the custom BGL defined above
-from anomalog.template_parsers import Drain3Parser
+## Preprocessing Ablation Studies
 
-# BGL builder below provided and importable from anomalog.dataset
-@flow
-def build_bgl_dataset() -> TemplatedDataset:
-    # Each stage can optionally take a parameter for a different pluggable implementation
-    return (
-        bgl.fetch_if_needed()
-        .extract_structured_components()
-        .mine_templates_with(Drain3Parser("BGL"))
-    )
+Preprocessing decisions such as the template miner, label alignment, and grouping strategy can be treated as experimental variables rather than hidden implementation details.
+
+```python
+from anomalog.parsers import Drain3Parser, IdentityTemplateParser
+from anomalog.presets import bgl
+
+drain_dataset = bgl.template_with(Drain3Parser).build()
+identity_dataset = bgl.template_with(IdentityTemplateParser).build()
 ```

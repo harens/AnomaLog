@@ -22,6 +22,7 @@ Homepage = "https://github.com/harens/AnomaLog"
 Documentation = "https://harens.github.io/AnomaLog/"
 Repository = "https://github.com/harens/AnomaLog"
 Issues = "https://github.com/harens/AnomaLog/issues"
+Changelog = "https://github.com/harens/AnomaLog/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
