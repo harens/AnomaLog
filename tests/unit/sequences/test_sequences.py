@@ -345,6 +345,8 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
 def test_non_entity_builders_do_not_expose_normal_only_training() -> None:
     """Non-entity builders do not expose the entity-only normal-train policy."""
     # This protects the public capability boundary after the builder split.
+    # Nearby uncovered lines are internal split-summary helpers, not the API
+    # contract this regression test is asserting.
     fixed_builder = FixedSequenceBuilder(
         sink=_sink(),
         infer_template=_upper_template,
@@ -360,6 +362,103 @@ def test_non_entity_builders_do_not_expose_normal_only_training() -> None:
 
     assert not hasattr(fixed_builder, "with_train_on_normal_entities_only")
     assert not hasattr(time_builder, "with_train_on_normal_entities_only")
+
+
+def test_represent_with_yields_model_ready_records() -> None:
+    """Sequence builders expose a fluent representation stage."""
+
+    class _EventCountRepresentation:
+        name = "event_count"
+
+        def represent(self, sequence: TemplateSequence) -> dict[str, int]:
+            return {"event_count": len(sequence.events)}
+
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=120,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=150,
+            entity_id="b",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
+        train_frac=0.5,
+    )
+
+    represented = list(
+        builder.represent_with(
+            _EventCountRepresentation(),
+        ),
+    )
+
+    assert [sample.window_id for sample in represented] == [0, 1]
+    assert [sample.entity_ids for sample in represented] == [["a"], ["b"]]
+    assert [sample.split_label for sample in represented] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [sample.label for sample in represented] == [0, 1]
+    assert [sample.data for sample in represented] == [
+        {"event_count": 2},
+        {"event_count": 1},
+    ]
+
+
+def test_represented_sequences_can_stream_as_river_dataset() -> None:
+    """Represented sequences expose River-style `(x, y)` examples."""
+
+    class _EventCountRepresentation:
+        name = "event_count"
+
+        def represent(self, sequence: TemplateSequence) -> dict[str, int]:
+            return {"event_count": len(sequence.events)}
+
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=150,
+            entity_id="b",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
+        train_frac=0.5,
+    )
+
+    river_examples = list(
+        builder.represent_with(_EventCountRepresentation()).iter_labeled_examples(),
+    )
+
+    assert river_examples == [({"event_count": 1}, 0), ({"event_count": 1}, 1)]
 
 
 @pytest.mark.allow_no_new_coverage

@@ -15,6 +15,11 @@ from typing import TYPE_CHECKING
 from typing_extensions import Self
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.representations import (
+    SequenceRepresentation,
+    SequenceRepresentationView,
+    TRepresentation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator
@@ -96,6 +101,13 @@ class SequenceBuilder:
     ) -> Self:
         """Return a copy with an updated train/test split fraction."""
         return replace(self, train_frac=train_frac)
+
+    def represent_with(
+        self,
+        representation: SequenceRepresentation[TRepresentation],
+    ) -> SequenceRepresentationView[TRepresentation]:
+        """Return a lazy builder that applies a representation per sequence."""
+        return SequenceRepresentationView(sequences=self, representation=representation)
 
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping."""
