@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 
 FIXTURE_LOG = Path(__file__).parent / "logs" / "tiny_bgl_happy_path.log"
 RAW_LOGS_RELPATH = Path("BGL.log")
-ANOMALOUS_ENTITY = "R02-M1-N1-C:J18-U03"
-NORMAL_ENTITY_A = "R01-M0-N0-C:J12-U11"
-NORMAL_ENTITY_B = "R03-M0-N2-C:J04-U01"
+ANOMALOUS_ENTITY = "R04-M1-N4-I:J18-U11"
+NORMAL_ENTITY_A = "R23-M1-N8-I:J18-U11"
+NORMAL_ENTITY_B = "R35-M1-N0-I:J18-U01"
 EXPECTED_ROW_COUNT = 8
-EXPECTED_TEMPLATE_COUNT = 2
+EXPECTED_TEMPLATE_COUNT = 3
 
 
 def _build_local_bgl_archive(zip_path: Path) -> list[str]:
@@ -81,9 +81,9 @@ def _sequences_by_entity(
 ) -> dict[str, TemplateSequence]:
     """Index entity sequences by entity id for direct assertions."""
     return {
-        sequence.entity_id: sequence
+        sequence.sole_entity_id: sequence
         for sequence in sequences
-        if sequence.entity_id is not None
+        if sequence.sole_entity_id is not None
     }
 
 
@@ -93,9 +93,10 @@ def _assert_inline_labels(
 ) -> None:
     """Assert the parser and materialization preserve BGL anomaly flags."""
     assert [row.line_order for row in rows] == list(range(EXPECTED_ROW_COUNT))
-    assert [row.anomalous for row in rows] == [0, 0, 0, 1, 0, 0, 0, 1]
+    assert [row.anomalous for row in rows] == [0, 0, 0, 1, 1, 0, 0, 0]
     assert dataset.anomaly_labels.label_for_line(3) == 1
-    assert dataset.anomaly_labels.label_for_line(7) == 1
+    assert dataset.anomaly_labels.label_for_line(4) == 1
+    assert dataset.anomaly_labels.label_for_line(7) is None
     assert dataset.anomaly_labels.label_for_group(ANOMALOUS_ENTITY) == 1
     assert dataset.anomaly_labels.label_for_group(NORMAL_ENTITY_A) is None
 
@@ -138,8 +139,8 @@ def _assert_entity_sequences_are_reproducible(
         for entity_id in normal_entities | {ANOMALOUS_ENTITY}
     }
 
-    assert [sequence.entity_id for sequence in second_pass] == [
-        sequence.entity_id for sequence in first_pass
+    assert [sequence.sole_entity_id for sequence in second_pass] == [
+        sequence.sole_entity_id for sequence in first_pass
     ]
     assert set(first_by_entity) == normal_entities | {ANOMALOUS_ENTITY}
     assert second_by_entity == first_by_entity
@@ -156,11 +157,7 @@ def _assert_entity_sequences_are_reproducible(
         for entity_id, sequence in first_by_entity.items()
         if sequence.split_label is SplitLabel.TRAIN
     }
-    held_out_normal_entities = normal_entities - train_entities
-
-    assert len(train_entities) == 1
-    assert len(held_out_normal_entities) == 1
-    assert train_entities <= normal_entities
+    assert train_entities == normal_entities
 
     for entity_id in normal_entities:
         assert first_by_entity[entity_id].label == 0
