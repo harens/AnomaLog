@@ -12,7 +12,12 @@ from anomalog.parsers.template.dataset import (
     LogTemplate,
     TemplateParser,
 )
-from anomalog.sequences import GroupingMode
+from anomalog.sequences import (
+    EntitySequenceBuilder,
+    FixedSequenceBuilder,
+    GroupingMode,
+    TimeSequenceBuilder,
+)
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -93,7 +98,7 @@ def test_structured_dataset_mine_templates_trains_parser_from_sink_rows() -> Non
     assert templated.template_parser is parser
 
 
-def test_templated_dataset_grouping_helpers_configure_sequence_builder() -> None:
+def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
     """Grouping helpers delegate to the expected SequenceBuilder modes."""
     sink = InMemoryStructuredSink(
         dataset_name="demo",
@@ -108,7 +113,17 @@ def test_templated_dataset_grouping_helpers_configure_sequence_builder() -> None
         anomaly_labels=_labels(),
     ).mine_templates_with(parser)
 
+    assert isinstance(templated.group_by_entity(), EntitySequenceBuilder)
     assert templated.group_by_entity().mode is GroupingMode.ENTITY
+    assert hasattr(templated.group_by_entity(), "with_train_on_normal_entities_only")
+    assert isinstance(
+        templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP),
+        FixedSequenceBuilder,
+    )
+    assert not hasattr(
+        templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP),
+        "with_train_on_normal_entities_only",
+    )
     assert (
         templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP).mode
         is GroupingMode.FIXED
@@ -120,6 +135,14 @@ def test_templated_dataset_grouping_helpers_configure_sequence_builder() -> None
     assert (
         templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP).step
         == WINDOW_STEP
+    )
+    assert isinstance(
+        templated.group_by_time_window(TIME_SPAN_MS, step_span_ms=TIME_STEP_MS),
+        TimeSequenceBuilder,
+    )
+    assert not hasattr(
+        templated.group_by_time_window(TIME_SPAN_MS, step_span_ms=TIME_STEP_MS),
+        "with_train_on_normal_entities_only",
     )
     assert (
         templated.group_by_time_window(TIME_SPAN_MS, step_span_ms=TIME_STEP_MS).mode

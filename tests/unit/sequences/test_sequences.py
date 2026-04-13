@@ -10,7 +10,13 @@ from anomalog.parsers.template.dataset import (
     LogTemplate,
     UntemplatedText,
 )
-from anomalog.sequences import GroupingMode, SequenceBuilder, SplitLabel
+from anomalog.sequences import (
+    EntitySequenceBuilder,
+    FixedSequenceBuilder,
+    SplitLabel,
+    TemplateSequence,
+    TimeSequenceBuilder,
+)
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -41,10 +47,8 @@ def _upper_template_with_source_param(
 
 @pytest.mark.allow_no_new_coverage
 def test_entity_sequences_train_only_normals() -> None:
-    """Group labels alone can keep anomalous entities out of the training split."""
-    # This protects the policy that anomalous entities must be held out even when
-    # `train_frac=1.0`. Nearby uncovered branches are separate grouping modes and
-    # do not express this entity-level split contract.
+    """Normal-only training should fail if the overall target cannot be satisfied."""
+    # This protects the fail-fast contract for impossible normal-only splits.
     sink = _sink(
         structured_line(
             line_order=0,
@@ -62,26 +66,19 @@ def test_entity_sequences_train_only_normals() -> None:
         ),
     )
 
-    builder = SequenceBuilder(
+    builder = EntitySequenceBuilder(
         sink=sink,
         infer_template=_upper_template,
         label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
-        mode=GroupingMode.ENTITY,
         train_frac=1.0,
         train_on_normal_entities_only=True,
     )
 
-    sequences = list(builder)
-    entity_counts = sink.count_entities_by_label(builder.label_for_group)
-
-    assert entity_counts.normal_entities == 1
-    assert entity_counts.total_entities == len(sequences)
-    assert [sequence.entity_id for sequence in sequences] == ["a", "b"]
-    assert [sequence.split_label for sequence in sequences] == [
-        SplitLabel.TRAIN,
-        SplitLabel.TEST,
-    ]
-    assert [sequence.label for sequence in sequences] == [0, 1]
+    with pytest.raises(
+        ValueError,
+        match="Requested train fraction is impossible",
+    ):
+        list(builder)
 
 
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
@@ -113,16 +110,15 @@ def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered
     )
 
     sequences = list(
-        SequenceBuilder(
+        EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
             label_for_group=lambda entity_id: 1 if entity_id == "c" else 0,
-            mode=GroupingMode.ENTITY,
             train_frac=0.5,
         ),
     )
 
-    assert [sequence.entity_id for sequence in sequences] == ["a", "b", "c"]
+    assert [sequence.sole_entity_id for sequence in sequences] == ["a", "b", "c"]
     assert [sequence.split_label for sequence in sequences] == [
         SplitLabel.TRAIN,
         SplitLabel.TRAIN,
@@ -133,10 +129,7 @@ def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered
 
 @pytest.mark.allow_no_new_coverage
 def test_entity_sequences_fractional_split_counts_only_normals() -> None:
-    """Normal-only training uses the number of normal entities as the train target."""
-    # This guards the regression where `train_frac` must be applied to the
-    # count of normal entities, not all entities. The nearby uncovered branches
-    # are unrelated iterator paths and would not express this split-policy rule.
+    """Normal-only training still targets the requested overall train fraction."""
     sink = _sink(
         structured_line(
             line_order=0,
@@ -162,23 +155,103 @@ def test_entity_sequences_fractional_split_counts_only_normals() -> None:
     )
 
     sequences = list(
-        SequenceBuilder(
+        EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
             label_for_group=lambda entity_id: 1 if entity_id == "c" else 0,
-            mode=GroupingMode.ENTITY,
             train_frac=0.5,
             train_on_normal_entities_only=True,
         ),
     )
 
-    assert [sequence.entity_id for sequence in sequences] == ["a", "b", "c"]
+    assert [sequence.sole_entity_id for sequence in sequences] == ["a", "b", "c"]
     assert [sequence.split_label for sequence in sequences] == [
         SplitLabel.TRAIN,
-        SplitLabel.TEST,
+        SplitLabel.TRAIN,
         SplitLabel.TEST,
     ]
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
+
+
+def test_entity_sequences_error_when_normal_only_target_is_impossible() -> None:
+    """Normal-only training should fail if the requested overall split is impossible."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="first",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="b",
+            untemplated_message_text="second",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="c",
+            untemplated_message_text="third",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "c" else 0,
+        train_frac=0.8,
+        train_on_normal_entities_only=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Requested train fraction is impossible",
+    ):
+        list(builder)
+
+
+@pytest.mark.allow_no_new_coverage
+def test_entity_sequences_treat_nonzero_group_labels_as_anomalous() -> None:
+    """Any non-zero group label should force the entity into the anomaly path."""
+    # This locks down the shared anomaly-semantics contract for grouped labels.
+    # Nearby uncovered lines are generic helper plumbing, not this regression.
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="first",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="b",
+            untemplated_message_text="second",
+            anomalous=None,
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda entity_id: 2 if entity_id == "b" else 0,
+            train_frac=0.5,
+            train_on_normal_entities_only=True,
+        ),
+    )
+
+    assert [sequence.sole_entity_id for sequence in sequences] == ["a", "b"]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.label for sequence in sequences] == [0, 1]
 
 
 @pytest.mark.allow_no_new_coverage
@@ -205,11 +278,10 @@ def test_entity_sequences_train_fraction_one_uses_all_entities() -> None:
     )
 
     sequences = list(
-        SequenceBuilder(
+        EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
             label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
-            mode=GroupingMode.ENTITY,
             train_frac=1.0,
         ),
     )
@@ -245,11 +317,10 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
             anomalous=1,
         ),
     )
-    builder = SequenceBuilder(
+    builder = FixedSequenceBuilder(
         sink=sink,
         infer_template=_upper_template_with_source_param,
         label_for_group=lambda _: 0,
-        mode=GroupingMode.FIXED,
         window_size=2,
         step=2,
         train_frac=0.5,
@@ -264,40 +335,52 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
     ]
     assert train_window.entity_ids == ["a"]
     assert train_window.events == [("ONE", ["one"], None), ("TWO", ["two"], 30)]
-    assert train_window.counts == {"ONE": 1, "TWO": 1}
     assert train_window.label == 0
     assert test_window.entity_ids == ["c"]
     assert test_window.events == [("THREE", ["three"], None)]
     assert test_window.label == 1
 
 
-def test_fixed_grouping_requires_window_size() -> None:
-    """Fixed grouping rejects builders without a configured window size."""
-    builder = SequenceBuilder(
+@pytest.mark.allow_no_new_coverage
+def test_non_entity_builders_do_not_expose_normal_only_training() -> None:
+    """Non-entity builders do not expose the entity-only normal-train policy."""
+    # This protects the public capability boundary after the builder split.
+    fixed_builder = FixedSequenceBuilder(
         sink=_sink(),
         infer_template=_upper_template,
         label_for_group=lambda _: 0,
-        mode=GroupingMode.FIXED,
+        window_size=1,
     )
-
-    with pytest.raises(
-        ValueError,
-        match="window_size must be set for fixed-size grouping",
-    ):
-        list(builder)
-
-
-def test_time_grouping_requires_time_span() -> None:
-    """Time grouping rejects builders without a configured time span."""
-    builder = SequenceBuilder(
+    time_builder = TimeSequenceBuilder(
         sink=_sink(),
         infer_template=_upper_template,
         label_for_group=lambda _: 0,
-        mode=GroupingMode.TIME,
+        time_span_ms=1,
     )
 
-    with pytest.raises(
-        ValueError,
-        match="time_span_ms must be set for time-based grouping",
-    ):
-        list(builder)
+    assert not hasattr(fixed_builder, "with_train_on_normal_entities_only")
+    assert not hasattr(time_builder, "with_train_on_normal_entities_only")
+
+
+@pytest.mark.allow_no_new_coverage
+def test_template_sequence_exposes_single_entity_only_when_unambiguous() -> None:
+    """Template sequences should expose a single entity only when exact."""
+    # This protects the single-entity convenience accessor without encoding a
+    # misleading default when a window spans multiple entities.
+    single_entity_sequence = TemplateSequence(
+        events=[("ONE", ["one"], None)],
+        label=0,
+        entity_ids=["node-a"],
+        window_id=7,
+        split_label=SplitLabel.TEST,
+    )
+    multi_entity_sequence = TemplateSequence(
+        events=[("ONE", ["one"], None)],
+        label=0,
+        entity_ids=["node-a", "node-b"],
+        window_id=8,
+        split_label=SplitLabel.TEST,
+    )
+
+    assert single_entity_sequence.sole_entity_id == "node-a"
+    assert multi_entity_sequence.sole_entity_id is None
