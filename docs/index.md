@@ -17,14 +17,15 @@ hide:
 Reproducible log anomaly detection pipelines, from raw logs to deterministic, template-mapped sequences.
 
 [Get Started](getting-started.md){ .md-button .md-button--primary }
+[Pipeline Concepts](pipeline-concepts.md){ .md-button }
 [Reference](reference/index.md){ .md-button }
 
 </div>
 
 <div class="grid cards" markdown>
 
--   :material-database: **Raw logs to model-ready data**
-    Go from ingestion and parsing to template-mapped, sequence-ready artifacts in one reproducible pipeline.
+-   :material-database: **End-to-end preprocessing**
+    Go from raw logs to parsed, templated, and sequence-ready artifacts in one reproducible pipeline.
 
 -   :material-source-branch: **Deterministic by design**
     Fingerprinted stages, caching, and stable artifact lineage make runs repeatable and easier to compare.
@@ -47,27 +48,39 @@ Reproducible log anomaly detection pipelines, from raw logs to deterministic, te
 
 Many log anomaly detection results are difficult to compare because the preprocessing pipeline is underspecified. Two experiments may claim to use the same dataset while differing in parsing rules, label alignment, template mining, grouping, or split behavior.
 
-AnomaLog treats those preprocessing decisions as explicit pipeline stages rather than hidden scripts or fixed artifacts. The goal is not only convenience. The goal is to make comparisons, ablations, and reruns more defensible.
+AnomaLog treats those preprocessing decisions as explicit pipeline stages rather than hidden scripts or fixed artifacts. The goal is not only convenience, but to make comparisons, ablations, and reruns more defensible.
 
-## :material-chart-timeline-variant: What the library does
+## :material-chart-timeline-variant: How it works
 
-AnomaLog takes you from raw logs to model-ready sequences in a reproducible pipeline:
+AnomaLog structures preprocessing as an explicit, reproducible pipeline:
 
-1. Define a dataset pipeline with `DatasetSpec`
-2. Build a `TemplatedDataset`
-3. Derive `TemplateSequence` windows for downstream use
+1. Define a dataset source
+2. Parse and template logs
+3. Group events into sequences
+4. Represent sequences for modeling
 
 ```python
+from anomalog.parsers import IdentityTemplateParser
 from anomalog.presets import bgl
+from anomalog.representations import TemplateCountRepresentation
 
-dataset = bgl.build()
-sequences = dataset.group_by_entity().with_train_fraction(0.8)
+# Deterministic, composable preprocessing pipeline
+samples = (
+    bgl.template_with(IdentityTemplateParser)
+    .build()
+    .group_by_entity()
+    .with_train_fraction(0.8)
+    .represent_with(TemplateCountRepresentation())
+)
 ```
 
-See [Getting Started](getting-started.md) for the full walkthrough and [Reference](reference/index.md) for the API and codebase map.
+See [Getting Started](getting-started.md) for the onboarding walkthrough and
+[Pipeline Concepts](pipeline-concepts.md) for the full mental model.
 
 ## :material-sign-direction: Start here
 
-- [Getting Started](getting-started.md) for installation and a first successful run
-- [API Reference](reference/index.md) for the module map, codebase layout, and symbol reference
-- [Development](development.md) for local setup and validation commands
+- [Getting Started](getting-started.md) - Install AnomaLog and run your first pipeline
+- [Pipeline Concepts](pipeline-concepts.md) - Understand stages, grouping, representations, and reproducibility
+- [Experiments](experiments.md) - Run config-driven detector experiments
+- [API Reference](reference/index.md) - Browse interfaces, built-ins, and module docs
+- [Development](development.md) - Set up the repo and run checks locally

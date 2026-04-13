@@ -29,6 +29,9 @@ Use it for two things:
 - [Sequences](sequences.md)
   Sequence builders and sequence objects
 
+- [Representations](representations.md)
+  Model-facing sequence representations and lazy representation views
+
 </div>
 
 ## :material-compass-outline: Codebase layout
@@ -40,11 +43,14 @@ Use it for two things:
 - `anomalog/sources/` contains dataset materialisation logic
 - `anomalog/labels.py` contains label readers and lookups
 - `anomalog/sequences.py` contains sequence grouping and split behavior
+- `anomalog/representations/` contains model-facing sequence representations
 - `anomalog/_runtime/` contains internal orchestration code
 
 ## :material-flask-outline: Experiment layer
 
-The `experiments/` directory is useful for reproducible detector runs, but it is separate from the core public API of the library.
+The `experiments/` directory is useful for reproducible model experimentation
+after preprocessing, but it is separate from the core public API of the
+library.
 
 !!! note
-    The reference pages document symbols. For the workflow and mental model, start with [Getting Started](../getting-started.md).
+    The reference pages document symbols. Start with [Getting Started](../getting-started.md) for the onboarding path and [Pipeline Concepts](../pipeline-concepts.md) for the stage-by-stage mental model.
