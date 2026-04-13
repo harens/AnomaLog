@@ -376,7 +376,7 @@ class SequenceBuilder:
         ...     window_size=4,
         ...     step=2,
         ... )
-        >>> sb._count_fixed_windows()
+        >>> sb._count_windows()
         4
         """
         if window_size <= 0:
@@ -412,7 +412,7 @@ class SequenceBuilder:
         ...     time_span_ms=1_000,
         ...     step=500,
         ... )
-        >>> sb._count_time_windows()
+        >>> sb._count_windows()
         4
         """
         if time_span_ms <= 0:
