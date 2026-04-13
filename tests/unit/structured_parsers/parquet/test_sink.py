@@ -28,6 +28,8 @@ from tests.unit.helpers import structured_line
 class _Parser(StructuredParser):
     """Test-only parser for compact fixture rows written to the raw log file."""
 
+    name = "test"
+
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         timestamp_s, entity_id, message, anomalous_s = raw_line.split("|", maxsplit=3)
         return BaseStructuredLine(

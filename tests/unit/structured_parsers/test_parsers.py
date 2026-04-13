@@ -1,5 +1,9 @@
 """Tests for concrete structured parsers."""
 
+from anomalog.parsers.structured import (
+    resolve_structured_parser,
+    structured_parser_names,
+)
 from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
@@ -35,3 +39,10 @@ def test_bgl_parser_falls_back_to_epoch_seconds_when_hires_timestamp_is_invalid(
     assert parsed is not None
     assert parsed.timestamp_unix_ms == BGL_FALLBACK_TS_MS
     assert parsed.anomalous == 1
+
+
+def test_structured_parser_registry_resolves_builtins() -> None:
+    """Built-in structured parsers register themselves by config name."""
+    assert resolve_structured_parser("bgl") is BGLParser
+    assert resolve_structured_parser("hdfs_v1") is HDFSV1Parser
+    assert set(structured_parser_names()) >= {"bgl", "hdfs_v1"}

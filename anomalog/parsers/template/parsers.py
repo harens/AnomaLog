@@ -31,6 +31,8 @@ from anomalog.parsers.template.dataset import (
 class Drain3Parser(TemplateParser):
     """Drain3-based template miner with Prefect asset caching."""
 
+    name = "drain3"
+
     def __init__(
         self,
         dataset_name: str | None = None,
@@ -192,6 +194,7 @@ class Drain3Parser(TemplateParser):
 class IdentityTemplateParser(TemplateParser):
     """No-op template parser that returns the input string as its template."""
 
+    name = "identity"
     dataset_name: str | None = None
 
     def inference(
@@ -210,6 +213,7 @@ class IdentityTemplateParser(TemplateParser):
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
         """No-op training for identity parser."""
+        del untemplated_text_iterator
         # No training needed for the identity parser
 
 

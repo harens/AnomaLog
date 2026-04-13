@@ -27,6 +27,7 @@ from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
 @dataclass(frozen=True)
 class _StubSource(DatasetSource):
+    name = "stub"
     dataset_root: Path
     raw_logs_file: Path
 
@@ -51,12 +52,15 @@ class _StubSource(DatasetSource):
 
 @dataclass(frozen=True)
 class _NullParser(StructuredParser):
+    name = "null"
+
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         del raw_line
         return None
 
 
 class _RecordingTemplateParser(TemplateParser):
+    name = "recording"
     seen_lines: ClassVar[list[str]] = []
 
     def __init__(self, dataset_name: str | None = None) -> None:

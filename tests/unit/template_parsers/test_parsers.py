@@ -8,7 +8,11 @@ import pytest
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import CachePathsConfig
-from anomalog.parsers.template.parsers import Drain3Parser
+from anomalog.parsers.template import (
+    resolve_template_parser,
+    template_parser_names,
+)
+from anomalog.parsers.template.parsers import Drain3Parser, IdentityTemplateParser
 
 ZeroArgFn: TypeAlias = Callable[[], None]
 MaterializeDecorator: TypeAlias = Callable[[ZeroArgFn], ZeroArgFn]
@@ -116,3 +120,10 @@ def test_drain3_parser_recovers_when_prefect_skips_and_local_cache_is_missing(
     template, parameters = parser.inference("User charlie logged in")
     assert template == "User <:*:> logged in"
     assert list(parameters) == ["charlie"]
+
+
+def test_template_parser_registry_resolves_builtins() -> None:
+    """Built-in template parsers register themselves by config name."""
+    assert resolve_template_parser("drain3") is Drain3Parser
+    assert resolve_template_parser("identity") is IdentityTemplateParser
+    assert set(template_parser_names()) >= {"drain3", "identity"}

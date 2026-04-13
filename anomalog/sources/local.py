@@ -11,6 +11,7 @@ from anomalog.sources.contracts import DatasetSource
 class LocalDirSource(DatasetSource):
     """Use an existing local directory as the dataset source."""
 
+    name = "local_dir"
     path: Path
     raw_logs_relpath: Path | None = None
 
@@ -32,6 +33,7 @@ class LocalDirSource(DatasetSource):
 class LocalZipSource(DatasetSource):
     """Use a local zip archive as the dataset source."""
 
+    name = "local_zip"
     zip_path: Path
     raw_logs_relpath: Path | None = None
     md5_checksum: str | None = None
