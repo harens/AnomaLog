@@ -20,6 +20,7 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
     WriterConfig,
+    _iter_record_batches,
     extract_structured_components,
 )
 from tests.unit.helpers import structured_line
@@ -38,6 +39,26 @@ class _Parser(StructuredParser):
             untemplated_message_text=message,
             anomalous=int(anomalous_s) if anomalous_s else None,
         )
+
+
+class _NullParser(StructuredParser):
+    """Parser that drops every line for empty-output extraction tests."""
+
+    name = "null"
+
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        del raw_line
+        return None
+
+
+class _LenientParser(_Parser):
+    """Parser variant that treats malformed lines as skipped rows."""
+
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        try:
+            return super().parse_line(raw_line)
+        except ValueError:
+            return None
 
 
 def _make_sink(tmp_path: Path) -> ParquetStructuredSink:
@@ -480,6 +501,107 @@ def test_sink_fixed_window_iteration_rejects_non_positive_sizes(
 
     with pytest.raises(ValueError, match="must be positive integers"):
         list(sink.iter_fixed_window_sequences(2, step_size=0)())
+
+
+def test_iter_record_batches_skips_unparseable_rows_and_populates_null_entity_bucket(
+    tmp_path: Path,
+) -> None:
+    """Batch iteration should skip parser misses and preserve null entity buckets."""
+    expected_rows = 2
+    raw_input_path = tmp_path / "raw.log"
+    raw_input_path.write_text(
+        "100|node-a|first|0\ninvalid line\n101||second|",
+        encoding="utf-8",
+    )
+
+    with disable_run_logger():
+        batches = list(
+            _iter_record_batches(
+                raw_input_path,
+                _LenientParser(),
+                cfg=WriterConfig(batch_rows=10, log_every_rows=1),
+            ),
+        )
+
+    assert len(batches) == 1
+    assert batches[0].num_rows == expected_rows
+    assert batches[0].column("entity_bucket").to_pylist()[1] is None
+
+
+def test_extract_structured_components_rejects_missing_input_path(
+    tmp_path: Path,
+) -> None:
+    """Extraction should fail fast when the raw log file is absent."""
+    with (
+        disable_run_logger(),
+        pytest.raises(FileNotFoundError, match="Input file does not exist"),
+    ):
+        extract_structured_components(
+            raw_input_path=tmp_path / "missing.log",
+            parser=_Parser(),
+            parquet_out_dir=tmp_path / "out",
+        )
+
+
+def test_extract_structured_components_rejects_empty_parser_output(
+    tmp_path: Path,
+) -> None:
+    """Extraction should fail when parsing produces no structured rows."""
+    raw_input_path = tmp_path / "raw.log"
+    raw_input_path.write_text("invalid line\n", encoding="utf-8")
+
+    with (
+        disable_run_logger(),
+        pytest.raises(
+            ValueError,
+            match="No structured lines produced",
+        ),
+    ):
+        extract_structured_components(
+            raw_input_path=raw_input_path,
+            parser=_NullParser(),
+            parquet_out_dir=tmp_path / "out",
+        )
+
+
+def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup should ignore a directory disappearing between exists and rmtree."""
+    raw_input_path = tmp_path / "raw.log"
+    raw_input_path.write_text("100|node-a|first|0\n", encoding="utf-8")
+    parquet_out_dir = tmp_path / "out"
+    parquet_out_dir.mkdir()
+    (parquet_out_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
+    def _raise_missing(_path: Path) -> None:
+        msg = "already gone"
+        raise FileNotFoundError(msg)
+
+    monkeypatch.setattr(
+        "anomalog.parsers.structured.parquet.writer_worker.shutil.rmtree",
+        _raise_missing,
+    )
+
+    with disable_run_logger():
+        has_anomaly = extract_structured_components(
+            raw_input_path=raw_input_path,
+            parser=_Parser(),
+            parquet_out_dir=parquet_out_dir,
+            config=WriterConfig(
+                buckets=2,
+                batch_rows=1,
+                max_rows_per_file=8,
+                max_rows_per_group=8,
+                max_open_files=8,
+                log_every_rows=0,
+                max_partitions=8,
+            ),
+        )
+
+    assert has_anomaly is False
+    assert parquet_out_dir.exists()
 
 
 @pytest.mark.allow_no_new_coverage

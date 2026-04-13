@@ -13,6 +13,7 @@ from anomalog.parsers.template.dataset import (
 from anomalog.sequences import (
     EntitySequenceBuilder,
     FixedSequenceBuilder,
+    SequenceSplitSummary,
     SplitLabel,
     TemplateSequence,
     TimeSequenceBuilder,
@@ -483,3 +484,164 @@ def test_template_sequence_exposes_single_entity_only_when_unambiguous() -> None
 
     assert single_entity_sequence.sole_entity_id == "node-a"
     assert multi_entity_sequence.sole_entity_id is None
+
+
+def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
+    """Base builder helpers should expose their default contracts clearly."""
+    updated_train_fraction = 0.25
+    expected_sequence_count = 3
+    builder = FixedSequenceBuilder(
+        sink=_sink(),
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        window_size=1,
+    )
+
+    assert (
+        builder.with_train_fraction(updated_train_fraction).train_frac
+        == updated_train_fraction
+    )
+    assert (
+        builder.eligible_train_sequence_count(
+            sequence_count=expected_sequence_count,
+            train_label_counts={0: 1},
+            test_label_counts={1: 2},
+        )
+        == expected_sequence_count
+    )
+    assert builder.build_split_summary(
+        sequence_count=0,
+        train_sequence_count=0,
+        train_label_counts={},
+        test_label_counts={},
+    ) == SequenceSplitSummary(
+        requested_train_fraction=0.8,
+        train_fraction_scope="all_sequences",
+        train_on_normal_entities_only=False,
+        eligible_train_sequence_count=0,
+        effective_train_fraction_of_eligible=0.0,
+        effective_train_fraction_overall=0.0,
+    )
+
+
+def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract() -> (
+    None
+):
+    """Entity builder helpers should reflect the normal-only training policy."""
+    all_eligible_sequences = 5
+    normal_eligible_sequences = 3
+    builder = EntitySequenceBuilder(
+        sink=_sink(),
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+    )
+
+    assert builder.with_train_on_normal_entities_only().train_on_normal_entities_only
+    assert (
+        builder.with_train_on_normal_entities_only(
+            enabled=False,
+        ).train_on_normal_entities_only
+        is False
+    )
+    assert (
+        builder.eligible_train_sequence_count(
+            sequence_count=all_eligible_sequences,
+            train_label_counts={0: 2},
+            test_label_counts={1: 3},
+        )
+        == all_eligible_sequences
+    )
+    assert (
+        builder.with_train_on_normal_entities_only().eligible_train_sequence_count(
+            sequence_count=all_eligible_sequences,
+            train_label_counts={0: 2},
+            test_label_counts={0: 1, 1: 2},
+        )
+        == normal_eligible_sequences
+    )
+
+
+def test_time_sequence_builder_uses_public_windowing_and_preserves_null_deltas() -> (
+    None
+):
+    """Time grouping should use sink windows and keep null timestamps as null deltas."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=None,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=250,
+            entity_id="b",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+    )
+
+    sequences = list(
+        TimeSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template_with_source_param,
+            label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
+            time_span_ms=500,
+            train_frac=1.0,
+        ),
+    )
+
+    assert len(sequences) == 1
+    assert sequences[0].split_label is SplitLabel.TRAIN
+    assert sequences[0].events == [
+        ("ONE", ["one"], None),
+        ("TWO", ["two"], None),
+        ("THREE", ["three"], 150),
+    ]
+    assert sequences[0].entity_ids == ["a", "b"]
+    assert sequences[0].label == 1
+
+
+def test_fixed_sequence_builder_uses_single_train_window_when_dataset_is_short() -> (
+    None
+):
+    """Fixed grouping should still emit one train window when rows fit in one window."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=130,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+    )
+
+    sequences = list(
+        FixedSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            window_size=5,
+            train_frac=0.5,
+        ),
+    )
+
+    assert len(sequences) == 1
+    assert sequences[0].split_label is SplitLabel.TRAIN
+    assert sequences[0].events == [("ONE", [], None), ("TWO", [], 30)]
+    assert sequences[0].label == 1

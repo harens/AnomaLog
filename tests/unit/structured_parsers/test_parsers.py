@@ -1,5 +1,7 @@
 """Tests for concrete structured parsers."""
 
+import pytest
+
 from anomalog.parsers.structured import (
     resolve_structured_parser,
     structured_parser_names,
@@ -46,3 +48,9 @@ def test_structured_parser_registry_resolves_builtins() -> None:
     assert resolve_structured_parser("bgl") is BGLParser
     assert resolve_structured_parser("hdfs_v1") is HDFSV1Parser
     assert set(structured_parser_names()) >= {"bgl", "hdfs_v1"}
+
+
+def test_structured_parser_registry_rejects_unknown_names() -> None:
+    """Unknown structured parser names raise a descriptive KeyError."""
+    with pytest.raises(KeyError, match="Unsupported structured parser: 'missing'"):
+        resolve_structured_parser("missing")
