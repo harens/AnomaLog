@@ -14,6 +14,7 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
     StructuredSink,
+    is_anomalous_label,
 )
 
 
@@ -76,7 +77,7 @@ class InMemoryStructuredSink(StructuredSink):
         """Report whether the sink should be treated as having inline labels."""
         if self.anomalies_inline is not None:
             return self.anomalies_inline
-        return any(row.anomalous == 1 for row in self.rows)
+        return any(is_anomalous_label(row.anomalous) for row in self.rows)
 
     def iter_structured_lines(
         self,
@@ -96,11 +97,14 @@ class InMemoryStructuredSink(StructuredSink):
         group_labels: dict[str, int] = {}
 
         for row in self.rows:
-            if row.anomalous is None or row.anomalous == 0:
+            if not is_anomalous_label(row.anomalous):
                 continue
-            line_labels[row.line_order] = row.anomalous
+            anomalous_label = row.anomalous
+            if anomalous_label is None:
+                continue
+            line_labels[row.line_order] = anomalous_label
             if row.entity_id is not None:
-                group_labels.setdefault(row.entity_id, row.anomalous)
+                group_labels.setdefault(row.entity_id, anomalous_label)
 
         return line_labels, group_labels
 
@@ -114,7 +118,10 @@ class InMemoryStructuredSink(StructuredSink):
     ) -> EntityLabelCounts:
         """Count normal and total entities using the provided label lookup."""
         entity_ids = {row.entity_id for row in self.rows if row.entity_id is not None}
-        normal = sum(label_for_group(entity_id) != 1 for entity_id in entity_ids)
+        normal = sum(
+            not is_anomalous_label(label_for_group(entity_id))
+            for entity_id in entity_ids
+        )
         return EntityLabelCounts(
             normal_entities=normal,
             total_entities=len(entity_ids),

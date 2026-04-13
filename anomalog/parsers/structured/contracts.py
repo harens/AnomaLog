@@ -13,6 +13,15 @@ UNTEMPLATED_FIELD = "untemplated_message_text"
 ANOMALOUS_FIELD = "anomalous"
 
 
+def is_anomalous_label(label: int | None) -> bool:
+    """Return whether a label should be treated as anomalous.
+
+    AnomaLog treats `0` as normal and any non-zero integer as anomalous.
+    `None` means the label is absent.
+    """
+    return label is not None and label != 0
+
+
 class EntityLabelCounts(NamedTuple):
     """Distinct entity counts partitioned by anomaly label."""
 
@@ -27,7 +36,7 @@ class BaseStructuredLine:
     timestamp_unix_ms: int | None
     entity_id: str | None
     untemplated_message_text: str
-    anomalous: int | None  # 0/1/None (but also different anomalous categories)
+    anomalous: int | None  # 0/None normal-or-missing, any non-zero value anomalous
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +87,7 @@ class StructuredSink(Protocol):
     raw_dataset_path: Path
     parser: StructuredParser
 
-    # Returns whether any of the lines have anomalous label 1 (as opposed to 0 or None).
+    # Returns whether any line has a non-zero anomalous label.
     def write_structured_lines(self) -> bool:
         """Persist structured lines and return True if anomalies were found."""
 
