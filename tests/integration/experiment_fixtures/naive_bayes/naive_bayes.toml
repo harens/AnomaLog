@@ -1,0 +1,7 @@
+name = "naive_bayes"
+detector = "naive_bayes"
+smoothing = 1.0
+phrase_ngram_min = 1
+phrase_ngram_max = 2
+top_k_phrases = 3
+anomalous_posterior_threshold = 0.4

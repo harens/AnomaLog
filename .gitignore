@@ -1,4 +1,5 @@
 data/
+experiments/results/*
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,macos,pycharm+all,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,macos,pycharm+all,visualstudiocode

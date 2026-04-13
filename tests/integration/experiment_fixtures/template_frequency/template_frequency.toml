@@ -1,0 +1,3 @@
+name = "template_frequency"
+detector = "template_frequency"
+score_threshold = 0.3

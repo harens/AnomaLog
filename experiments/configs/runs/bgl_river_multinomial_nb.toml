@@ -1,0 +1,4 @@
+name = "bgl_river_multinomial_nb"
+dataset = "bgl_entity_supervised"
+model = "river_multinomial_nb_default"
+description = "River MultinomialNB phrase baseline on the built-in BGL preset."

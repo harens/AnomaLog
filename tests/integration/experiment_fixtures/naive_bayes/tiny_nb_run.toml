@@ -1,0 +1,3 @@
+name = "tiny_nb_run"
+dataset = "tiny_dataset_nb"
+model = "naive_bayes"

@@ -47,6 +47,31 @@ class SplitLabel(str, Enum):
     TEST = "test"
 
 
+@dataclass(slots=True, frozen=True)
+class SequenceSplitSummary:
+    """Serializable summary of requested versus effective split behavior."""
+
+    requested_train_fraction: float
+    train_fraction_scope: str
+    train_on_normal_entities_only: bool
+    eligible_train_sequence_count: int
+    effective_train_fraction_of_eligible: float
+    effective_train_fraction_overall: float
+
+    def as_dict(self) -> dict[str, int | float | bool | str]:
+        """Return a stable JSON-friendly representation."""
+        return {
+            "requested_train_fraction": self.requested_train_fraction,
+            "train_fraction_scope": self.train_fraction_scope,
+            "train_on_normal_entities_only": self.train_on_normal_entities_only,
+            "eligible_train_sequence_count": self.eligible_train_sequence_count,
+            "effective_train_fraction_of_eligible": (
+                self.effective_train_fraction_of_eligible
+            ),
+            "effective_train_fraction_overall": self.effective_train_fraction_overall,
+        }
+
+
 @dataclass(slots=True)
 class TemplateSequence:
     """Grouped log window before any model-specific representation is applied.
@@ -94,6 +119,17 @@ class SequenceBuilder:
         """Return the grouping strategy for this builder."""
         msg = f"{type(self).__name__} must define a grouping mode."
         raise NotImplementedError(msg)
+
+    def eligible_train_sequence_count(
+        self,
+        *,
+        sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> int:
+        """Return the sequences eligible for train-fraction accounting."""
+        del train_label_counts, test_label_counts
+        return sequence_count
 
     def with_train_fraction(
         self,
@@ -193,6 +229,43 @@ class SequenceBuilder:
             )
             if seq is not None:
                 yield seq
+
+    def build_split_summary(
+        self,
+        *,
+        sequence_count: int,
+        train_sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> SequenceSplitSummary:
+        """Describe requested versus effective split semantics for one run."""
+        eligible_train_sequence_count = self.eligible_train_sequence_count(
+            sequence_count=sequence_count,
+            train_label_counts=train_label_counts,
+            test_label_counts=test_label_counts,
+        )
+        effective_train_fraction_of_eligible = (
+            train_sequence_count / eligible_train_sequence_count
+            if eligible_train_sequence_count
+            else 0.0
+        )
+        effective_train_fraction_overall = (
+            train_sequence_count / sequence_count if sequence_count else 0.0
+        )
+        return SequenceSplitSummary(
+            requested_train_fraction=self.train_frac,
+            train_fraction_scope="all_sequences",
+            train_on_normal_entities_only=self._uses_normal_only_training(),
+            eligible_train_sequence_count=eligible_train_sequence_count,
+            effective_train_fraction_of_eligible=round(
+                effective_train_fraction_of_eligible,
+                8,
+            ),
+            effective_train_fraction_overall=round(
+                effective_train_fraction_overall,
+                8,
+            ),
+        )
 
     def _uses_normal_only_training(self) -> bool:
         """Return whether train is restricted to normal entities only."""
@@ -391,6 +464,19 @@ class EntitySequenceBuilder(SequenceBuilder):
     ) -> Self:
         """Limit training sequences to entities without anomalies."""
         return replace(self, train_on_normal_entities_only=enabled)
+
+    def eligible_train_sequence_count(
+        self,
+        *,
+        sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> int:
+        """Return the sequences eligible for train-fraction accounting."""
+        del sequence_count
+        if not self.train_on_normal_entities_only:
+            return sum(train_label_counts.values()) + sum(test_label_counts.values())
+        return sum(train_label_counts.values()) + test_label_counts.get(0, 0)
 
     def _uses_normal_only_training(self) -> bool:
         """Return whether train is restricted to normal entities only."""
