@@ -16,6 +16,8 @@ UTC = timezone.utc
 class HDFSV1Parser(StructuredParser):
     """Parse HDFS v1 log lines into structured fields."""
 
+    name: ClassVar[str] = "hdfs_v1"
+
     # Canonical HDFS v1 format:
     #   <Date> <Time> <Pid> <Level> <Component>: <Content>
     # e.g. 081109 203518 143 INFO dfs.DataNode$DataXceiver:
@@ -102,6 +104,8 @@ class HDFSV1Parser(StructuredParser):
 @dataclass(frozen=True, slots=True)
 class BGLParser(StructuredParser):
     """Parse Blue Gene/L log lines into structured fields with anomaly flag."""
+
+    name: ClassVar[str] = "bgl"
 
     # Matches both:
     #   - <epoch> <date> <loc> <hires_ts> <loc> <tail>

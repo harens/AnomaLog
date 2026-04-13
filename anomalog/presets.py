@@ -46,3 +46,22 @@ bgl = (
     )
     .parse_with(BGLParser())
 )
+
+_PRESETS: dict[str, DatasetSpec] = {
+    "bgl": bgl,
+    "hdfs_v1": hdfs_v1,
+}
+
+
+def resolve_preset(name: str) -> DatasetSpec:
+    """Resolve a built-in dataset preset by name."""
+    try:
+        return _PRESETS[name]
+    except KeyError as exc:
+        msg = f"Unsupported preset: {name!r}"
+        raise KeyError(msg) from exc
+
+
+def preset_names() -> tuple[str, ...]:
+    """Return the registered built-in preset names."""
+    return tuple(_PRESETS)

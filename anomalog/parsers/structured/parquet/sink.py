@@ -26,6 +26,7 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
     StructuredSink,
+    is_anomalous_label,
 )
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
@@ -218,7 +219,7 @@ class ParquetStructuredSink(StructuredSink):
                     continue
                 entities_seen.add(entity_id)
                 label = label_for_group(entity_id)
-                if label == 1:
+                if is_anomalous_label(label):
                     continue
                 normals += 1
 

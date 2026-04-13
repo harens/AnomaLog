@@ -12,6 +12,8 @@ repo_url = "https://github.com/harens/AnomaLog"
 nav = [
   {"Home" = "index.md"},
   {"Getting Started" = "getting-started.md"},
+  {"Pipeline Concepts" = "pipeline-concepts.md"},
+  {"Experiments" = "experiments.md"},
   {"Development" = "development.md"},
   {"Reference" = [
     {"Overview" = "reference/index.md"},
@@ -21,6 +23,7 @@ nav = [
     {"Sources" = "reference/sources.md"},
     {"Labels" = "reference/labels.md"},
     {"Sequences" = "reference/sequences.md"},
+    {"Representations" = "reference/representations.md"},
   ]},
 ]
 

@@ -19,7 +19,7 @@ from anomalog.parsers.structured import (
 )
 from anomalog.parsers.structured.contracts import EntityLabelCounts, StructuredLine
 from anomalog.parsers.template import ExtractedParameters, LogTemplate, TemplateParser
-from anomalog.presets import bgl, hdfs_v1
+from anomalog.presets import bgl, hdfs_v1, preset_names, resolve_preset
 from anomalog.sources import DatasetSource
 from anomalog.sources.local import LocalZipSource
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
@@ -27,6 +27,7 @@ from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
 @dataclass(frozen=True)
 class _StubSource(DatasetSource):
+    name = "stub"
     dataset_root: Path
     raw_logs_file: Path
 
@@ -51,12 +52,15 @@ class _StubSource(DatasetSource):
 
 @dataclass(frozen=True)
 class _NullParser(StructuredParser):
+    name = "null"
+
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         del raw_line
         return None
 
 
 class _RecordingTemplateParser(TemplateParser):
+    name = "recording"
     seen_lines: ClassVar[list[str]] = []
 
     def __init__(self, dataset_name: str | None = None) -> None:
@@ -208,6 +212,19 @@ def test_dataset_spec_defaults_to_drain3_template_parser() -> None:
     assert spec.template_parser is Drain3Parser
     assert bgl.template_parser is Drain3Parser
     assert hdfs_v1.template_parser is Drain3Parser
+
+
+def test_builtin_presets_register_and_resolve_by_name() -> None:
+    """Built-in presets should be available through the public registry."""
+    assert resolve_preset("bgl") is bgl
+    assert resolve_preset("hdfs_v1") is hdfs_v1
+    assert set(preset_names()) >= {"bgl", "hdfs_v1"}
+
+
+def test_builtin_presets_reject_unknown_names() -> None:
+    """Unknown preset names raise a descriptive KeyError."""
+    with pytest.raises(KeyError, match="Unsupported preset: 'missing'"):
+        resolve_preset("missing")
 
 
 def test_dataset_spec_build_requires_non_empty_dataset_name() -> None:

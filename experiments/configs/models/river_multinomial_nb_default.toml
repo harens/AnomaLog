@@ -1,0 +1,8 @@
+name = "river_multinomial_nb_default"
+detector = "river"
+estimator = "naive_bayes.MultinomialNB"
+smoothing = 1.0
+phrase_ngram_min = 1
+phrase_ngram_max = 2
+anomalous_posterior_threshold = 0.5
+description = "River-backed MultinomialNB baseline over extracted template phrases."

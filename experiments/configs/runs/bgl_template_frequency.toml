@@ -1,0 +1,5 @@
+name = "bgl_template_frequency"
+# dataset = "bgl_entity"
+dataset = "bgl_entity_supervised"
+model = "template_frequency_default"
+description = "Template-frequency baseline on the built-in BGL preset."

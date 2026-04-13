@@ -6,42 +6,17 @@ from types import TracebackType
 
 import pytest
 from prefect.logging import disable_run_logger
+from rich.progress import Progress
 from typing_extensions import Self
 
 from anomalog.io_utils import extract_zip, verify_md5
-
-
-class _TrackingProgress:
-    def __init__(self) -> None:
-        self.task_total: int | None = None
-        self.advanced = 0
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool:
-        del exc_type, exc, traceback
-        return False
-
-    def add_task(self, description: str, total: int, unit: str | None = None) -> int:
-        del description, unit
-        self.task_total = total
-        return 1
-
-    def update(self, _task: int, *, advance: int) -> None:
-        self.advanced += advance
 
 
 def test_verify_md5_reads_entire_file_before_raising_on_mismatch(
     tmp_path: Path,
 ) -> None:
     """Checksum verification should advance through the full file on failure."""
-    progress = _TrackingProgress()
+    progress = Progress(disable=True)
     file_path = tmp_path / "payload.bin"
     payload = b"abcdef"
     file_path.write_bytes(payload)
@@ -53,8 +28,10 @@ def test_verify_md5_reads_entire_file_before_raising_on_mismatch(
             progress_factory=lambda: progress,
         )
 
-    assert progress.task_total == len(payload)
-    assert progress.advanced == len(payload)
+    assert len(progress.tasks) == 1
+    task = progress.tasks[0]
+    assert task.total == len(payload)
+    assert task.completed == len(payload)
 
 
 @pytest.mark.allow_no_new_coverage

@@ -1,15 +1,16 @@
 """Base class and shared helpers for dataset materialisation sources."""
 
-from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import ClassVar, Protocol, runtime_checkable
 
 
-class DatasetSource(ABC):
+@runtime_checkable
+class DatasetSource(Protocol):
     """Download or copy a dataset into the given directory."""
 
+    name: ClassVar[str]
     raw_logs_relpath: Path | None = None
 
-    @abstractmethod
     def materialise(
         self,
         *,

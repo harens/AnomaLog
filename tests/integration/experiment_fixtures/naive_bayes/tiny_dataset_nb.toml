@@ -1,0 +1,14 @@
+name = "tiny_dataset_nb"
+dataset_name = "tiny-bgl-naive-bayes"
+structured_parser = "bgl"
+
+[source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/tiny_bgl_happy_path.log"
+
+[sequence]
+grouping = "fixed"
+window_size = 4
+step = 2
+train_fraction = 0.67

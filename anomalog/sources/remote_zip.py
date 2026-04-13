@@ -38,6 +38,7 @@ class _DownloadProgress:
 class RemoteZipSource(DatasetSource):
     """Download a dataset zip from a remote URL and extract it locally."""
 
+    name = "remote_zip"
     url: str
     md5_checksum: str
     raw_logs_relpath: Path | None = None

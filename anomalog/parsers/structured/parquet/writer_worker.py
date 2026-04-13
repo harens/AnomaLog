@@ -145,7 +145,13 @@ def extract_structured_components(
             "Output directory %s already exists; deleting for fresh write",
             parquet_out_dir,
         )
-        shutil.rmtree(parquet_out_dir)
+        try:
+            shutil.rmtree(parquet_out_dir)
+        except FileNotFoundError:
+            logger.info(
+                "Output directory %s disappeared before cleanup completed",
+                parquet_out_dir,
+            )
     parquet_out_dir.mkdir(parents=True, exist_ok=True)
 
     batch_iter = _iter_record_batches(
@@ -167,8 +173,7 @@ def extract_structured_components(
     pc_equal = getattr(pc, "equal")  # noqa: B009 - stubs miss these functions
 
     def _tracking_batches() -> Generator[pa.RecordBatch, None, None]:
-        nonlocal has_anomaly
-        nonlocal batches_emitted
+        nonlocal has_anomaly, batches_emitted
         for batch in itertools.chain((first_batch,), batch_iter):
             if ANOMALOUS_FIELD in batch.schema.names:
                 col = batch.column(ANOMALOUS_FIELD)

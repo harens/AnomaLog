@@ -1,0 +1,3 @@
+name = "tiny_runner_smoke"
+dataset = "tiny_dataset"
+model = "template_frequency"

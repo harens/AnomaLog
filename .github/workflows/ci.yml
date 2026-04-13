@@ -21,11 +21,11 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.14"
+          python-version: "3.13"
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
 
       - name: Lint
         run: uv run ruff check .
@@ -42,11 +42,11 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.14"
+          python-version: "3.13"
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
 
       - name: Type check
         run: uv run ty check
@@ -73,8 +73,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      # Temporary workaround for River on Python 3.14:
+      # https://github.com/online-ml/river/issues/1760
+      - name: Set up Rust
+        if: matrix.python-version == '3.14'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync Dependencies
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: ${{ matrix.python-version == '3.14' && '1' || '' }}
+        run: uv sync --frozen --all-groups
 
       - name: Run tests
         run: >

@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import functools
 import math
-from collections import Counter
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:  # pragma: no cover
+from typing_extensions import Self
+
+from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.representations import (
+    SequenceRepresentation,
+    SequenceRepresentationView,
+    TRepresentation,
+)
+
+if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator
 
     from anomalog.parsers.structured.contracts import StructuredLine, StructuredSink
@@ -39,14 +47,42 @@ class SplitLabel(str, Enum):
     TEST = "test"
 
 
+@dataclass(slots=True, frozen=True)
+class SequenceSplitSummary:
+    """Serializable summary of requested versus effective split behavior."""
+
+    requested_train_fraction: float
+    train_fraction_scope: str
+    train_on_normal_entities_only: bool
+    eligible_train_sequence_count: int
+    effective_train_fraction_of_eligible: float
+    effective_train_fraction_overall: float
+
+    def as_dict(self) -> dict[str, int | float | bool | str]:
+        """Return a stable JSON-friendly representation."""
+        return {
+            "requested_train_fraction": self.requested_train_fraction,
+            "train_fraction_scope": self.train_fraction_scope,
+            "train_on_normal_entities_only": self.train_on_normal_entities_only,
+            "eligible_train_sequence_count": self.eligible_train_sequence_count,
+            "effective_train_fraction_of_eligible": (
+                self.effective_train_fraction_of_eligible
+            ),
+            "effective_train_fraction_overall": self.effective_train_fraction_overall,
+        }
+
+
 @dataclass(slots=True)
 class TemplateSequence:
-    """Sequence of templated events used by downstream models."""
+    """Grouped log window before any model-specific representation is applied.
+
+    This keeps sequence semantics such as event ordering, labels, and entity
+    membership. Model inputs derived from it live in `SequenceSample`.
+    """
 
     events: list[
         tuple[str, list[str], int | None]
     ]  # (template, parameters, dt_prev_ms)
-    counts: Counter[str]
     label: int
     entity_ids: list[str]  # unique entity ids present (may be empty)
     window_id: int
@@ -54,15 +90,15 @@ class TemplateSequence:
 
     @property
     def templates(self) -> list[str]:
-        """Backwards-compatible access to template strings only."""
+        """Return the ordered template strings for this sequence."""
         return [tpl for tpl, _, _ in self.events]
 
     @property
-    def entity_id(self) -> str | None:
-        """Return a single entity id if the sequence is homogenous.
+    def sole_entity_id(self) -> str | None:
+        """Return the entity id when the sequence belongs to exactly one entity.
 
         If multiple entities appear in the window, None is returned to avoid
-        implying a dominant entity.
+        implying a single owning entity.
         """
         if len(self.entity_ids) == 1:
             return self.entity_ids[0]
@@ -71,90 +107,76 @@ class TemplateSequence:
 
 @dataclass(slots=True, frozen=True)
 class SequenceBuilder:
-    """Build sequences from a structured sink and template inference function."""
+    """Common sequence-building behavior shared across grouping strategies."""
 
     sink: StructuredSink
     infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
-    mode: GroupingMode
-    window_size: int | None = None
-    time_span_ms: int | None = None
-    step: int | None = None
     train_frac: float = 0.8
-    train_on_normal_entities_only: bool = False
 
-    @classmethod
-    def from_dataset(cls, td: TemplatedDataset) -> SequenceBuilder:
-        """Create a builder using configuration from a templated dataset."""
-        return cls(
-            sink=td.sink,
-            infer_template=td.template_parser.inference,
-            label_for_group=td.anomaly_labels.label_for_group,
-            mode=GroupingMode.ENTITY,
-        )
+    @property
+    def mode(self) -> GroupingMode:
+        """Return the grouping strategy for this builder."""
+        msg = f"{type(self).__name__} must define a grouping mode."
+        raise NotImplementedError(msg)
 
-    def fixed(self, size: int, step: int | None = None) -> SequenceBuilder:
-        """Return a builder configured for fixed-size windows."""
-        return replace(
-            self,
-            mode=GroupingMode.FIXED,
-            window_size=size,
-            time_span_ms=None,
-            step=step,
-        )
+    def eligible_train_sequence_count(
+        self,
+        *,
+        sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> int:
+        """Return the sequences eligible for train-fraction accounting."""
+        del train_label_counts, test_label_counts
+        return sequence_count
 
-    def time(self, span_ms: int, step_ms: int | None = None) -> SequenceBuilder:
-        """Return a builder configured for time-based windows."""
-        return replace(
-            self,
-            mode=GroupingMode.TIME,
-            window_size=None,
-            time_span_ms=span_ms,
-            step=step_ms,
-        )
-
-    def entity(self) -> SequenceBuilder:
-        """Return a builder configured for per-entity windows."""
-        return replace(
-            self,
-            mode=GroupingMode.ENTITY,
-            window_size=None,
-            time_span_ms=None,
-            step=None,
-        )
-
-    def with_train_fraction(self, train_frac: float) -> SequenceBuilder:
+    def with_train_fraction(
+        self,
+        train_frac: float,
+    ) -> Self:
         """Return a copy with an updated train/test split fraction."""
         return replace(self, train_frac=train_frac)
 
-    def with_train_on_normal_entities_only(
+    def represent_with(
         self,
-        *,
-        enabled: bool = True,
-    ) -> SequenceBuilder:
-        """Limit training sequences to entities without anomalies."""
-        return replace(self, train_on_normal_entities_only=enabled)
+        representation: SequenceRepresentation[TRepresentation],
+    ) -> SequenceRepresentationView[TRepresentation]:
+        """Return a lazy builder that applies a representation per sequence."""
+        return SequenceRepresentationView(sequences=self, representation=representation)
 
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping."""
-        rows_iter = self._rows_iterator()
+        rows_iter = self._iter_rows()
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
         if self.mode is GroupingMode.ENTITY:
             entity_counts = self.sink.count_entities_by_label(label_for_group)
-            base = (
-                entity_counts.normal_entities
-                if self.train_on_normal_entities_only
-                else entity_counts.total_entities
+            target_in_train = (
+                math.ceil(self.train_frac * entity_counts.total_entities)
+                if entity_counts.total_entities
+                else 0
             )
-            target_in_train = math.ceil(self.train_frac * base) if base else 0
+            if (
+                self._uses_normal_only_training()
+                and target_in_train > entity_counts.normal_entities
+            ):
+                msg = (
+                    "Requested train fraction is impossible with "
+                    "train_on_normal_entities_only enabled: "
+                    f"target_train_sequences={target_in_train}, "
+                    f"eligible_normal_sequences={entity_counts.normal_entities}, "
+                    f"total_sequences={entity_counts.total_entities}. "
+                    "Lower train_fraction or disable normal-only training."
+                )
+                raise ValueError(msg)
             normals_seen_in_train = 0
 
             for window_id, rows in enumerate(rows_iter):
-                if self.train_on_normal_entities_only:
+                if self._uses_normal_only_training():
                     entity_is_anomalous = any(
-                        label_for_group(r.entity_id) == 1
+                        is_anomalous_label(label_for_group(r.entity_id))
                         for r in rows
                         if r.entity_id is not None
                     )
@@ -180,7 +202,7 @@ class SequenceBuilder:
                 )
                 if seq is not None:
                     if (
-                        self.train_on_normal_entities_only
+                        self._uses_normal_only_training()
                         and split_label is SplitLabel.TRAIN
                         and seq.label == 0
                     ):
@@ -189,11 +211,7 @@ class SequenceBuilder:
             return
 
         # Non-entity grouping: simple positional cutoff
-        total_sequences = (
-            self._count_fixed_windows()
-            if self.mode is GroupingMode.FIXED
-            else self._count_time_windows()
-        )
+        total_sequences = self._count_windows()
         target_in_train = (
             math.ceil(self.train_frac * total_sequences) if total_sequences else 0
         )
@@ -212,25 +230,56 @@ class SequenceBuilder:
             if seq is not None:
                 yield seq
 
-    def _rows_iterator(self) -> Iterator[Collection[StructuredLine]]:
-        """Return an iterator over grouped rows based on the current mode."""
-        if self.mode is GroupingMode.TIME:
-            if self.time_span_ms is None:
-                msg = "time_span_ms must be set for time-based grouping"
-                raise ValueError(msg)
-            return self.sink.iter_time_window_sequences(
-                self.time_span_ms,
-                step_span_ms=self.step,
-            )()
-        if self.mode is GroupingMode.FIXED:
-            if self.window_size is None:
-                msg = "window_size must be set for fixed-size grouping"
-                raise ValueError(msg)
-            return self.sink.iter_fixed_window_sequences(
-                self.window_size,
-                step_size=self.step,
-            )()
-        return self.sink.iter_entity_sequences()()
+    def build_split_summary(
+        self,
+        *,
+        sequence_count: int,
+        train_sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> SequenceSplitSummary:
+        """Describe requested versus effective split semantics for one run."""
+        eligible_train_sequence_count = self.eligible_train_sequence_count(
+            sequence_count=sequence_count,
+            train_label_counts=train_label_counts,
+            test_label_counts=test_label_counts,
+        )
+        effective_train_fraction_of_eligible = (
+            train_sequence_count / eligible_train_sequence_count
+            if eligible_train_sequence_count
+            else 0.0
+        )
+        effective_train_fraction_overall = (
+            train_sequence_count / sequence_count if sequence_count else 0.0
+        )
+        return SequenceSplitSummary(
+            requested_train_fraction=self.train_frac,
+            train_fraction_scope="all_sequences",
+            train_on_normal_entities_only=self._uses_normal_only_training(),
+            eligible_train_sequence_count=eligible_train_sequence_count,
+            effective_train_fraction_of_eligible=round(
+                effective_train_fraction_of_eligible,
+                8,
+            ),
+            effective_train_fraction_overall=round(
+                effective_train_fraction_overall,
+                8,
+            ),
+        )
+
+    def _uses_normal_only_training(self) -> bool:
+        """Return whether train is restricted to normal entities only."""
+        return False
+
+    def _iter_rows(self) -> Iterator[Collection[StructuredLine]]:
+        """Return grouped rows for the configured strategy."""
+        msg = f"{type(self).__name__} must implement _iter_rows()."
+        raise NotImplementedError(msg)
+
+    def _count_windows(self) -> int:
+        """Return the number of grouped windows for non-entity splitting."""
+        msg = f"{type(self).__name__} must implement _count_windows()."
+        raise NotImplementedError(msg)
 
     def _build_sequence(
         self,
@@ -245,40 +294,47 @@ class SequenceBuilder:
             return None
 
         events: list[tuple[str, list[str], int | None]] = []
-        counts: Counter[str] = Counter()
         seq_label = 0
         prev_ts: int | None = None
 
-        ids_in_window = [r.entity_id for r in rows if r.entity_id is not None]
-        unique_ids = sorted(set(ids_in_window))
+        unique_ids = self._entity_ids_for_rows(rows)
 
         for r in rows:
             template, params = infer_template(r.untemplated_message_text)
             dt, prev_ts = self._compute_dt(prev_ts, r.timestamp_unix_ms)
 
             events.append((template, list(params), dt))
-            counts[template] += 1
 
             if seq_label == 1:
                 continue
 
             line_lab = getattr(r, "anomalous", None)
-            if line_lab == 1:
+            if is_anomalous_label(line_lab):
                 seq_label = 1
                 continue
 
             ent = r.entity_id
-            if ent is not None and label_for_group(ent) == 1:
+            if ent is not None and is_anomalous_label(label_for_group(ent)):
                 seq_label = 1
 
         return TemplateSequence(
             events=events,
-            counts=counts,
             label=seq_label,
             entity_ids=unique_ids,
             window_id=window_id,
             split_label=split_label,
         )
+
+    def _entity_ids_for_rows(self, rows: Collection[StructuredLine]) -> list[str]:
+        """Return unique entity ids for one window in first-seen order."""
+        seen: set[str] = set()
+        entity_ids: list[str] = []
+        for row in rows:
+            if row.entity_id is None or row.entity_id in seen:
+                continue
+            seen.add(row.entity_id)
+            entity_ids.append(row.entity_id)
+        return entity_ids
 
     @staticmethod
     def _compute_dt(
@@ -300,71 +356,204 @@ class SequenceBuilder:
             return None, ts
         return int(ts) - int(prev_ts), ts
 
-    def _count_fixed_windows(self) -> int:
+    @staticmethod
+    def _count_fixed_windows(
+        *,
+        sink: StructuredSink,
+        window_size: int,
+        step: int | None,
+    ) -> int:
         """Estimate number of fixed windows given window and step sizes.
 
         >>> class _Sink:
         ...     def count_rows(self):
         ...         return 10
         ...
-        >>> sb = SequenceBuilder(
+        >>> sb = FixedSequenceBuilder(
         ...     sink=_Sink(),
         ...     infer_template=lambda s: (s, ()),
         ...     label_for_group=lambda _: 0,
-        ...     mode=GroupingMode.FIXED,
         ...     window_size=4,
-        ...     time_span_ms=None,
         ...     step=2,
         ... )
-        >>> sb._count_fixed_windows()
+        >>> sb._count_windows()
         4
         """
-        if self.window_size is None or self.window_size <= 0:
+        if window_size <= 0:
             return 0
-        step = self.step or self.window_size
+        step = step or window_size
         if step <= 0:
             return 0
-        n = self.sink.count_rows()
+        n = sink.count_rows()
         if n <= 0:
             return 0
 
-        if n <= self.window_size:
+        if n <= window_size:
             return 1
-        return 1 + math.ceil((n - self.window_size) / step)
+        return 1 + math.ceil((n - window_size) / step)
 
-    def _count_time_windows(self) -> int:
+    @staticmethod
+    def _count_time_windows(
+        *,
+        sink: StructuredSink,
+        time_span_ms: int,
+        step: int | None,
+    ) -> int:
         """Estimate number of time windows from sink timestamp bounds.
 
         >>> class _Sink:
         ...     def timestamp_bounds(self):
         ...         return 1_000, 3_500
         ...
-        >>> sb = SequenceBuilder(
+        >>> sb = TimeSequenceBuilder(
         ...     sink=_Sink(),
         ...     infer_template=lambda s: (s, ()),
         ...     label_for_group=lambda _: 0,
-        ...     mode=GroupingMode.TIME,
-        ...     window_size=None,
         ...     time_span_ms=1_000,
         ...     step=500,
         ... )
-        >>> sb._count_time_windows()
+        >>> sb._count_windows()
         4
         """
-        if self.time_span_ms is None or self.time_span_ms <= 0:
+        if time_span_ms <= 0:
             return 0
-        step = self.step or self.time_span_ms
+        step = step or time_span_ms
         if step <= 0:
             return 0
-        first_ts, last_ts = self.sink.timestamp_bounds()
+        first_ts, last_ts = sink.timestamp_bounds()
         if first_ts is None or last_ts is None:
             return 0
         if last_ts < first_ts:
             return 0
-        span = self.time_span_ms
+        span = time_span_ms
         duration = last_ts - first_ts
 
         if duration < span:
             return 1
 
         return (duration - span) // step + 1
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class EntitySequenceBuilder(SequenceBuilder):
+    """Sequence builder for per-entity grouping."""
+
+    train_on_normal_entities_only: bool = False
+
+    @classmethod
+    def from_dataset(
+        cls,
+        td: TemplatedDataset,
+    ) -> Self:
+        """Create an entity-grouped builder from a templated dataset."""
+        return cls(
+            sink=td.sink,
+            infer_template=td.template_parser.inference,
+            label_for_group=td.anomaly_labels.label_for_group,
+        )
+
+    @property
+    def mode(self) -> GroupingMode:
+        """Return the grouping strategy for this builder."""
+        return GroupingMode.ENTITY
+
+    def with_train_on_normal_entities_only(
+        self,
+        *,
+        enabled: bool = True,
+    ) -> Self:
+        """Limit training sequences to entities without anomalies."""
+        return replace(self, train_on_normal_entities_only=enabled)
+
+    def eligible_train_sequence_count(
+        self,
+        *,
+        sequence_count: int,
+        train_label_counts: dict[int, int],
+        test_label_counts: dict[int, int],
+    ) -> int:
+        """Return the sequences eligible for train-fraction accounting."""
+        del sequence_count
+        if not self.train_on_normal_entities_only:
+            return sum(train_label_counts.values()) + sum(test_label_counts.values())
+        return sum(train_label_counts.values()) + test_label_counts.get(0, 0)
+
+    def _uses_normal_only_training(self) -> bool:
+        """Return whether train is restricted to normal entities only."""
+        return self.train_on_normal_entities_only
+
+    def _iter_rows(self) -> Iterator[Collection[StructuredLine]]:
+        """Return rows grouped by entity."""
+        return self.sink.iter_entity_sequences()()
+
+    def _count_windows(self) -> int:
+        """Return the entity-grouped window count.
+
+        Entity splitting does not use this path because it needs label-aware
+        budgeting over eligible entities rather than a simple positional cutoff.
+        """
+        msg = "EntitySequenceBuilder does not use _count_windows()."
+        raise NotImplementedError(msg)
+
+    def _entity_ids_for_rows(self, rows: Collection[StructuredLine]) -> list[str]:
+        """Return the single entity id for an entity-grouped window."""
+        for row in rows:
+            if row.entity_id is not None:
+                return [row.entity_id]
+        return []
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class FixedSequenceBuilder(SequenceBuilder):
+    """Sequence builder for fixed-size window grouping."""
+
+    window_size: int
+    step: int | None = None
+
+    @property
+    def mode(self) -> GroupingMode:
+        """Return the grouping strategy for this builder."""
+        return GroupingMode.FIXED
+
+    def _iter_rows(self) -> Iterator[Collection[StructuredLine]]:
+        """Return rows grouped by fixed-size windows."""
+        return self.sink.iter_fixed_window_sequences(
+            self.window_size,
+            step_size=self.step,
+        )()
+
+    def _count_windows(self) -> int:
+        """Return the number of fixed-size windows."""
+        return self._count_fixed_windows(
+            sink=self.sink,
+            window_size=self.window_size,
+            step=self.step,
+        )
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TimeSequenceBuilder(SequenceBuilder):
+    """Sequence builder for time-window grouping."""
+
+    time_span_ms: int
+    step: int | None = None
+
+    @property
+    def mode(self) -> GroupingMode:
+        """Return the grouping strategy for this builder."""
+        return GroupingMode.TIME
+
+    def _iter_rows(self) -> Iterator[Collection[StructuredLine]]:
+        """Return rows grouped by time windows."""
+        return self.sink.iter_time_window_sequences(
+            self.time_span_ms,
+            step_span_ms=self.step,
+        )()
+
+    def _count_windows(self) -> int:
+        """Return the number of time windows."""
+        return self._count_time_windows(
+            sink=self.sink,
+            time_span_ms=self.time_span_ms,
+            step=self.step,
+        )
