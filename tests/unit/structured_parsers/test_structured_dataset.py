@@ -33,6 +33,7 @@ TIME_STEP_MS = 250
 
 @dataclass(frozen=True)
 class _RecordingTemplateParser(TemplateParser):
+    name = "recording"
     seen_lines: list[str]
     dataset_name: str | None = None
 

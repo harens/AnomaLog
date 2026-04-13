@@ -57,6 +57,8 @@ def label_lookup(
 class NullStructuredParser(StructuredParser):
     """Minimal parser double for tests that only need sink wiring."""
 
+    name = "null"
+
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         """Discard all input lines."""
         del raw_line

@@ -3,7 +3,7 @@
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple, Protocol, runtime_checkable
+from typing import ClassVar, NamedTuple, Protocol, runtime_checkable
 
 # Shared field names to avoid magic strings elsewhere.
 LINE_FIELD = "line_order"
@@ -70,6 +70,8 @@ class StructuredLine(BaseStructuredLine):
 @runtime_checkable
 class StructuredParser(Protocol):
     """Interface for parsing raw log lines into structured records."""
+
+    name: ClassVar[str]
 
     def parse_line(
         self,

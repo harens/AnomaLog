@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, TypeAlias
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, runtime_checkable
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredSink
@@ -21,9 +21,11 @@ ExtractedParameters: TypeAlias = Iterable[str]
 
 
 # TODO: Add visualisation methods
+@runtime_checkable
 class TemplateParser(Protocol):
     """Interface for template mining implementations."""
 
+    name: ClassVar[str]
     dataset_name: str | None
 
     def __init__(self, dataset_name: str | None = None) -> None:
