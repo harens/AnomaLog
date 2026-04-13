@@ -24,8 +24,8 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
 
       - name: Lint
         run: uv run ruff check .
@@ -45,8 +45,8 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
 
       - name: Type check
         run: uv run ty check
@@ -73,8 +73,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Sync dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
 
       - name: Run tests
         run: >
