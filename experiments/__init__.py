@@ -1,5 +1,5 @@
 """Config-driven experiment tooling for AnomaLog."""
 
+from experiments.errors import ConfigError
 
-class ConfigError(ValueError):
-    """Raised when experiment configuration is invalid."""
+__all__ = ["ConfigError"]
