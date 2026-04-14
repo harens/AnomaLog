@@ -46,6 +46,10 @@ class SequencePrediction(msgspec.Struct, frozen=True):
     ) -> SequencePrediction:
         """Build a serialized prediction from a sequence and detector outcome.
 
+        Args:
+            sequence (TemplateSequence): Sequence being serialized.
+            outcome (PredictionOutcome): Detector output for the sequence.
+
         Returns:
             SequencePrediction: Serializable prediction record.
         """
@@ -90,6 +94,11 @@ class ModelManifest(msgspec.Struct, frozen=True):
         **detector_fields: object,
     ) -> Self:
         """Build a manifest by combining shared run summary and model metadata.
+
+        Args:
+            detector (str): Detector name for the manifest.
+            sequence_summary (SequenceSummary): Aggregate split and label counts.
+            **detector_fields (object): Detector-specific manifest fields.
 
         Returns:
             Self: Manifest with shared run summary and detector-specific fields.

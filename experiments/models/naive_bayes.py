@@ -80,6 +80,9 @@ class NaiveBayesDetector(ExperimentDetector):
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
         """Fit class priors and phrase likelihoods from train sequences.
 
+        Args:
+            train_sequences (list[TemplateSequence]): Training split sequences.
+
         Raises:
             ValueError: If the training split does not contain both classes.
         """
@@ -226,6 +229,10 @@ class NaiveBayesDetector(ExperimentDetector):
 
 def _phrase_rank(*, score: float, phrase: str) -> tuple[float, float, int, str]:
     """Prefer informative higher-order phrases in explanation outputs.
+
+    Args:
+        score (float): Phrase informativeness score.
+        phrase (str): Phrase to rank among explanation candidates.
 
     Returns:
         tuple[float, float, int, str]: Sort key favoring informative phrases.

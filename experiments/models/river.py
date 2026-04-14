@@ -91,6 +91,9 @@ class RiverDetector(ExperimentDetector):
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
         """Train the River classifier over the training split.
 
+        Args:
+            train_sequences (list[TemplateSequence]): Training split sequences.
+
         Raises:
             ValueError: If the training split does not contain both classes.
         """
@@ -115,6 +118,12 @@ class RiverDetector(ExperimentDetector):
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
         """Return anomalous posterior probability from the River classifier.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            PredictionOutcome: Predicted label and anomalous posterior score.
 
         Raises:
             ValueError: If the detector has not been fit yet.

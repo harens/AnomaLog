@@ -121,6 +121,13 @@ def run_model(
 ) -> ModelRunSummary:
     """Fit the configured detector and stream predictions to disk.
 
+    Args:
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
+        config (ExperimentModelConfig): Model config used to build the detector.
+        predictions_path (Path): Output path for streamed JSONL predictions.
+        logger (logging.Logger | None): Optional logger for progress messages.
+
     Returns:
         ModelRunSummary: Metrics, manifest, and sequence summary for the run.
     """
@@ -148,6 +155,10 @@ def iter_train_sequences(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
 ) -> Iterator[TemplateSequence]:
     """Yield only training sequences from a sequence factory.
+
+    Args:
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
 
     Yields:
         TemplateSequence: Sequences belonging to the training split.
@@ -179,6 +190,13 @@ def stream_predictions(
     logger: logging.Logger | None,
 ) -> RunMetrics:
     """Write predictions incrementally while accumulating metrics.
+
+    Args:
+        detector (ExperimentDetector): Fitted detector to evaluate.
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
+        predictions_path (Path): Output path for streamed JSONL predictions.
+        logger (logging.Logger | None): Optional logger for progress messages.
 
     Returns:
         RunMetrics: Accumulated metrics for the streamed predictions.

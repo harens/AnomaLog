@@ -76,6 +76,9 @@ class TemplateFrequencyDetector(ExperimentDetector):
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
         """Fit template counts from train sequences.
 
+        Args:
+            train_sequences (list[TemplateSequence]): Training split sequences.
+
         Raises:
             ValueError: If the training split contains zero events.
         """
@@ -157,6 +160,13 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
 
 def _quantile(sorted_values: list[float], q: float) -> float:
     """Return the inclusive quantile from a pre-sorted value list.
+
+    Args:
+        sorted_values (list[float]): Sorted values to sample from.
+        q (float): Inclusive quantile in the range `[0.0, 1.0]`.
+
+    Returns:
+        float: Quantile value from the sorted input list.
 
     Raises:
         ValueError: If `sorted_values` is empty.

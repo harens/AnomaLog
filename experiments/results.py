@@ -42,6 +42,9 @@ class ResultPaths:
     def for_bundle(cls, bundle: ExperimentBundle) -> ResultPaths:
         """Create deterministic result paths for the experiment bundle.
 
+        Args:
+            bundle (ExperimentBundle): Resolved experiment bundle.
+
         Returns:
             ResultPaths: Deterministic run artifact paths for the bundle.
         """
@@ -67,6 +70,9 @@ class ResultPaths:
 
 def prepare_result_paths(bundle: ExperimentBundle) -> ResultPaths:
     """Create deterministic result paths for the experiment bundle.
+
+    Args:
+        bundle (ExperimentBundle): Resolved experiment bundle.
 
     Returns:
         ResultPaths: Deterministic run artifact paths for the bundle.
@@ -107,6 +113,9 @@ def write_run_outputs(
 def stable_fingerprint(payload: object) -> str:
     """Return a deterministic fingerprint for a JSON-serializable payload.
 
+    Args:
+        payload (object): JSON-serializable payload to fingerprint.
+
     Returns:
         str: SHA-256 fingerprint for the serialized payload.
     """
@@ -125,6 +134,13 @@ def build_dataset_manifest(
     result_paths: ResultPaths,
 ) -> dict[str, object]:
     """Build a provenance manifest for the preprocessed dataset and sequences.
+
+    Args:
+        bundle (ExperimentBundle): Resolved experiment bundle.
+        templated (TemplatedDataset): Built templated dataset used for the run.
+        sequences (SequenceBuilder): Sequence builder used for the detector input.
+        model_summary (ModelRunSummary): Detector outputs and summary metrics.
+        result_paths (ResultPaths): Materialized artifact paths for the run.
 
     Returns:
         dict[str, object]: Dataset and sequence provenance manifest.
@@ -181,6 +197,11 @@ def build_sequence_split_summary(
 ) -> SequenceSplitSummary:
     """Describe requested versus effective split semantics for one run.
 
+    Args:
+        sequences (SequenceBuilder): Sequence builder whose split semantics are
+            being summarized.
+        sequence_summary (SequenceSummary): Aggregate split and label counts.
+
     Returns:
         SequenceSplitSummary: Requested and effective split metrics.
     """
@@ -198,6 +219,10 @@ def build_environment_metadata(
     result_paths: ResultPaths,
 ) -> dict[str, object]:
     """Capture the local environment for reproducibility and provenance.
+
+    Args:
+        bundle (ExperimentBundle): Resolved experiment bundle.
+        result_paths (ResultPaths): Materialized artifact paths for the run.
 
     Returns:
         dict[str, object]: Serializable environment metadata.
@@ -227,6 +252,9 @@ def build_environment_metadata(
 
 def sha256_for_file(path: Path) -> str:
     """Hash a file without loading it all into memory.
+
+    Args:
+        path (Path): File path to hash.
 
     Returns:
         str: SHA-256 hex digest for the file contents.

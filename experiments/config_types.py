@@ -53,6 +53,9 @@ class LocalDirSourceConfig(
     def build(self, *, repo_root: Path) -> LocalDirSource:
         """Build a local-directory dataset source.
 
+        Args:
+            repo_root (Path): Repository root used to resolve relative source paths.
+
         Returns:
             LocalDirSource: Runtime local-directory source.
         """
@@ -63,6 +66,9 @@ class LocalDirSourceConfig(
 
     def manifest_entry(self, *, repo_root: Path) -> dict[str, str | None]:
         """Return a stable source manifest entry.
+
+        Args:
+            repo_root (Path): Repository root used to resolve relative source paths.
 
         Returns:
             dict[str, str | None]: Manifest entry for the local directory source.
@@ -88,6 +94,9 @@ class LocalZipSourceConfig(
     def build(self, *, repo_root: Path) -> LocalZipSource:
         """Build a local-zip dataset source.
 
+        Args:
+            repo_root (Path): Repository root used to resolve relative source paths.
+
         Returns:
             LocalZipSource: Runtime local-zip source.
         """
@@ -99,6 +108,9 @@ class LocalZipSourceConfig(
 
     def manifest_entry(self, *, repo_root: Path) -> dict[str, str | None]:
         """Return a stable source manifest entry.
+
+        Args:
+            repo_root (Path): Repository root used to resolve relative source paths.
 
         Returns:
             dict[str, str | None]: Manifest entry for the local zip source.
@@ -125,6 +137,9 @@ class RemoteZipSourceConfig(
     def build(self, *, repo_root: Path) -> RemoteZipSource:
         """Build a remote-zip dataset source.
 
+        Args:
+            repo_root (Path): Repository root. Unused for remote zip sources.
+
         Returns:
             RemoteZipSource: Runtime remote-zip source.
         """
@@ -137,6 +152,9 @@ class RemoteZipSourceConfig(
 
     def manifest_entry(self, *, repo_root: Path) -> dict[str, str | None]:
         """Return a stable source manifest entry.
+
+        Args:
+            repo_root (Path): Repository root. Unused for remote zip sources.
 
         Returns:
             dict[str, str | None]: Manifest entry for the remote zip source.
@@ -203,6 +221,9 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
     def resolve(self, *, repo_root: Path) -> CachePathsConfig:
         """Resolve cache/data roots relative to the repository root.
 
+        Args:
+            repo_root (Path): Repository root used to resolve relative cache paths.
+
         Returns:
             CachePathsConfig: Concrete cache paths resolved against the repo root.
         """
@@ -237,6 +258,10 @@ class SequenceConfigBase(
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured sequence view from a templated dataset.
 
+        Args:
+            templated (TemplatedDataset): Built templated dataset to group into
+                sequences.
+
         Returns:
             SequenceBuilder: Sequence builder with grouping and split settings applied.
         """
@@ -251,6 +276,10 @@ class SequenceConfigBase(
 
     def _apply_split_settings(self, sequences: SequenceBuilder) -> SequenceBuilder:
         """Build a configured sequence view from a templated dataset.
+
+        Args:
+            sequences (SequenceBuilder): Grouped sequence builder to apply shared
+                split settings to.
 
         Returns:
             SequenceBuilder: Sequence builder with shared split settings applied.
@@ -271,6 +300,9 @@ class EntitySequenceConfig(
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured entity-grouped sequence view.
 
+        Args:
+            templated (TemplatedDataset): Built templated dataset to group by entity.
+
         Returns:
             SequenceBuilder: Entity-grouped builder with split settings applied.
         """
@@ -281,6 +313,9 @@ class EntitySequenceConfig(
 
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Apply entity grouping.
+
+        Args:
+            templated (TemplatedDataset): Built templated dataset to group by entity.
 
         Returns:
             SequenceBuilder: Entity-grouped sequence builder.
@@ -302,6 +337,10 @@ class FixedSequenceConfig(
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Apply fixed-window grouping.
 
+        Args:
+            templated (TemplatedDataset): Built templated dataset to group into
+                fixed windows.
+
         Returns:
             SequenceBuilder: Fixed-window sequence builder.
         """
@@ -320,6 +359,10 @@ class TimeSequenceConfig(
 
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Apply time-window grouping.
+
+        Args:
+            templated (TemplatedDataset): Built templated dataset to group into
+                time windows.
 
         Returns:
             SequenceBuilder: Time-window sequence builder.
@@ -380,6 +423,9 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
 
     def source_summary(self, *, repo_root: Path) -> dict[str, str | None]:
         """Return a stable source summary for manifests.
+
+        Args:
+            repo_root (Path): Repository root used to resolve relative source paths.
 
         Returns:
             dict[str, str | None]: Stable JSON-serializable source summary.
@@ -449,6 +495,9 @@ def _path_to_string(obj: object) -> str:
 
 def serialize_config(value: object) -> dict[str, object]:
     """Convert config structs into builtins for hashing and manifests.
+
+    Args:
+        value (object): Config object or struct to serialize.
 
     Returns:
         dict[str, object]: JSON-like builtins representation of the config.

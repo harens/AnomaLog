@@ -177,6 +177,9 @@ def _decode_model_config(obj: object) -> ExperimentModelConfig:
 def load_experiment_bundle(run_config_path: Path) -> ExperimentBundle:
     """Load a run config and its referenced dataset/model configs.
 
+    Args:
+        run_config_path (Path): Run config TOML path to resolve.
+
     Returns:
         ExperimentBundle: Fully resolved run, dataset, and model configuration.
     """

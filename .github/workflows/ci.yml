@@ -67,7 +67,7 @@ jobs:
         run: uv sync --frozen --all-groups
 
       - name: Docstring lint
-        run: uv run pydoclint --style=google anomalog
+        run: uv run pydoclint --style=google anomalog experiments
 
   pytest:
     runs-on: ubuntu-latest

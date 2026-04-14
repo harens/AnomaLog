@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 def run_experiment(config_path: Path, *, force: bool = False) -> Path:
     """Run a single experiment from a TOML config path.
 
+    Args:
+        config_path (Path): Run config TOML path to execute.
+        force (bool): Whether to replace an existing deterministic result
+            directory.
+
     Returns:
         Path: Deterministic run directory containing the written artifacts.
 
