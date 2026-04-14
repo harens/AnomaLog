@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.0](https://github.com/harens/AnomaLog/compare/v0.2.0...v0.3.0) (2026-04-14)
+
+
+### Features
+
+* **experiments:** add config-driven detector runs ([c63ef3d](https://github.com/harens/AnomaLog/commit/c63ef3de1e519765ae1518a27771f3a97dc80e8d))
+* **registry:** add named resolvers for built-in presets and parsers ([ae41996](https://github.com/harens/AnomaLog/commit/ae419964dc0b6b7b0be3569bb8381e81ca0f8826))
+* **representations:** add model-facing sequence views ([076b6ff](https://github.com/harens/AnomaLog/commit/076b6ffd9dd7c7cd9a3e2330e5e9cffd61387f46))
+
+
+### Bug Fixes
+
+* **ci:** downgrade Python version to 3.13 for CI jobs ([17a5762](https://github.com/harens/AnomaLog/commit/17a576270e4a7c80a26d41ae51133cb804488ad7))
+* **ci:** include all groups including experiments ([399f6ab](https://github.com/harens/AnomaLog/commit/399f6aba251deaa90b57ea8e75b87613de9dd343))
+* **ci:** pydoclint docstring-parser error ([9ca4ed8](https://github.com/harens/AnomaLog/commit/9ca4ed84af5a79017fcec2ff104411d852938d12))
+* **labels:** treat non-zero anomaly labels as anomalous ([cfc979b](https://github.com/harens/AnomaLog/commit/cfc979bf03a1b506933901d0cf5d356f457c6b21))
+* **parquet:** tolerate vanished output dirs during rewrite ([6bfb1ae](https://github.com/harens/AnomaLog/commit/6bfb1ae1a28bb0b91f22335bff207c4b02a42c89))
+* **tooling:** scope pre-commit pydoclint ([34e908b](https://github.com/harens/AnomaLog/commit/34e908bde9d36d1d860dd1e286d996f6d33e3814))
+
+
+### Documentation
+
+* **api:** align docstrings with pydoclint ([086361e](https://github.com/harens/AnomaLog/commit/086361e2c99e798cc6f6a71b51e4a3e1bc7321c3))
+* **experiments:** include arg docstrings ([cc00529](https://github.com/harens/AnomaLog/commit/cc00529fd9fdf9b69cc0b536f22ca652bfecb07b))
+* restructure documentation with new getting started and development guides, remove outdated quickstart ([c538f48](https://github.com/harens/AnomaLog/commit/c538f484327069ca5cac3fc614e3d43370e8abf5))
+* rewrite onboarding around representations and experiments ([e0a7c84](https://github.com/harens/AnomaLog/commit/e0a7c84349985bba334c2bbda7e953919242470b))
+* **sequences:** fix docstring for windows ([9547a8f](https://github.com/harens/AnomaLog/commit/9547a8f5acd76f22726b3767f311e83733a96e9e))
+* **tests:** include arg docstrings ([bece668](https://github.com/harens/AnomaLog/commit/bece668eaedfd77c1497570ea67b9f603133c587))
+
 ## [0.2.0](https://github.com/harens/AnomaLog/compare/v0.1.0...v0.2.0) (2026-03-31)
 
 
