@@ -69,6 +69,9 @@ class _LenientParser(_Parser):
 def _make_sink(tmp_path: Path) -> ParquetStructuredSink:
     """Create a sink rooted entirely inside the per-test temp directory.
 
+    Args:
+        tmp_path (Path): Temporary directory backing the sink cache roots.
+
     Returns:
         ParquetStructuredSink: Sink backed only by the test temp directory.
     """
@@ -112,6 +115,9 @@ def _write_rows(
 
 def _raw_line(row: StructuredLine) -> str:
     """Serialize a fixture row into the compact format consumed by `_Parser`.
+
+    Args:
+        row (StructuredLine): Structured row to serialize.
 
     Returns:
         str: Pipe-delimited raw line for the test parser.

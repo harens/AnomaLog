@@ -75,6 +75,9 @@ def _model_key_phrases_by_class(
 def _prepare_run_tree(tmp_path: Path) -> Path:
     """Copy the checked-in run fixture files into a writable temp tree.
 
+    Args:
+        tmp_path (Path): Temporary directory to populate with fixture configs.
+
     Returns:
         Path: Run config path inside the prepared temp tree.
     """

@@ -30,6 +30,13 @@ def structured_line(
 ) -> StructuredLine:
     """Build a concise StructuredLine fixture.
 
+    Args:
+        line_order (int): Stable line order to assign to the fixture row.
+        timestamp_unix_ms (int | None): Optional timestamp for the fixture row.
+        entity_id (str | None): Optional entity identifier for the fixture row.
+        untemplated_message_text (str): Raw message text for the fixture row.
+        anomalous (int | None): Optional anomaly label for the fixture row.
+
     Returns:
         StructuredLine: Structured row with the supplied field values.
     """
@@ -58,6 +65,12 @@ def label_lookup(
 ) -> AnomalyLabelLookup:
     """Build an AnomalyLabelLookup with overrideable callbacks.
 
+    Args:
+        label_for_line (Callable[[int], int | None] | None): Optional callback
+            for line-level labels.
+        label_for_group (Callable[[str], int | None] | None): Optional callback
+            for group-level labels.
+
     Returns:
         AnomalyLabelLookup: Lookup with overridable line and group callbacks.
     """
@@ -76,6 +89,9 @@ class NullStructuredParser(StructuredParser):
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         """Discard all input lines.
+
+        Args:
+            raw_line (str): Raw line to discard.
 
         Returns:
             BaseStructuredLine | None: Always `None`.
@@ -109,6 +125,9 @@ class InMemoryStructuredSink(StructuredSink):
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Yield stored rows, ignoring column projection.
+
+        Args:
+            columns (Sequence[str] | None): Ignored projected columns request.
 
         Returns:
             Callable[[], Iterator[StructuredLine]]: Callable yielding stored rows.
@@ -151,6 +170,9 @@ class InMemoryStructuredSink(StructuredSink):
         label_for_group: Callable[[str], int | None],
     ) -> EntityLabelCounts:
         """Count normal and total entities using the provided label lookup.
+
+        Args:
+            label_for_group (Callable[[str], int | None]): Entity label lookup.
 
         Returns:
             EntityLabelCounts: Distinct normal and total entity counts.
@@ -202,6 +224,10 @@ class InMemoryStructuredSink(StructuredSink):
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
         """Yield sliding row windows over the stored rows.
 
+        Args:
+            window_size (int): Number of rows in each emitted window.
+            step_size (int | None): Optional step between successive windows.
+
         Returns:
             Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding
                 fixed-size windows over stored rows.
@@ -222,6 +248,10 @@ class InMemoryStructuredSink(StructuredSink):
         step_span_ms: int | None = None,
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
         """Yield a single window containing all rows.
+
+        Args:
+            time_span_ms (int): Requested time span in milliseconds. Ignored.
+            step_span_ms (int | None): Requested step span in milliseconds. Ignored.
 
         Returns:
             Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding a

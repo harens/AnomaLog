@@ -31,6 +31,9 @@ EXPECTED_TEMPLATE_COUNT = 3
 def _build_local_bgl_archive(zip_path: Path) -> list[str]:
     """Package the checked-in BGL fixture into the local archive shape users fetch.
 
+    Args:
+        zip_path (Path): Destination archive path to create.
+
     Returns:
         list[str]: Raw log lines stored in the fixture archive.
     """
@@ -42,6 +45,10 @@ def _build_local_bgl_archive(zip_path: Path) -> list[str]:
 
 def _dataset_from_local_archive(tmp_path: Path, archive_path: Path) -> DatasetSpec:
     """Create a realistic fluent dataset spec for a locally supplied BGL bundle.
+
+    Args:
+        tmp_path (Path): Temporary directory whose cache roots should be used.
+        archive_path (Path): Local fixture archive to build the dataset from.
 
     Returns:
         DatasetSpec: Fluent dataset spec pointing at the local archive fixture.
@@ -67,6 +74,9 @@ def _rows_sorted_by_line_order(dataset: TemplatedDataset) -> list[StructuredLine
     iterator is deterministic but not guaranteed to match original file order.
     `line_order` is the persisted source-of-truth for reconstructing that order.
 
+    Args:
+        dataset (TemplatedDataset): Built dataset whose rows should be re-sorted.
+
     Returns:
         list[StructuredLine]: Persisted rows sorted back into source file order.
     """
@@ -79,6 +89,10 @@ def _templates_by_message(
     rows: Iterable[StructuredLine],
 ) -> dict[str, str]:
     """Infer one template per raw message text for readable grouping assertions.
+
+    Args:
+        templated (TemplatedDataset): Built dataset providing template inference.
+        rows (Iterable[StructuredLine]): Structured rows to index by message text.
 
     Returns:
         dict[str, str]: Template text keyed by original raw message.
@@ -95,6 +109,9 @@ def _sequences_by_entity(
     sequences: Iterable[TemplateSequence],
 ) -> dict[str, TemplateSequence]:
     """Index entity sequences by entity id for direct assertions.
+
+    Args:
+        sequences (Iterable[TemplateSequence]): Entity-grouped sequences to index.
 
     Returns:
         dict[str, TemplateSequence]: Entity-id keyed sequence mapping.
