@@ -51,6 +51,24 @@ jobs:
       - name: Type check
         run: uv run ty check
 
+  pydoclint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync Dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Docstring lint
+        run: uv run pydoclint --style=google anomalog
+
   pytest:
     runs-on: ubuntu-latest
     strategy:
