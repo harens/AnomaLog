@@ -72,8 +72,12 @@ def _model_key_phrases_by_class(
     }
 
 
-def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> None:
-    """Naive Bayes runs should write phrase-aware predictions and model metadata."""
+def _prepare_run_tree(tmp_path: Path) -> Path:
+    """Copy the checked-in run fixture files into a writable temp tree.
+
+    Returns:
+        Path: Run config path inside the prepared temp tree.
+    """
     run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_nb_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset_nb.toml"
@@ -88,6 +92,12 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
     shutil.copy2(FIXTURE_ROOT / "tiny_nb_run.toml", run_config)
     shutil.copy2(FIXTURE_ROOT / "tiny_dataset_nb.toml", dataset_config)
     shutil.copy2(FIXTURE_ROOT / "naive_bayes.toml", model_config)
+    return run_config
+
+
+def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> None:
+    """Naive Bayes runs should write phrase-aware predictions and model metadata."""
+    run_config = _prepare_run_tree(tmp_path)
 
     run_dir = run_experiment(run_config)
     rerun_dir = run_experiment(run_config, force=True)

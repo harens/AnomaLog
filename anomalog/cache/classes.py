@@ -12,12 +12,19 @@ from prefect.context import TaskRunContext
 def class_source(cls: type) -> str:
     """Return source code string for a class or a fallback identifier.
 
-    >>> class _Tmp:
-    ...     def foo(self): ...
-    ...
-    >>> src = class_source(_Tmp)
-    >>> isinstance(src, str) and len(src) > 0
-    True
+    Args:
+        cls (type): Class whose source should be inspected.
+
+    Examples:
+        >>> class _Tmp:
+        ...     def foo(self): ...
+        ...
+        >>> src = class_source(_Tmp)
+        >>> isinstance(src, str) and len(src) > 0
+        True
+
+    Returns:
+        str: Source code for the class, or a fallback module-derived identifier.
     """
     try:
         return inspect.getsource(cls)
@@ -38,18 +45,28 @@ def cache_class_key_fn(context: TaskRunContext, params: dict[str, Any]) -> str: 
     Builtins and routines are ignored, and the result is independent of
     parameter ordering.
 
-    >>> class _A:
-    ...     pass
-    ...
-    >>> class _B:
-    ...     pass
-    ...
-    >>> first = cache_class_key_fn(None, {"a": _A(), "b": _B(), "n": 1, "fn": len})
-    >>> second = cache_class_key_fn(None, {"b": _B(), "a": _A()})
-    >>> first == second
-    True
-    >>> len(first)
-    64
+    Args:
+        context (TaskRunContext): Prefect task context passed by the cache-key
+            interface.
+        params (dict[str, Any]): Task parameters to scan for non-builtin class
+            instances.
+
+    Examples:
+        >>> class _A:
+        ...     pass
+        ...
+        >>> class _B:
+        ...     pass
+        ...
+        >>> first = cache_class_key_fn(None, {"a": _A(), "b": _B(), "n": 1, "fn": len})
+        >>> second = cache_class_key_fn(None, {"b": _B(), "a": _A()})
+        >>> first == second
+        True
+        >>> len(first)
+        64
+
+    Returns:
+        str: Stable SHA-256 hash derived from the encountered class sources.
     """
     class_sources: list[str] = []
     for v in params.values():

@@ -2,11 +2,13 @@
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 from prefect.logging import disable_run_logger
+from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import (
@@ -17,10 +19,10 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
 )
+from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
     WriterConfig,
-    _iter_record_batches,
     extract_structured_components,
 )
 from tests.unit.helpers import structured_line
@@ -29,8 +31,9 @@ from tests.unit.helpers import structured_line
 class _Parser(StructuredParser):
     """Test-only parser for compact fixture rows written to the raw log file."""
 
-    name = "test"
+    name: ClassVar[str] = "test"
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         timestamp_s, entity_id, message, anomalous_s = raw_line.split("|", maxsplit=3)
         return BaseStructuredLine(
@@ -44,8 +47,9 @@ class _Parser(StructuredParser):
 class _NullParser(StructuredParser):
     """Parser that drops every line for empty-output extraction tests."""
 
-    name = "null"
+    name: ClassVar[str] = "null"
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         del raw_line
         return None
@@ -54,6 +58,7 @@ class _NullParser(StructuredParser):
 class _LenientParser(_Parser):
     """Parser variant that treats malformed lines as skipped rows."""
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         try:
             return super().parse_line(raw_line)
@@ -62,7 +67,11 @@ class _LenientParser(_Parser):
 
 
 def _make_sink(tmp_path: Path) -> ParquetStructuredSink:
-    """Create a sink rooted entirely inside the per-test temp directory."""
+    """Create a sink rooted entirely inside the per-test temp directory.
+
+    Returns:
+        ParquetStructuredSink: Sink backed only by the test temp directory.
+    """
     cache_paths = CachePathsConfig(
         data_root=tmp_path / "data",
         cache_root=tmp_path / "cache",
@@ -102,7 +111,11 @@ def _write_rows(
 
 
 def _raw_line(row: StructuredLine) -> str:
-    """Serialize a fixture row into the compact format consumed by `_Parser`."""
+    """Serialize a fixture row into the compact format consumed by `_Parser`.
+
+    Returns:
+        str: Pipe-delimited raw line for the test parser.
+    """
     return "|".join(
         [
             "" if row.timestamp_unix_ms is None else str(row.timestamp_unix_ms),
@@ -515,8 +528,9 @@ def test_iter_record_batches_skips_unparseable_rows_and_populates_null_entity_bu
     )
 
     with disable_run_logger():
+        iter_record_batches = vars(writer_worker)["_iter_record_batches"]
         batches = list(
-            _iter_record_batches(
+            iter_record_batches(
                 raw_input_path,
                 _LenientParser(),
                 cfg=WriterConfig(batch_rows=10, log_every_rows=1),

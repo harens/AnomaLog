@@ -20,7 +20,11 @@ from rich.progress import (
 
 
 def make_bounded_progress() -> Progress:
-    """Create a progress bar suitable for bounded downloads."""
+    """Create a progress bar suitable for bounded downloads.
+
+    Returns:
+        Progress: Rich progress instance configured for bounded transfers.
+    """
     return Progress(
         TextColumn("[bold blue]{task.description}"),
         BarColumn(),
@@ -35,7 +39,14 @@ def make_bounded_progress() -> Progress:
 
 
 def make_spinner_progress(unit: str = "lines processed") -> Progress:
-    """Create a spinner-style progress display for streaming tasks."""
+    """Create a spinner-style progress display for streaming tasks.
+
+    Args:
+        unit (str): Unit label shown beside the processed item count.
+
+    Returns:
+        Progress: Rich progress instance configured for streaming workloads.
+    """
     return Progress(
         TextColumn("[bold blue]{task.description}"),
         SpinnerColumn(),
@@ -52,19 +63,29 @@ def verify_md5(
 ) -> None:
     """Validate a file's MD5 checksum, raising on mismatch.
 
-    >>> tmp = Path("/tmp/test_md5.bin")
-    >>> _ = tmp.write_bytes(b"abc")
-    >>> class _Noop:
-    ...     def __enter__(self): return self
-    ...     def __exit__(self, *args): return False
-    ...     def add_task(self, *_, **__): return 0
-    ...     def update(self, *_, **__): return None
-    >>> verify_md5(
-    ...     tmp,
-    ...     hashlib.md5(b"abc").hexdigest(),
-    ...     progress_factory=_Noop,
-    ... )
-    >>> tmp.unlink()
+    Args:
+        file_path (Path): File whose checksum should be verified.
+        expected_hex (str): Expected lowercase hexadecimal MD5 digest.
+        progress_factory (Callable[[], Progress]): Factory for the progress
+            display used while reading the file.
+
+    Examples:
+        >>> tmp = Path("/tmp/test_md5.bin")
+        >>> _ = tmp.write_bytes(b"abc")
+        >>> class _Noop:
+        ...     def __enter__(self): return self
+        ...     def __exit__(self, *args): return False
+        ...     def add_task(self, *_, **__): return 0
+        ...     def update(self, *_, **__): return None
+        >>> verify_md5(
+        ...     tmp,
+        ...     hashlib.md5(b"abc").hexdigest(),
+        ...     progress_factory=_Noop,
+        ... )
+        >>> tmp.unlink()
+
+    Raises:
+        ValueError: If the computed checksum does not match `expected_hex`.
     """
     try:
         logger = get_run_logger()
@@ -104,7 +125,15 @@ def verify_md5(
 
 
 def extract_zip(zip_path: Path, dst_dir: Path) -> None:
-    """Extract a zip file to a destination directory after integrity check."""
+    """Extract a zip file to a destination directory after integrity check.
+
+    Args:
+        zip_path (Path): Archive path to extract.
+        dst_dir (Path): Destination directory for extracted contents.
+
+    Raises:
+        zipfile.BadZipFile: If the archive fails the integrity check.
+    """
     logger = get_run_logger()
     logger.info("Extracting %s to %s", zip_path, dst_dir)
 

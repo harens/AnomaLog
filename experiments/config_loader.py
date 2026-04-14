@@ -175,7 +175,11 @@ def _decode_model_config(obj: object) -> ExperimentModelConfig:
 
 
 def load_experiment_bundle(run_config_path: Path) -> ExperimentBundle:
-    """Load a run config and its referenced dataset/model configs."""
+    """Load a run config and its referenced dataset/model configs.
+
+    Returns:
+        ExperimentBundle: Fully resolved run, dataset, and model configuration.
+    """
     resolved_run_path = run_config_path.resolve()
     experiments_root = _find_experiments_root(resolved_run_path)
     repo_root = experiments_root.parent

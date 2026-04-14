@@ -9,11 +9,8 @@ from prefect.assets import Asset, AssetProperties
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import asset_from_local_path, materialize
-from anomalog.cache.files import (
-    AssetDepsFingerprintPolicy,
-    _asset_file_path,
-    _try_file_path_from_asset_url,
-)
+from anomalog.cache import files as cache_files
+from anomalog.cache.files import AssetDepsFingerprintPolicy
 from tests.unit.helpers import task_run_context
 
 ZeroArgFn = Callable[[], str]
@@ -45,7 +42,8 @@ def _skip_materialize(*_args: object, **_kwargs: object) -> MaterializeDecorator
 
 def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
     """File URLs should decode path segments and accept the localhost variant."""
-    path = _try_file_path_from_asset_url("file://localhost/tmp/a%20b.txt")
+    try_file_path_from_asset_url = vars(cache_files)["_try_file_path_from_asset_url"]
+    path = try_file_path_from_asset_url("file://localhost/tmp/a%20b.txt")
 
     assert path is not None
     assert path.name == "a b.txt"
@@ -56,6 +54,7 @@ def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
     tmp_path: Path,
 ) -> None:
     """Asset path resolution should only succeed for file-backed assets."""
+    asset_file_path = vars(cache_files)["_asset_file_path"]
     local_path = tmp_path / "demo.txt"
     asset = asset_from_local_path(local_path)
     fallback_asset = _FallbackAsset(
@@ -72,10 +71,10 @@ def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
         properties=AssetProperties(url="s3://bucket/demo.txt"),
     )
 
-    assert _asset_file_path(asset) == local_path
-    assert _asset_file_path(fallback_asset) == local_path
-    assert _asset_file_path(missing_url_asset) is None
-    assert _asset_file_path(remote) is None
+    assert asset_file_path(asset) == local_path
+    assert asset_file_path(fallback_asset) == local_path
+    assert asset_file_path(missing_url_asset) is None
+    assert asset_file_path(remote) is None
 
 
 def test_asset_deps_fingerprint_policy_uses_placeholder_for_no_upstream_assets(

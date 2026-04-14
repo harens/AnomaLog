@@ -57,11 +57,20 @@ class DatasetSpec:
         return replace(self, cache_paths=cache_paths)
 
     def build(self) -> TemplatedDataset:
-        """Build and return the templated dataset view."""
+        """Build and return the templated dataset view.
+
+        Returns:
+            TemplatedDataset: Built dataset with structured rows, labels, and
+                templates attached.
+        """
         return build_templated_dataset(self._compile())
 
     def clear_cache(self) -> None:
-        """Delete all local cached artifacts for this dataset."""
+        """Delete all local cached artifacts for this dataset.
+
+        Raises:
+            ValueError: If the dataset name is empty.
+        """
         if not self.dataset_name:
             msg = "DatasetSpec.clear_cache() requires a non-empty dataset name."
             raise ValueError(msg)

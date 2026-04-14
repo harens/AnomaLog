@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from experiments import ConfigError
 from experiments.models.base import (
@@ -32,7 +32,11 @@ class NaiveBayesModelConfig(
     anomalous_posterior_threshold: float = 0.5
 
     def __post_init__(self) -> None:
-        """Validate detector-specific model settings."""
+        """Validate detector-specific model settings.
+
+        Raises:
+            ConfigError: If detector-specific settings are invalid.
+        """
         self._validate_phrase_features()
         if self.top_k_phrases < 1:
             msg = "model.top_k_phrases must be at least 1."
@@ -42,7 +46,11 @@ class NaiveBayesModelConfig(
             raise ConfigError(msg)
 
     def build_detector(self) -> NaiveBayesDetector:
-        """Construct the configured Naive Bayes detector."""
+        """Construct the configured Naive Bayes detector.
+
+        Returns:
+            NaiveBayesDetector: Configured detector instance.
+        """
         return NaiveBayesDetector(
             smoothing=self.smoothing,
             phrase_ngram_min=self.phrase_ngram_min,
@@ -57,7 +65,7 @@ class NaiveBayesModelConfig(
 class NaiveBayesDetector(ExperimentDetector):
     """Multinomial Naive Bayes classifier over extracted template phrases."""
 
-    detector_name = "naive_bayes"
+    detector_name: ClassVar[str] = "naive_bayes"
     smoothing: float
     phrase_ngram_min: int
     phrase_ngram_max: int
@@ -70,7 +78,11 @@ class NaiveBayesDetector(ExperimentDetector):
     vocabulary: set[str] = field(default_factory=set)
 
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
-        """Fit class priors and phrase likelihoods from train sequences."""
+        """Fit class priors and phrase likelihoods from train sequences.
+
+        Raises:
+            ValueError: If the training split does not contain both classes.
+        """
         class_counts: Counter[int] = Counter()
         phrase_counts_by_class = {0: Counter(), 1: Counter()}
         total_phrases_by_class = {0: 0, 1: 0}
@@ -213,7 +225,11 @@ class NaiveBayesDetector(ExperimentDetector):
 
 
 def _phrase_rank(*, score: float, phrase: str) -> tuple[float, float, int, str]:
-    """Prefer informative higher-order phrases in explanation outputs."""
+    """Prefer informative higher-order phrases in explanation outputs.
+
+    Returns:
+        tuple[float, float, int, str]: Sort key favoring informative phrases.
+    """
     token_count = phrase.count(" ") + 1
     return (score * token_count, score, token_count, phrase)
 

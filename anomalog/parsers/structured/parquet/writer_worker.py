@@ -58,10 +58,18 @@ STRUCTURED_BATCH_SCHEMA = pa.schema(
 def _stable_bucket(entity_id: str, *, buckets: int) -> int:
     """Stable, deterministic hash bucket for an entity ID.
 
-    >>> _stable_bucket("foo", buckets=4) == _stable_bucket("foo", buckets=4)
-    True
-    >>> 0 <= _stable_bucket("bar", buckets=3) < 3
-    True
+    Args:
+        entity_id (str): Entity identifier to hash.
+        buckets (int): Number of hash buckets to map into.
+
+    Examples:
+        >>> _stable_bucket("foo", buckets=4) == _stable_bucket("foo", buckets=4)
+        True
+        >>> 0 <= _stable_bucket("bar", buckets=3) < 3
+        True
+
+    Returns:
+        int: Stable hash bucket for the entity identifier.
     """
     digest = blake2s(entity_id.encode("utf-8"), digest_size=4).digest()
     return int.from_bytes(digest, "big") % buckets
@@ -73,7 +81,16 @@ def _iter_record_batches(
     *,
     cfg: WriterConfig,
 ) -> Generator[pa.RecordBatch, None, None]:
-    """Stream record batches parsed from the raw log file."""
+    """Stream record batches parsed from the raw log file.
+
+    Args:
+        raw_input_path (Path): Input raw log file to parse.
+        parser (StructuredParser): Structured parser used for each raw line.
+        cfg (WriterConfig): Batch and partitioning configuration for the writer.
+
+    Yields:
+        pa.RecordBatch: Structured rows accumulated into parquet-ready batches.
+    """
     logger = get_run_logger()
     rows: list[dict] = []
     total_rows = 0
@@ -128,7 +145,18 @@ def extract_structured_components(
     - Hive partitions on entity_id for fast pruning on entity lookups.
     - Order per file follows input order; pick large row groups to keep scans fast.
 
-    Returns True if at least one anomalous row is observed; otherwise False.
+    Args:
+        raw_input_path (Path): Raw log file to parse.
+        parser (StructuredParser): Structured parser used to parse each line.
+        parquet_out_dir (Path): Output directory for the parquet dataset.
+        config (WriterConfig | None): Optional writer configuration override.
+
+    Returns:
+        bool: `True` if at least one anomalous row is observed; otherwise `False`.
+
+    Raises:
+        FileNotFoundError: If `raw_input_path` does not exist.
+        ValueError: If parsing produces no structured rows.
     """
     logger = get_run_logger()
     cfg = config or WriterConfig()

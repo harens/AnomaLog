@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from prefect.logging import disable_run_logger
+from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader, InlineReader
@@ -21,6 +22,7 @@ INLINE_CATEGORY_LABEL = 2
 class _ParquetParser(NullStructuredParser):
     """Compact parser for parquet-backed inline-label tests."""
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         timestamp_s, entity_id, message, anomalous_s = raw_line.split("|", maxsplit=3)
         return BaseStructuredLine(

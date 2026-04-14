@@ -3,6 +3,9 @@
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
+
+from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import AnomalyLabelLookup
@@ -33,10 +36,11 @@ TIME_STEP_MS = 250
 
 @dataclass(frozen=True)
 class _RecordingTemplateParser(TemplateParser):
-    name = "recording"
+    name: ClassVar[str] = "recording"
     seen_lines: list[str]
     dataset_name: str | None = None
 
+    @override
     def inference(
         self,
         unstructured_text: str,

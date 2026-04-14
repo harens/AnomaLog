@@ -54,7 +54,14 @@ class CSVReader(AnomalyLabelReader):
     label_column: str = ANOMALOUS_FIELD
 
     def load(self) -> AnomalyLabelLookup:
-        """Load labels from the configured CSV file into lookup callables."""
+        """Load labels from the configured CSV file into lookup callables.
+
+        Returns:
+            AnomalyLabelLookup: Lookup functions backed by the configured CSV.
+
+        Raises:
+            ValueError: If dataset context is missing or the CSV schema is invalid.
+        """
         if self.dataset_root is None:
             msg = "CSVReader.dataset_root was not set."
             raise ValueError(msg)
@@ -100,7 +107,16 @@ class CSVReader(AnomalyLabelReader):
         dataset_root: Path,
         sink: StructuredSink,
     ) -> CSVReader:
-        """Attach dataset context when missing and return a new reader."""
+        """Attach dataset context when missing and return a new reader.
+
+        Args:
+            dataset_root (Path): Dataset root used to resolve the CSV path.
+            sink (StructuredSink): Structured sink for the dataset. Unused for
+                CSV-backed labels.
+
+        Returns:
+            CSVReader: Reader bound to the supplied dataset root.
+        """
         del sink  # sink not used for CSV-based labels
         if self.dataset_root is not None:
             return self
@@ -114,7 +130,15 @@ class InlineReader(AnomalyLabelReader):
     sink: StructuredSink | None = None
 
     def load(self) -> AnomalyLabelLookup:
-        """Collect inline labels from the sink and return lookup callables."""
+        """Collect inline labels from the sink and return lookup callables.
+
+        Returns:
+            AnomalyLabelLookup: Lookup functions backed by the structured sink.
+
+        Raises:
+            ValueError: If no structured sink has been attached.
+            RuntimeError: If the sink fails while loading inline labels.
+        """
         if self.sink is None:
             msg = "InlineReader requires a StructuredSink to read labels."
             raise ValueError(msg)
@@ -142,7 +166,16 @@ class InlineReader(AnomalyLabelReader):
         dataset_root: Path,
         sink: StructuredSink,
     ) -> InlineReader:
-        """Attach sink context when missing and return a new reader."""
+        """Attach sink context when missing and return a new reader.
+
+        Args:
+            dataset_root (Path): Dataset root for the current build. Unused for
+                inline labels.
+            sink (StructuredSink): Structured sink that provides inline labels.
+
+        Returns:
+            InlineReader: Reader bound to the supplied structured sink.
+        """
         del dataset_root  # not needed for inline reader
         if self.sink is not None:
             return self

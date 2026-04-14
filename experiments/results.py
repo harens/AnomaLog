@@ -40,7 +40,11 @@ class ResultPaths:
 
     @classmethod
     def for_bundle(cls, bundle: ExperimentBundle) -> ResultPaths:
-        """Create deterministic result paths for the experiment bundle."""
+        """Create deterministic result paths for the experiment bundle.
+
+        Returns:
+            ResultPaths: Deterministic run artifact paths for the bundle.
+        """
         combined_config = bundle.normalized_config()
         run_fingerprint = stable_fingerprint(combined_config)
         results_root = (
@@ -62,7 +66,11 @@ class ResultPaths:
 
 
 def prepare_result_paths(bundle: ExperimentBundle) -> ResultPaths:
-    """Create deterministic result paths for the experiment bundle."""
+    """Create deterministic result paths for the experiment bundle.
+
+    Returns:
+        ResultPaths: Deterministic run artifact paths for the bundle.
+    """
     return ResultPaths.for_bundle(bundle)
 
 
@@ -97,7 +105,11 @@ def write_run_outputs(
 
 
 def stable_fingerprint(payload: object) -> str:
-    """Return a deterministic fingerprint for a JSON-serializable payload."""
+    """Return a deterministic fingerprint for a JSON-serializable payload.
+
+    Returns:
+        str: SHA-256 fingerprint for the serialized payload.
+    """
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
         "utf-8",
     )
@@ -112,7 +124,11 @@ def build_dataset_manifest(
     model_summary: ModelRunSummary,
     result_paths: ResultPaths,
 ) -> dict[str, object]:
-    """Build a provenance manifest for the preprocessed dataset and sequences."""
+    """Build a provenance manifest for the preprocessed dataset and sequences.
+
+    Returns:
+        dict[str, object]: Dataset and sequence provenance manifest.
+    """
     sequence_summary = model_summary.sequence_summary
     raw_logs_path = templated.sink.raw_dataset_path.resolve()
     timestamp_min, timestamp_max = templated.sink.timestamp_bounds()
@@ -163,7 +179,11 @@ def build_sequence_split_summary(
     *,
     sequence_summary: SequenceSummary,
 ) -> SequenceSplitSummary:
-    """Describe requested versus effective split semantics for one run."""
+    """Describe requested versus effective split semantics for one run.
+
+    Returns:
+        SequenceSplitSummary: Requested and effective split metrics.
+    """
     return sequences.build_split_summary(
         sequence_count=sequence_summary.sequence_count,
         train_sequence_count=sequence_summary.train_sequence_count,
@@ -177,7 +197,11 @@ def build_environment_metadata(
     bundle: ExperimentBundle,
     result_paths: ResultPaths,
 ) -> dict[str, object]:
-    """Capture the local environment for reproducibility and provenance."""
+    """Capture the local environment for reproducibility and provenance.
+
+    Returns:
+        dict[str, object]: Serializable environment metadata.
+    """
     return {
         "recorded_at_utc": datetime.now(tz=timezone.utc).isoformat(),
         "run_fingerprint": result_paths.run_fingerprint,
@@ -202,7 +226,11 @@ def build_environment_metadata(
 
 
 def sha256_for_file(path: Path) -> str:
-    """Hash a file without loading it all into memory."""
+    """Hash a file without loading it all into memory.
+
+    Returns:
+        str: SHA-256 hex digest for the file contents.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as file_obj:
         for chunk in iter(lambda: file_obj.read(1 << 20), b""):

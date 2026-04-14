@@ -10,6 +10,7 @@ from prefect.assets import Asset
 from prefect.cache_policies import CachePolicy
 from prefect.context import AssetContext, TaskRunContext
 from prefect.utilities.hashing import hash_objects
+from typing_extensions import override
 
 _ALLOWED = re.compile(r"[^A-Za-z0-9._/-]")
 CachePolicyKwarg: TypeAlias = str | int | float | bool | None
@@ -27,11 +28,17 @@ def _try_file_path_from_asset_url(asset_url: str | None) -> Path | None:
       being reversible file URIs. Use Asset.properties.url (or Asset.url if present).
     - We URL-decode percent escapes (e.g. %20) so paths with spaces work.
 
-    >>> _try_file_path_from_asset_url("file:///tmp/example.txt").name
-    'example.txt'
-    >>> _try_file_path_from_asset_url("http://example.com") is None
-    True
+    Examples:
+        >>> _try_file_path_from_asset_url("file:///tmp/example.txt").name
+        'example.txt'
+        >>> _try_file_path_from_asset_url("http://example.com") is None
+        True
 
+    Args:
+        asset_url (str | None): Asset URL to interpret as a local file URI.
+
+    Returns:
+        Path | None: Local path for file URIs, or `None` for non-file URLs.
     """
     if not asset_url:
         return None
@@ -55,14 +62,22 @@ def _file_fingerprint(path: Path) -> tuple[str, int, int, int]:
 
     inode helps detect atomic-save editors that replace the file.
 
-    >>> tmp = Path("/tmp/anomalog_fp.txt")
-    >>> _ = tmp.write_text("hi")
-    >>> fp = _file_fingerprint(tmp)
-    >>> fp[0] == "1" and fp[2] == 2
-    True
-    >>> tmp.unlink()
-    >>> _file_fingerprint(tmp)[0]  # missing file
-    '0'
+    Args:
+        path (Path): File path to fingerprint.
+
+    Examples:
+        >>> tmp = Path("/tmp/anomalog_fp.txt")
+        >>> _ = tmp.write_text("hi")
+        >>> fp = _file_fingerprint(tmp)
+        >>> fp[0] == "1" and fp[2] == 2
+        True
+        >>> tmp.unlink()
+        >>> _file_fingerprint(tmp)[0]  # missing file
+        '0'
+
+    Returns:
+        tuple[str, int, int, int]: Existence flag, nanosecond mtime, byte size,
+            and inode for the file path.
     """
     try:
         st = path.stat()
@@ -78,10 +93,17 @@ def _asset_file_path(asset: Asset) -> Path | None:
 
     Returns None for non-file assets or missing URLs.
 
-    >>> from anomalog.cache import asset_from_local_path
-    >>> asset = asset_from_local_path(Path("/tmp/example"))
-    >>> _asset_file_path(asset).as_posix().endswith('/tmp/example')
-    True
+    Args:
+        asset (Asset): Prefect asset whose file URL should be inspected.
+
+    Examples:
+        >>> from anomalog.cache import asset_from_local_path
+        >>> asset = asset_from_local_path(Path("/tmp/example"))
+        >>> _asset_file_path(asset).as_posix().endswith('/tmp/example')
+        True
+
+    Returns:
+        Path | None: Local file path extracted from the asset, if available.
     """
     asset_url = None
     props = getattr(asset, "properties", None)
@@ -107,14 +129,30 @@ class AssetDepsFingerprintPolicy(CachePolicy):
 
     include_outputs: bool = True
 
+    @override
     def compute_key(
         self,
-        task_ctx: TaskRunContext,  # noqa: ARG002 - not used, but part of the interface
-        inputs: dict[str, Any],  # noqa: ARG002 - not used, but part of the interface
-        flow_parameters: dict[str, Any],  # noqa: ARG002 - not used, but part of the interface
-        **kwargs: CachePolicyKwarg,  # noqa: ARG002 - not used, but part of the interface
+        task_ctx: TaskRunContext,
+        inputs: dict[str, Any],
+        flow_parameters: dict[str, Any],
+        **kwargs: CachePolicyKwarg,
     ) -> str | None:
-        """Fingerprint upstream assets (including file metadata) for cache keys."""
+        """Fingerprint upstream assets (including file metadata) for cache keys.
+
+        Args:
+            task_ctx (TaskRunContext): Prefect task run context supplied by the
+                cache-policy interface.
+            inputs (dict[str, Any]): Task input mapping supplied by Prefect.
+            flow_parameters (dict[str, Any]): Flow parameter mapping supplied by
+                Prefect.
+            **kwargs (CachePolicyKwarg): Additional cache-policy keyword data
+                supplied by Prefect.
+
+        Returns:
+            str | None: Stable hash for direct asset dependencies, or `None` when
+                no asset context is active.
+        """
+        del task_ctx, inputs, flow_parameters, kwargs
         asset_ctx = AssetContext.get()
         if not asset_ctx:
             return None

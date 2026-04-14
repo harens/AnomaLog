@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from anomalog.io_utils import extract_zip, verify_md5
 from anomalog.sources.contracts import DatasetSource
@@ -11,7 +12,7 @@ from anomalog.sources.contracts import DatasetSource
 class LocalDirSource(DatasetSource):
     """Use an existing local directory as the dataset source."""
 
-    name = "local_dir"
+    name: ClassVar[str] = "local_dir"
     path: Path
     raw_logs_relpath: Path | None = None
 
@@ -20,7 +21,19 @@ class LocalDirSource(DatasetSource):
         *,
         dst_dir: Path,
     ) -> Path:
-        """Validate directory existence and return the dataset root."""
+        """Validate directory existence and return the dataset root.
+
+        Args:
+            dst_dir (Path): Requested dataset destination. Ignored for local
+                directory sources.
+
+        Returns:
+            Path: Existing dataset root directory.
+
+        Raises:
+            FileNotFoundError: If the configured path does not exist.
+            NotADirectoryError: If the configured path is not a directory.
+        """
         del dst_dir
         if not self.path.exists():
             raise FileNotFoundError(self.path)
@@ -33,7 +46,7 @@ class LocalDirSource(DatasetSource):
 class LocalZipSource(DatasetSource):
     """Use a local zip archive as the dataset source."""
 
-    name = "local_zip"
+    name: ClassVar[str] = "local_zip"
     zip_path: Path
     raw_logs_relpath: Path | None = None
     md5_checksum: str | None = None
@@ -43,7 +56,17 @@ class LocalZipSource(DatasetSource):
         *,
         dst_dir: Path,
     ) -> Path:
-        """Extract the zip file into dst_dir and return the dataset root."""
+        """Extract the zip file into dst_dir and return the dataset root.
+
+        Args:
+            dst_dir (Path): Destination directory for extracted dataset files.
+
+        Returns:
+            Path: Extracted dataset root directory.
+
+        Raises:
+            FileNotFoundError: If the configured zip archive does not exist.
+        """
         if dst_dir.exists() and dst_dir.is_dir() and any(dst_dir.iterdir()):
             return dst_dir
 

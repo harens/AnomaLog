@@ -22,7 +22,15 @@ class StructuredDataset:
     anomaly_labels: AnomalyLabelLookup
 
     def mine_templates_with(self, template_parser: TemplateParser) -> TemplatedDataset:
-        """Train a template parser and return a templated dataset view."""
+        """Train a template parser and return a templated dataset view.
+
+        Args:
+            template_parser (TemplateParser): Template parser to train over the
+                structured dataset.
+
+        Returns:
+            TemplatedDataset: Structured dataset paired with the trained parser.
+        """
         template_parser.train(
             lambda: (
                 row.untemplated_message_text

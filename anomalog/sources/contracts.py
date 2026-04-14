@@ -24,7 +24,20 @@ class DatasetSource(Protocol):
         dataset_name: str,
         dataset_root: Path,
     ) -> Path:
-        """Return the validated raw log path inside dataset_root."""
+        """Return the validated raw log path inside dataset_root.
+
+        Args:
+            dataset_name (str): Dataset name used for the default log filename.
+            dataset_root (Path): Materialized dataset root directory.
+
+        Returns:
+            Path: Validated path to the raw log file inside the dataset root.
+
+        Raises:
+            ValueError: If `raw_logs_relpath` is absolute or escapes the dataset root.
+            FileNotFoundError: If the resolved log path does not exist.
+            IsADirectoryError: If the resolved path is not a file.
+        """
         if self.raw_logs_relpath is None:
             candidate = dataset_root / f"{dataset_name}.log"
         else:

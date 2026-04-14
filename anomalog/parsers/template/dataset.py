@@ -23,13 +23,14 @@ ExtractedParameters: TypeAlias = Iterable[str]
 # TODO: Add visualisation methods
 @runtime_checkable
 class TemplateParser(Protocol):
-    """Interface for template mining implementations."""
+    """Interface for template mining implementations.
+
+    Implementations are initialised with an optional dataset name so runtime
+    caches can be scoped per dataset when needed.
+    """
 
     name: ClassVar[str]
     dataset_name: str | None
-
-    def __init__(self, dataset_name: str | None = None) -> None:
-        """Initialise the parser with an optional bound dataset name."""
 
     def inference(
         self,
@@ -54,11 +55,19 @@ class TemplatedDataset:
     anomaly_labels: "AnomalyLabelLookup"
 
     def sequences(self) -> EntitySequenceBuilder:
-        """Return the default entity-grouped sequence builder."""
+        """Return the default entity-grouped sequence builder.
+
+        Returns:
+            EntitySequenceBuilder: Default entity-grouped sequence view.
+        """
         return EntitySequenceBuilder.from_dataset(self)
 
     def group_by_entity(self) -> EntitySequenceBuilder:
-        """Group sequences by entity id."""
+        """Group sequences by entity id.
+
+        Returns:
+            EntitySequenceBuilder: Entity-grouped sequence view.
+        """
         return self.sequences()
 
     def group_by_fixed_window(
@@ -66,7 +75,16 @@ class TemplatedDataset:
         window_size: int,
         step_size: int | None = None,
     ) -> FixedSequenceBuilder:
-        """Group sequences in fixed-size windows."""
+        """Group sequences in fixed-size windows.
+
+        Args:
+            window_size (int): Number of rows in each emitted window.
+            step_size (int | None): Optional step between successive windows.
+                Defaults to `window_size`.
+
+        Returns:
+            FixedSequenceBuilder: Fixed-window sequence view.
+        """
         return FixedSequenceBuilder(
             sink=self.sink,
             infer_template=self.template_parser.inference,
@@ -80,7 +98,17 @@ class TemplatedDataset:
         time_span_ms: int,
         step_span_ms: int | None = None,
     ) -> TimeSequenceBuilder:
-        """Group sequences using time-based sliding windows."""
+        """Group sequences using time-based sliding windows.
+
+        Args:
+            time_span_ms (int): Width of each emitted time window in
+                milliseconds.
+            step_span_ms (int | None): Optional step between successive windows.
+                Defaults to `time_span_ms`.
+
+        Returns:
+            TimeSequenceBuilder: Time-window sequence view.
+        """
         return TimeSequenceBuilder(
             sink=self.sink,
             infer_template=self.template_parser.inference,

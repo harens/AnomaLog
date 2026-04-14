@@ -82,9 +82,11 @@ def test_extract_zip_raises_for_corrupt_member(
             return False
 
         def testzip(self) -> str:
+            del self
             return "nested/source.txt"
 
         def extractall(self, _dst_dir: Path) -> None:
+            del self
             msg = "extractall should not run for corrupt archives"
             raise AssertionError(msg)
 

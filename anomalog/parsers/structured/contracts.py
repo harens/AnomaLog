@@ -54,9 +54,17 @@ class StructuredLine(BaseStructuredLine):
     ) -> "StructuredLine":
         """Create a StructuredLine by adding line_order to a base record.
 
-        >>> base = BaseStructuredLine(None, "node1", "msg", None)
-        >>> StructuredLine.with_line_order(line_order=5, base=base).line_order
-        5
+        Args:
+            line_order (int): Stable line number to attach to the record.
+            base (BaseStructuredLine): Parsed structured record without ordering.
+
+        Examples:
+            >>> base = BaseStructuredLine(None, "node1", "msg", None)
+            >>> StructuredLine.with_line_order(line_order=5, base=base).line_order
+            5
+
+        Returns:
+            StructuredLine: Structured record with the supplied `line_order`.
         """
         return cls(
             timestamp_unix_ms=base.timestamp_unix_ms,

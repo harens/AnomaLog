@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
+from typing import ClassVar
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import urlretrieve
@@ -38,14 +39,21 @@ class _DownloadProgress:
 class RemoteZipSource(DatasetSource):
     """Download a dataset zip from a remote URL and extract it locally."""
 
-    name = "remote_zip"
+    name: ClassVar[str] = "remote_zip"
     url: str
     md5_checksum: str
     raw_logs_relpath: Path | None = None
 
     @staticmethod
     def _validate_remote_url(url: str) -> None:
-        """Validate URL scheme and presence of network location."""
+        """Validate URL scheme and presence of network location.
+
+        Args:
+            url (str): Remote URL to validate.
+
+        Raises:
+            ValueError: If the URL is not an absolute HTTP(S) URL.
+        """
         p = urlparse(url)
         if p.scheme not in _ALLOWED_SCHEMES:
             msg = f"Unsupported URL scheme: {p.scheme!r}"
@@ -60,7 +68,14 @@ class RemoteZipSource(DatasetSource):
         *,
         dst_dir: Path,
     ) -> Path:
-        """Fetch, checksum, and extract the dataset into dst_dir."""
+        """Fetch, checksum, and extract the dataset into dst_dir.
+
+        Args:
+            dst_dir (Path): Destination directory for the extracted dataset.
+
+        Returns:
+            Path: Extracted dataset root directory.
+        """
         dataset_name = dst_dir.name
         root_dir = dst_dir.parent
         zip_path = dst_dir.with_suffix(".zip")
@@ -87,7 +102,17 @@ class RemoteZipSource(DatasetSource):
         zip_path: Path,
         progress_factory: Callable[[], Progress] = make_bounded_progress,
     ) -> None:
-        """Download the dataset archive with a progress bar and verify checksum."""
+        """Download the dataset archive with a progress bar and verify checksum.
+
+        Args:
+            zip_path (Path): Local temporary path for the downloaded zip archive.
+            progress_factory (Callable[[], Progress]): Factory for the download
+                progress bar implementation.
+
+        Raises:
+            HTTPError: If the download fails with an HTTP error.
+            KeyboardInterrupt: If the download is interrupted by the user.
+        """
         logger = get_run_logger()
         dataset_name = zip_path.stem
         logger.info("Starting download of %s dataset from %s", dataset_name, self.url)

@@ -3,9 +3,11 @@
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import create_autospec
 
 from prefect.context import TaskRunContext
+from typing_extensions import override
 
 from anomalog.labels import AnomalyLabelLookup
 from anomalog.parsers.structured.contracts import (
@@ -26,7 +28,11 @@ def structured_line(
     untemplated_message_text: str,
     anomalous: int | None,
 ) -> StructuredLine:
-    """Build a concise StructuredLine fixture."""
+    """Build a concise StructuredLine fixture.
+
+    Returns:
+        StructuredLine: Structured row with the supplied field values.
+    """
     return StructuredLine(
         line_order=line_order,
         timestamp_unix_ms=timestamp_unix_ms,
@@ -37,7 +43,11 @@ def structured_line(
 
 
 def task_run_context() -> TaskRunContext:
-    """TaskRunContext stub used to satisfy Prefect cache-policy method signatures."""
+    """TaskRunContext stub used to satisfy Prefect cache-policy method signatures.
+
+    Returns:
+        TaskRunContext: Autospecced task-run context double.
+    """
     return create_autospec(TaskRunContext, instance=True)
 
 
@@ -46,7 +56,11 @@ def label_lookup(
     label_for_line: Callable[[int], int | None] | None = None,
     label_for_group: Callable[[str], int | None] | None = None,
 ) -> AnomalyLabelLookup:
-    """Build an AnomalyLabelLookup with overrideable callbacks."""
+    """Build an AnomalyLabelLookup with overrideable callbacks.
+
+    Returns:
+        AnomalyLabelLookup: Lookup with overridable line and group callbacks.
+    """
     return AnomalyLabelLookup(
         label_for_line=(lambda _: None) if label_for_line is None else label_for_line,
         label_for_group=((lambda _: 0) if label_for_group is None else label_for_group),
@@ -57,10 +71,15 @@ def label_lookup(
 class NullStructuredParser(StructuredParser):
     """Minimal parser double for tests that only need sink wiring."""
 
-    name = "null"
+    name: ClassVar[str] = "null"
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
-        """Discard all input lines."""
+        """Discard all input lines.
+
+        Returns:
+            BaseStructuredLine | None: Always `None`.
+        """
         del raw_line
         return None
 
@@ -76,7 +95,11 @@ class InMemoryStructuredSink(StructuredSink):
     anomalies_inline: bool | None = None
 
     def write_structured_lines(self) -> bool:
-        """Report whether the sink should be treated as having inline labels."""
+        """Report whether the sink should be treated as having inline labels.
+
+        Returns:
+            bool: Whether the sink should be treated as having inline labels.
+        """
         if self.anomalies_inline is not None:
             return self.anomalies_inline
         return any(is_anomalous_label(row.anomalous) for row in self.rows)
@@ -85,7 +108,11 @@ class InMemoryStructuredSink(StructuredSink):
         self,
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
-        """Yield stored rows, ignoring column projection."""
+        """Yield stored rows, ignoring column projection.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Callable yielding stored rows.
+        """
         del columns
 
         def _iter() -> Iterator[StructuredLine]:
@@ -94,7 +121,12 @@ class InMemoryStructuredSink(StructuredSink):
         return _iter
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
-        """Build sparse inline label lookups from the stored rows."""
+        """Build sparse inline label lookups from the stored rows.
+
+        Returns:
+            tuple[dict[int, int], dict[str, int]]: Sparse per-line and per-group
+                anomaly labels.
+        """
         line_labels: dict[int, int] = {}
         group_labels: dict[str, int] = {}
 
@@ -118,7 +150,11 @@ class InMemoryStructuredSink(StructuredSink):
         self,
         label_for_group: Callable[[str], int | None],
     ) -> EntityLabelCounts:
-        """Count normal and total entities using the provided label lookup."""
+        """Count normal and total entities using the provided label lookup.
+
+        Returns:
+            EntityLabelCounts: Distinct normal and total entity counts.
+        """
         entity_ids = {row.entity_id for row in self.rows if row.entity_id is not None}
         normal = sum(
             not is_anomalous_label(label_for_group(entity_id))
@@ -143,7 +179,12 @@ class InMemoryStructuredSink(StructuredSink):
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
-        """Group stored rows by entity id."""
+        """Group stored rows by entity id.
+
+        Returns:
+            Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding
+                entity-grouped rows.
+        """
         groups: dict[str, list[StructuredLine]] = {}
         for row in self.rows:
             if row.entity_id is not None:
@@ -159,7 +200,12 @@ class InMemoryStructuredSink(StructuredSink):
         window_size: int,
         step_size: int | None = None,
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
-        """Yield sliding row windows over the stored rows."""
+        """Yield sliding row windows over the stored rows.
+
+        Returns:
+            Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding
+                fixed-size windows over stored rows.
+        """
         step = window_size if step_size is None else step_size
 
         def _iter() -> Iterator[Sequence[StructuredLine]]:
@@ -175,7 +221,12 @@ class InMemoryStructuredSink(StructuredSink):
         time_span_ms: int,
         step_span_ms: int | None = None,
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
-        """Yield a single window containing all rows."""
+        """Yield a single window containing all rows.
+
+        Returns:
+            Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding a
+                single all-rows window when rows exist.
+        """
         del time_span_ms, step_span_ms
 
         def _iter() -> Iterator[Sequence[StructuredLine]]:

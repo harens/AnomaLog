@@ -7,6 +7,7 @@ from typing import ClassVar
 
 import pytest
 from prefect.logging import disable_run_logger
+from typing_extensions import override
 
 from anomalog import DatasetSpec
 from anomalog.cache import CachePathsConfig
@@ -27,7 +28,7 @@ from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
 @dataclass(frozen=True)
 class _StubSource(DatasetSource):
-    name = "stub"
+    name: ClassVar[str] = "stub"
     dataset_root: Path
     raw_logs_file: Path
 
@@ -52,8 +53,9 @@ class _StubSource(DatasetSource):
 
 @dataclass(frozen=True)
 class _NullParser(StructuredParser):
-    name = "null"
+    name: ClassVar[str] = "null"
 
+    @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         del raw_line
         return None
@@ -66,6 +68,7 @@ class _RecordingTemplateParser(TemplateParser):
     def __init__(self, dataset_name: str | None = None) -> None:
         self.dataset_name = dataset_name
 
+    @override
     def inference(
         self,
         unstructured_text: str,

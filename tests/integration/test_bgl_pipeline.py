@@ -29,7 +29,11 @@ EXPECTED_TEMPLATE_COUNT = 3
 
 
 def _build_local_bgl_archive(zip_path: Path) -> list[str]:
-    """Package the checked-in BGL fixture into the local archive shape users fetch."""
+    """Package the checked-in BGL fixture into the local archive shape users fetch.
+
+    Returns:
+        list[str]: Raw log lines stored in the fixture archive.
+    """
     raw_lines = FIXTURE_LOG.read_text(encoding="utf-8").splitlines()
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.write(FIXTURE_LOG, arcname=RAW_LOGS_RELPATH.as_posix())
@@ -37,7 +41,11 @@ def _build_local_bgl_archive(zip_path: Path) -> list[str]:
 
 
 def _dataset_from_local_archive(tmp_path: Path, archive_path: Path) -> DatasetSpec:
-    """Create a realistic fluent dataset spec for a locally supplied BGL bundle."""
+    """Create a realistic fluent dataset spec for a locally supplied BGL bundle.
+
+    Returns:
+        DatasetSpec: Fluent dataset spec pointing at the local archive fixture.
+    """
     return (
         DatasetSpec("tiny-bgl-happy-path")
         .from_source(LocalZipSource(archive_path, raw_logs_relpath=RAW_LOGS_RELPATH))
@@ -58,6 +66,9 @@ def _rows_sorted_by_line_order(dataset: TemplatedDataset) -> list[StructuredLine
     The parquet sink scans partitioned fragments, so the default full-dataset
     iterator is deterministic but not guaranteed to match original file order.
     `line_order` is the persisted source-of-truth for reconstructing that order.
+
+    Returns:
+        list[StructuredLine]: Persisted rows sorted back into source file order.
     """
     sink = dataset.sink
     return sorted(sink.iter_structured_lines()(), key=lambda row: row.line_order)
@@ -67,7 +78,11 @@ def _templates_by_message(
     templated: TemplatedDataset,
     rows: Iterable[StructuredLine],
 ) -> dict[str, str]:
-    """Infer one template per raw message text for readable grouping assertions."""
+    """Infer one template per raw message text for readable grouping assertions.
+
+    Returns:
+        dict[str, str]: Template text keyed by original raw message.
+    """
     return {
         row.untemplated_message_text: templated.template_parser.inference(
             row.untemplated_message_text,
@@ -79,7 +94,11 @@ def _templates_by_message(
 def _sequences_by_entity(
     sequences: Iterable[TemplateSequence],
 ) -> dict[str, TemplateSequence]:
-    """Index entity sequences by entity id for direct assertions."""
+    """Index entity sequences by entity id for direct assertions.
+
+    Returns:
+        dict[str, TemplateSequence]: Entity-id keyed sequence mapping.
+    """
     return {
         sequence.sole_entity_id: sequence
         for sequence in sequences

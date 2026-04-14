@@ -17,7 +17,14 @@ if TYPE_CHECKING:
 
 
 def build_dataset_spec(config: DatasetVariantConfig, *, repo_root: Path) -> DatasetSpec:
-    """Construct a `DatasetSpec` from a dataset variant config."""
+    """Construct a `DatasetSpec` from a dataset variant config.
+
+    Returns:
+        DatasetSpec: Dataset spec resolved from the experiment config.
+
+    Raises:
+        ConfigError: If the configured template or structured parser is unknown.
+    """
     try:
         template_parser = resolve_template_parser(config.template_parser)
     except KeyError as exc:
@@ -38,7 +45,11 @@ def dataset_source_summary(
     *,
     repo_root: Path,
 ) -> dict[str, str | None]:
-    """Return a stable source summary for the dataset manifest."""
+    """Return a stable source summary for the dataset manifest.
+
+    Returns:
+        dict[str, str | None]: Stable JSON-serializable source summary.
+    """
     return config.source_summary(repo_root=repo_root)
 
 

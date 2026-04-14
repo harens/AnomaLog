@@ -5,11 +5,13 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import ClassVar
 
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 from prefect.logging import get_run_logger
+from typing_extensions import override
 
 from anomalog.cache import (
     CachePathsConfig,
@@ -29,9 +31,22 @@ from anomalog.parsers.template.dataset import (
 # built with practical enhancements for production scenarios.
 # Whilst other toolkits only provide LogParser
 class Drain3Parser(TemplateParser):
-    """Drain3-based template miner with Prefect asset caching."""
+    """Drain3-based template miner with Prefect asset caching.
 
-    name = "drain3"
+    Instances accept an optional dataset name plus explicit config and cache
+    paths so trained state can be persisted per dataset.
+
+    Attributes:
+        name (ClassVar[str]): Registry name for the built-in Drain3 parser.
+
+    Args:
+        dataset_name (str | None): Optional dataset name used to scope
+            persisted Drain3 state.
+        config_file (Path | None): Optional Drain3 config file override.
+        cache_path (Path | None): Optional explicit cache directory override.
+    """
+
+    name: ClassVar[str] = "drain3"
 
     def __init__(
         self,
@@ -39,7 +54,6 @@ class Drain3Parser(TemplateParser):
         config_file: Path | None = None,
         cache_path: Path | None = None,
     ) -> None:
-        """Initialise the parser with optional dataset name and cache paths."""
         self.config_file = (
             Path(f"{Path(__file__).parent}/drain3.ini")
             if config_file is None
@@ -56,7 +70,11 @@ class Drain3Parser(TemplateParser):
 
     @property
     def resolved_cache_path(self) -> Path:
-        """Return the on-disk cache directory for this parser instance."""
+        """Return the on-disk cache directory for this parser instance.
+
+        Raises:
+            ValueError: If the parser has not been bound to a dataset yet.
+        """
         if self.dataset_name is None:
             msg = "Drain3Parser requires a dataset name before runtime use."
             raise ValueError(msg)
@@ -66,7 +84,11 @@ class Drain3Parser(TemplateParser):
 
     @property
     def cache_file_path(self) -> Path:
-        """Return the resolved cache file path for this parser instance."""
+        """Return the resolved cache file path for this parser instance.
+
+        Raises:
+            ValueError: If the parser has not been bound to a dataset yet.
+        """
         if self.dataset_name is None:
             msg = "Drain3Parser requires a dataset name before runtime use."
             raise ValueError(msg)
@@ -82,7 +104,16 @@ class Drain3Parser(TemplateParser):
         [UntemplatedText],
         tuple[LogTemplate, ExtractedParameters],
     ]:
-        """Build an inference callable bound to a trained Drain3 miner."""
+        """Build an inference callable bound to a trained Drain3 miner.
+
+        Args:
+            miner (TemplateMiner): Trained Drain3 miner to bind into the
+                returned callable.
+
+        Returns:
+            Callable[[UntemplatedText], tuple[LogTemplate, ExtractedParameters]]:
+                Inference callable backed by the supplied miner.
+        """
 
         def get_template_and_params_for_log(
             miner: TemplateMiner,
@@ -104,6 +135,9 @@ class Drain3Parser(TemplateParser):
         Prefect's asset caching can skip executing the training function on
         repeat runs. Without this hook, `self.inference_func` would remain
         unset even though a trained Drain3 cache exists on disk.
+
+        Raises:
+            ValueError: If no persisted Drain3 cache exists yet.
         """
         if not self.cache_file_path.exists():
             msg = "No trained Drain3 cache found. Please (re)train the parser first."
@@ -116,17 +150,31 @@ class Drain3Parser(TemplateParser):
         miner = TemplateMiner(cache_file, config=config)
         self.inference_func = self._make_inference_func(miner)
 
+    @override
     def inference(
         self,
         unstructured_text: UntemplatedText,
     ) -> tuple[LogTemplate, ExtractedParameters]:
-        """Return template and parameters for a single unstructured log line."""
+        """Return template and parameters for a single unstructured log line.
+
+        Args:
+            unstructured_text (UntemplatedText): Raw untemplated log line to
+                match against the trained miner.
+
+        Returns:
+            tuple[LogTemplate, ExtractedParameters]: Matched template and
+                extracted parameter values.
+
+        Raises:
+            ValueError: If the parser has not been trained yet.
+        """
         if self.inference_func is None:
             msg = "Parser has not been trained yet"
             raise ValueError(msg)
 
         return self.inference_func(unstructured_text)
 
+    @override
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
@@ -194,20 +242,31 @@ class Drain3Parser(TemplateParser):
 class IdentityTemplateParser(TemplateParser):
     """No-op template parser that returns the input string as its template."""
 
-    name = "identity"
+    name: ClassVar[str] = "identity"
     dataset_name: str | None = None
 
+    @override
     def inference(
         self,
         unstructured_text: UntemplatedText,
     ) -> tuple[LogTemplate, ExtractedParameters]:
         """Return the raw text as the template with no parameters.
 
-        >>> IdentityTemplateParser("demo").inference("hello")
-        ('hello', [])
+        Args:
+            unstructured_text (UntemplatedText): Raw log text to treat as its
+                own template.
+
+        Examples:
+            >>> IdentityTemplateParser("demo").inference("hello")
+            ('hello', [])
+
+        Returns:
+            tuple[LogTemplate, ExtractedParameters]: Raw text and an empty
+                parameter list.
         """
         return unstructured_text, []
 
+    @override
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],

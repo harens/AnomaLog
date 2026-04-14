@@ -54,7 +54,17 @@ _PRESETS: dict[str, DatasetSpec] = {
 
 
 def resolve_preset(name: str) -> DatasetSpec:
-    """Resolve a built-in dataset preset by name."""
+    """Resolve a built-in dataset preset by name.
+
+    Args:
+        name (str): Registered preset name to resolve.
+
+    Returns:
+        DatasetSpec: Registered preset dataset spec.
+
+    Raises:
+        KeyError: If `name` does not match a built-in preset.
+    """
     try:
         return _PRESETS[name]
     except KeyError as exc:
@@ -63,5 +73,9 @@ def resolve_preset(name: str) -> DatasetSpec:
 
 
 def preset_names() -> tuple[str, ...]:
-    """Return the registered built-in preset names."""
+    """Return the registered built-in preset names.
+
+    Returns:
+        tuple[str, ...]: Preset names in registration order.
+    """
     return tuple(_PRESETS)

@@ -44,7 +44,11 @@ class SequencePrediction(msgspec.Struct, frozen=True):
         *,
         outcome: PredictionOutcome,
     ) -> SequencePrediction:
-        """Build a serialized prediction from a sequence and detector outcome."""
+        """Build a serialized prediction from a sequence and detector outcome.
+
+        Returns:
+            SequencePrediction: Serializable prediction record.
+        """
         return cls(
             window_id=sequence.window_id,
             split_label=sequence.split_label.value,
@@ -85,7 +89,11 @@ class ModelManifest(msgspec.Struct, frozen=True):
         sequence_summary: SequenceSummary,
         **detector_fields: object,
     ) -> Self:
-        """Build a manifest by combining shared run summary and model metadata."""
+        """Build a manifest by combining shared run summary and model metadata.
+
+        Returns:
+            Self: Manifest with shared run summary and detector-specific fields.
+        """
         return cls(
             detector=detector,
             train_sequence_count=sequence_summary.train_sequence_count,
@@ -113,7 +121,11 @@ class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
 
     @property
     def detector(self) -> str:
-        """Return the detector name encoded in the tagged config type."""
+        """Return the detector name encoded in the tagged config type.
+
+        Raises:
+            ConfigError: If the config type does not define a string detector tag.
+        """
         detector = self.__struct_config__.tag
         if not isinstance(detector, str):
             msg = f"{type(self).__name__} does not define a string detector tag."

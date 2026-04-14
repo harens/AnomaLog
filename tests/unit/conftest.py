@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 
 
 def _coverage_snapshot(cov: coverage.Coverage) -> dict[str, frozenset[int]]:
-    """Capture the currently executed lines for each measured file."""
+    """Capture the currently executed lines for each measured file.
+
+    Returns:
+        dict[str, frozenset[int]]: Covered line numbers keyed by filename.
+    """
     data = cov.get_data()
     return {
         filename: frozenset(data.lines(filename) or ())
@@ -38,7 +42,11 @@ def pytest_runtest_makereport(
     item: pytest.Item,
     call: pytest.CallInfo[None],
 ) -> Generator[None, Any, pytest.TestReport]:
-    """Store the phase reports for each test item."""
+    """Store the phase reports for each test item.
+
+    Returns:
+        Generator[None, Any, pytest.TestReport]: Wrapped pytest hook generator.
+    """
     del call
     report = yield
     reports = item.stash.setdefault(_TEST_REPORTS_KEY, {})

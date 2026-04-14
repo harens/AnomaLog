@@ -67,7 +67,11 @@ class RunMetrics:
             self.fn += 1
 
     def metrics(self) -> dict[str, int | float]:
-        """Return finalized run metrics."""
+        """Return finalized run metrics.
+
+        Returns:
+            dict[str, int | float]: Aggregate classification and split metrics.
+        """
         test_count = self.test_sequence_count
         accuracy = (self.tp + self.tn) / test_count if test_count else 0.0
         precision = self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 0.0
@@ -94,7 +98,11 @@ class RunMetrics:
         }
 
     def summary(self) -> SequenceSummary:
-        """Return finalized sequence summary."""
+        """Return finalized sequence summary.
+
+        Returns:
+            SequenceSummary: Aggregate split and label counts.
+        """
         return SequenceSummary(
             sequence_count=self.sequence_count,
             train_sequence_count=self.train_sequence_count,
@@ -111,7 +119,11 @@ def run_model(
     predictions_path: Path,
     logger: logging.Logger | None = None,
 ) -> ModelRunSummary:
-    """Fit the configured detector and stream predictions to disk."""
+    """Fit the configured detector and stream predictions to disk.
+
+    Returns:
+        ModelRunSummary: Metrics, manifest, and sequence summary for the run.
+    """
     detector = config.build_detector()
     fit_detector(
         detector=detector,
@@ -135,7 +147,11 @@ def run_model(
 def iter_train_sequences(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
 ) -> Iterator[TemplateSequence]:
-    """Yield only training sequences from a sequence factory."""
+    """Yield only training sequences from a sequence factory.
+
+    Yields:
+        TemplateSequence: Sequences belonging to the training split.
+    """
     for sequence in sequence_factory():
         if sequence.split_label is SplitLabel.TRAIN:
             yield sequence
@@ -162,7 +178,11 @@ def stream_predictions(
     predictions_path: Path,
     logger: logging.Logger | None,
 ) -> RunMetrics:
-    """Write predictions incrementally while accumulating metrics."""
+    """Write predictions incrementally while accumulating metrics.
+
+    Returns:
+        RunMetrics: Accumulated metrics for the streamed predictions.
+    """
     accumulator = RunMetrics()
     with predictions_path.open("w", encoding="utf-8") as file_obj:
         for sequence in sequence_factory():

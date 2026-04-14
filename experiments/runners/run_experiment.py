@@ -26,7 +26,15 @@ if TYPE_CHECKING:
 
 
 def run_experiment(config_path: Path, *, force: bool = False) -> Path:
-    """Run a single experiment from a TOML config path."""
+    """Run a single experiment from a TOML config path.
+
+    Returns:
+        Path: Deterministic run directory containing the written artifacts.
+
+    Raises:
+        FileExistsError: If the deterministic result directory already exists and
+            `force` is false.
+    """
     bundle = load_experiment_bundle(config_path)
     result_paths = prepare_result_paths(bundle)
     if result_paths.run_dir.exists():
@@ -86,7 +94,11 @@ def run_experiment(config_path: Path, *, force: bool = False) -> Path:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
+    """Build the CLI argument parser.
+
+    Returns:
+        argparse.ArgumentParser: Parser for the experiment runner CLI.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",
@@ -103,7 +115,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Run the CLI and print the result directory."""
+    """Run the CLI and print the result directory.
+
+    Returns:
+        int: Process exit code.
+    """
     parser = build_arg_parser()
     args = parser.parse_args()
     try:

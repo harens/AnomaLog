@@ -1,6 +1,7 @@
 """Tests for public sequence representation helpers."""
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import pytest
 
@@ -187,9 +188,10 @@ def test_custom_representation_can_use_full_template_sequence_context() -> None:
 
     @dataclass(frozen=True)
     class _SequenceSummaryRepresentation:
-        name = "sequence_summary"
+        name: ClassVar[str] = "sequence_summary"
 
         def represent(self, sequence: TemplateSequence) -> dict[str, object]:
+            assert self.name == "sequence_summary"
             return {
                 "entity_ids": sequence.entity_ids,
                 "parameter_count": sum(len(params) for _, params, _ in sequence.events),

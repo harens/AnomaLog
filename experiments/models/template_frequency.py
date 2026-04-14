@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from experiments import ConfigError
 from experiments.models.base import (
@@ -32,7 +32,11 @@ class TemplateFrequencyModelConfig(
     smoothing: float = 1.0
 
     def __post_init__(self) -> None:
-        """Validate detector-specific model settings."""
+        """Validate detector-specific model settings.
+
+        Raises:
+            ConfigError: If detector-specific settings are invalid.
+        """
         if self.score_threshold is not None and self.score_threshold < 0:
             msg = "model.score_threshold must be non-negative."
             raise ConfigError(msg)
@@ -44,7 +48,11 @@ class TemplateFrequencyModelConfig(
             raise ConfigError(msg)
 
     def build_detector(self) -> TemplateFrequencyDetector:
-        """Construct the configured template-frequency detector."""
+        """Construct the configured template-frequency detector.
+
+        Returns:
+            TemplateFrequencyDetector: Configured detector instance.
+        """
         return TemplateFrequencyDetector(
             configured_score_threshold=self.score_threshold,
             calibration_quantile=self.calibration_quantile,
@@ -56,7 +64,7 @@ class TemplateFrequencyModelConfig(
 class TemplateFrequencyDetector(ExperimentDetector):
     """Baseline detector scoring sequences by train-set template frequencies."""
 
-    detector_name = "template_frequency"
+    detector_name: ClassVar[str] = "template_frequency"
     configured_score_threshold: float | None
     calibration_quantile: float
     smoothing: float
@@ -66,7 +74,11 @@ class TemplateFrequencyDetector(ExperimentDetector):
     threshold_source: str = "configured"
 
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
-        """Fit template counts from train sequences."""
+        """Fit template counts from train sequences.
+
+        Raises:
+            ValueError: If the training split contains zero events.
+        """
         counts: Counter[str] = Counter()
         total_events = 0
         for sequence in train_sequences:
@@ -144,7 +156,11 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
 
 
 def _quantile(sorted_values: list[float], q: float) -> float:
-    """Return the inclusive quantile from a pre-sorted value list."""
+    """Return the inclusive quantile from a pre-sorted value list.
+
+    Raises:
+        ValueError: If `sorted_values` is empty.
+    """
     if not sorted_values:
         msg = "Cannot compute a quantile from an empty score list."
         raise ValueError(msg)

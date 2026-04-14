@@ -91,7 +91,15 @@ def _build_structured_dataset(
 def _build_templated_dataset(
     request: TemplatedDatasetBuildRequest,
 ) -> TemplatedDataset:
-    """Build the templated dataset view from a runtime build request."""
+    """Build the templated dataset view from a runtime build request.
+
+    Args:
+        request (TemplatedDatasetBuildRequest): Compiled runtime request for the
+            dataset build.
+
+    Returns:
+        TemplatedDataset: Structured dataset with templates mined and attached.
+    """
     structured = _build_structured_dataset(request)
     return structured.mine_templates_with(
         request.template_parser(dataset_name=request.dataset_name),
@@ -99,7 +107,15 @@ def _build_templated_dataset(
 
 
 def build_templated_dataset(request: TemplatedDatasetBuildRequest) -> TemplatedDataset:
-    """Run the internal templated build flow for a compiled runtime request."""
+    """Run the internal templated build flow for a compiled runtime request.
+
+    Args:
+        request (TemplatedDatasetBuildRequest): Compiled runtime request for the
+            dataset build.
+
+    Returns:
+        TemplatedDataset: Built dataset returned from the internal Prefect flow.
+    """
 
     @flow
     def _build_dataset_flow() -> TemplatedDataset:

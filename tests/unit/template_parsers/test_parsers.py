@@ -191,16 +191,18 @@ def test_drain3_parser_train_deletes_stale_cache_and_handles_empty_training_inpu
             pass
 
         def add_log_message(self, _log_line: str) -> dict[str, int]:
+            del self
             return {"cluster_count": 0}
 
         def match(self, _log_line: str) -> None:
-            return None
+            del self
 
         def get_parameter_list(
             self,
             _template: str,
             _log_line: str,
         ) -> list[str]:
+            del self
             return []
 
     monkeypatch.setattr(

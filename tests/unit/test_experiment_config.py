@@ -58,13 +58,15 @@ def test_load_experiment_bundle_resolves_dataset_and_model_configs(
         run_name="bgl_template_frequency",
         dataset=(
             "bgl_entity",
-            'name = "bgl_entity"\n'
-            'dataset_name = "BGL"\n'
-            'preset = "bgl"\n'
-            "\n[sequence]\n"
-            'grouping = "entity"\n'
-            "train_fraction = 0.8\n"
-            "train_on_normal_entities_only = true\n",
+            (
+                'name = "bgl_entity"\n'
+                'dataset_name = "BGL"\n'
+                'preset = "bgl"\n'
+                "\n[sequence]\n"
+                'grouping = "entity"\n'
+                "train_fraction = 0.8\n"
+                "train_on_normal_entities_only = true\n"
+            ),
         ),
         model=(
             "template_frequency_default",
@@ -95,9 +97,11 @@ def test_load_experiment_bundle_supports_naive_bayes_model_configs(
         run_name="hdfs_v1_naive_bayes",
         dataset=(
             "hdfs_v1_entity_supervised",
-            'name = "hdfs_v1_entity_supervised"\n'
-            'dataset_name = "HDFS_v1"\n'
-            'preset = "hdfs_v1"\n',
+            (
+                'name = "hdfs_v1_entity_supervised"\n'
+                'dataset_name = "HDFS_v1"\n'
+                'preset = "hdfs_v1"\n'
+            ),
         ),
         model=(
             "naive_bayes_default",
@@ -195,13 +199,15 @@ def test_load_experiment_bundle_rejects_normal_only_training_for_fixed_grouping(
         run_name="fixed_invalid",
         dataset=(
             "fixed_invalid",
-            'name = "fixed_invalid"\n'
-            'dataset_name = "demo"\n'
-            'preset = "bgl"\n'
-            "\n[sequence]\n"
-            'grouping = "fixed"\n'
-            "window_size = 4\n"
-            "train_on_normal_entities_only = true\n",
+            (
+                'name = "fixed_invalid"\n'
+                'dataset_name = "demo"\n'
+                'preset = "bgl"\n'
+                "\n[sequence]\n"
+                'grouping = "fixed"\n'
+                "window_size = 4\n"
+                "train_on_normal_entities_only = true\n"
+            ),
         ),
         model=(
             "template_frequency_default",

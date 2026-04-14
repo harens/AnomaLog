@@ -372,6 +372,7 @@ def test_represent_with_yields_model_ready_records() -> None:
         name = "event_count"
 
         def represent(self, sequence: TemplateSequence) -> dict[str, int]:
+            assert self.name == "event_count"
             return {"event_count": len(sequence.events)}
 
     sink = _sink(
@@ -430,6 +431,7 @@ def test_represented_sequences_can_stream_as_river_dataset() -> None:
         name = "event_count"
 
         def represent(self, sequence: TemplateSequence) -> dict[str, int]:
+            assert self.name == "event_count"
             return {"event_count": len(sequence.events)}
 
     sink = _sink(

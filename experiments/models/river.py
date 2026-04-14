@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from river.naive_bayes import BernoulliNB, ComplementNB, MultinomialNB
 
@@ -45,7 +45,11 @@ class RiverModelConfig(
     anomalous_posterior_threshold: float = 0.5
 
     def __post_init__(self) -> None:
-        """Validate detector-specific model settings."""
+        """Validate detector-specific model settings.
+
+        Raises:
+            ConfigError: If detector-specific settings are invalid.
+        """
         self._validate_phrase_features()
         if self.estimator not in _RIVER_ESTIMATORS:
             msg = f"Unsupported river estimator: {self.estimator!r}"
@@ -55,7 +59,11 @@ class RiverModelConfig(
             raise ConfigError(msg)
 
     def build_detector(self) -> RiverDetector:
-        """Construct the configured River-backed detector."""
+        """Construct the configured River-backed detector.
+
+        Returns:
+            RiverDetector: Configured detector instance.
+        """
         return RiverDetector(
             estimator_name=self.estimator,
             smoothing=self.smoothing,
@@ -70,7 +78,7 @@ class RiverModelConfig(
 class RiverDetector(ExperimentDetector):
     """Run a River classifier over sequence phrase-count features."""
 
-    detector_name = "river"
+    detector_name: ClassVar[str] = "river"
     estimator_name: str
     smoothing: float
     phrase_ngram_min: int
@@ -81,7 +89,11 @@ class RiverDetector(ExperimentDetector):
     feature_count: int = 0
 
     def fit(self, train_sequences: list[TemplateSequence]) -> None:
-        """Train the River classifier over the training split."""
+        """Train the River classifier over the training split.
+
+        Raises:
+            ValueError: If the training split does not contain both classes.
+        """
         model = _RIVER_ESTIMATORS[self.estimator_name](self.smoothing)
         label_counts = {0: 0, 1: 0}
         feature_names: set[str] = set()
@@ -102,7 +114,11 @@ class RiverDetector(ExperimentDetector):
         self.feature_count = len(feature_names)
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
-        """Return anomalous posterior probability from the River classifier."""
+        """Return anomalous posterior probability from the River classifier.
+
+        Raises:
+            ValueError: If the detector has not been fit yet.
+        """
         if self.model is None:
             msg = f"{self.detector_name} must be fit before prediction."
             raise ValueError(msg)
