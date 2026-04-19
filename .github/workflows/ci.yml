@@ -67,7 +67,8 @@ jobs:
         run: uv sync --frozen --all-groups
 
       - name: Docstring lint
-        run: uv run pydoclint --style=google anomalog experiments tests
+        # See: https://github.com/jsh9/pydoclint/issues/162
+        run: uvx --from pydoclint pydoclint --style=google anomalog experiments tests
 
   pytest:
     runs-on: ubuntu-latest
