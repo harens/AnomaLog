@@ -6,12 +6,23 @@ from typing import TYPE_CHECKING
 
 import coverage
 import pytest
+from prefect.testing.utilities import prefect_test_harness
 
 _TEST_REPORTS_KEY = pytest.StashKey[dict[str, pytest.TestReport]]()
+PREFECT_TEST_SERVER_STARTUP_TIMEOUT_SECONDS = 60
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from typing import Any
+
+
+@pytest.fixture(scope="session", autouse=True)
+def unit_prefect_harness() -> Generator[None]:
+    """Run unit tests against Prefect's session-scoped test harness backend."""
+    with prefect_test_harness(
+        server_startup_timeout=PREFECT_TEST_SERVER_STARTUP_TIMEOUT_SECONDS,
+    ):
+        yield
 
 
 def _coverage_snapshot(cov: coverage.Coverage) -> dict[str, frozenset[int]]:
