@@ -21,7 +21,6 @@ POSTERIOR_THRESHOLD = 0.4
 class _PredictionRecord(TypedDict):
     entity_ids: list[str]
     event_count: int
-    key_phrases: list[str]
     label: int
     predicted_label: int
     score: float
@@ -38,7 +37,6 @@ def _read_predictions(run_dir: Path) -> list[_PredictionRecord]:
         prediction: _PredictionRecord = {
             "entity_ids": [str(value) for value in raw["entity_ids"]],
             "event_count": int(raw["event_count"]),
-            "key_phrases": [str(value) for value in raw["key_phrases"]],
             "label": int(raw["label"]),
             "predicted_label": int(raw["predicted_label"]),
             "score": float(raw["score"]),
@@ -102,7 +100,6 @@ def test_run_experiment_with_river_multinomial_nb_writes_predictions(
         "train",
         "test",
     ]
-    assert all(prediction["key_phrases"] == [] for prediction in predictions)
     assert anomalous_training_prediction["predicted_label"] == 1
     assert anomalous_training_prediction["score"] >= POSTERIOR_THRESHOLD
     assert held_out_prediction["label"] == 0

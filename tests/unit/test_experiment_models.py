@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from rich.progress import Progress
 
 from anomalog.representations import (
     SequenceRepresentationView,
@@ -17,6 +18,7 @@ from anomalog.sequences import (
 )
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary
+from experiments.models.deeplog import DeepLogModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
 from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
@@ -104,6 +106,7 @@ def test_model_registries_resolve_builtins() -> None:
     """Built-in model configs register themselves by detector name."""
     # This protects experiment-layer registry wiring outside the configured
     # `anomalog` coverage target.
+    assert resolve_model_config_type("deeplog") is DeepLogModelConfig
     assert resolve_model_config_type("naive_bayes") is NaiveBayesModelConfig
     assert resolve_model_config_type("river") is RiverModelConfig
     assert (
@@ -117,7 +120,8 @@ def test_template_frequency_detector_predictions_are_repeatable() -> None:
     # This protects experiment-layer detector determinism, which sits outside
     # the configured `anomalog` coverage target.
     detector = TemplateFrequencyModelConfig(name="template_frequency").build_detector()
-    detector.fit(_supervised_train_sequences())
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
     sequence = _sequence(
         20,
         templates=["panic failure", "disk failure"],
@@ -142,7 +146,8 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
         name="template_frequency",
     ).build_detector()
     train_sequences = _supervised_train_sequences()
-    detector.fit(train_sequences)
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
 
     normal_scores = [
         detector.score(sequence) for sequence in train_sequences if sequence.label == 0
@@ -166,7 +171,8 @@ def test_naive_bayes_detector_predictions_are_repeatable() -> None:
     # This protects experiment-layer detector determinism, which sits outside
     # the configured `anomalog` coverage target.
     detector = NaiveBayesModelConfig(name="naive_bayes").build_detector()
-    detector.fit(_supervised_train_sequences())
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
     sequence = _sequence(
         21,
         templates=["panic failure", "disk failure"],
@@ -196,8 +202,10 @@ def test_river_detector_predictions_are_stable_across_equal_fits() -> None:
         split_label=SplitLabel.TEST,
     )
 
-    left.fit(train_sequences)
-    right.fit(train_sequences)
+    with Progress(disable=True) as left_progress:
+        left.fit(train_sequences, progress=left_progress)
+    with Progress(disable=True) as right_progress:
+        right.fit(train_sequences, progress=right_progress)
 
     assert left.predict(sequence) == right.predict(sequence)
 
@@ -222,7 +230,8 @@ def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     # This protects experiment-layer manifest shaping outside the configured
     # `anomalog` coverage target.
     detector = NaiveBayesModelConfig(name="naive_bayes").build_detector()
-    detector.fit(_supervised_train_sequences())
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
     sequence_summary = SequenceSummary(
         sequence_count=4,
         train_sequence_count=3,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypedDict, TypeVar, runtime_checkable
 
 import msgspec
 from typing_extensions import Self
@@ -12,17 +12,127 @@ from anomalog.representations import TemplatePhraseRepresentation
 from experiments import ConfigError
 
 if TYPE_CHECKING:
+    import logging
+    from collections.abc import Iterable
+
+    from rich.progress import Progress
+
     from anomalog.sequences import TemplateSequence
 
 TModelManifest = TypeVar("TModelManifest", bound="ModelManifest")
 
 
-class PredictionOutcome(msgspec.Struct, frozen=True):
-    """Detector-specific prediction fields for a single sequence."""
+@dataclass(frozen=True, slots=True)
+class PredictionOutcome:
+    """Shared prediction fields for a single sequence."""
 
     predicted_label: int
     score: float
-    key_phrases: list[str] = msgspec.field(default_factory=list)
+
+    def to_prediction_record(self, sequence: TemplateSequence) -> SequencePrediction:
+        """Return a serializable prediction record for one sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence being serialized.
+
+        Returns:
+            SequencePrediction: Shared serialized prediction record.
+        """
+        return SequencePrediction(
+            **SequencePrediction.shared_fields(sequence, outcome=self),
+        )
+
+
+class DeepLogTopPrediction(msgspec.Struct, frozen=True):
+    """Top-`g` key prediction candidate from DeepLog's next-event model.
+
+    This corresponds to the paper's log-key anomaly detection component, which
+    treats an event as normal when the observed next log key is among the
+    highest-probability predicted candidates.
+    """
+
+    template: str
+    probability: float
+
+
+class DeepLogKeyFinding(msgspec.Struct, frozen=True):
+    """Event-level finding from DeepLog's stacked-LSTM key predictor.
+
+    This captures the paper's next-log-key anomaly decision for one target
+    event, including the observed template, whether it was out of vocabulary,
+    how unknown history items were handled, and the ranked top-`g` candidates
+    produced by the model.
+    """
+
+    event_index: int
+    history_templates: list[str]
+    unknown_history_templates: list[str]
+    actual_template: str
+    actual_probability: float | None
+    is_anomalous: bool
+    is_oov: bool
+    top_predictions: list[DeepLogTopPrediction]
+
+
+class DeepLogParameterFinding(msgspec.Struct, frozen=True):
+    """Event-level finding from a per-template DeepLog parameter model.
+
+    This corresponds to the paper's parameter-value anomaly detection model:
+    one LSTM per log key, residual scored by MSE, and thresholded by a
+    Gaussian fitted on validation residuals.
+    """
+
+    event_index: int
+    template: str
+    feature_names: list[str]
+    observed_vector: list[float | None]
+    predicted_vector: list[float | None]
+    residual_mse: float
+    gaussian_mean: float
+    gaussian_stddev: float
+    gaussian_lower_bound: float
+    gaussian_upper_bound: float
+    most_anomalous_feature: str | None
+    is_anomalous: bool
+
+
+class DeepLogEventFinding(msgspec.Struct, frozen=True):
+    """Combined DeepLog event-level anomaly finding.
+
+    DeepLog reports anomalies at the event level, then aggregates them into a
+    sequence-level prediction for the surrounding AnomaLog experiment contract.
+    """
+
+    event_index: int
+    template: str
+    key_model_finding: DeepLogKeyFinding | None = None
+    parameter_model_finding: DeepLogParameterFinding | None = None
+
+
+class DeepLogSequenceDetails(msgspec.Struct, frozen=True):
+    """DeepLog-specific sequence prediction payload.
+
+    This preserves the scoped DeepLog event-level outputs while allowing the
+    shared experiment layer to continue writing one serialized prediction
+    record per `TemplateSequence`.
+    """
+
+    is_sequence_anomalous: bool
+    triggered_by_key_model: bool
+    triggered_by_parameter_model: bool
+    findings: list[DeepLogEventFinding] = msgspec.field(default_factory=list)
+
+
+class _SharedPredictionFields(TypedDict):
+    """Common serialized prediction fields."""
+
+    window_id: int
+    split_label: str
+    label: int
+    predicted_label: int
+    score: float
+    entity_ids: list[str]
+    event_count: int
 
 
 class SequencePrediction(msgspec.Struct, frozen=True):
@@ -35,34 +145,31 @@ class SequencePrediction(msgspec.Struct, frozen=True):
     score: float
     entity_ids: list[str]
     event_count: int
-    key_phrases: list[str]
 
-    @classmethod
-    def from_sequence(
-        cls,
+    @staticmethod
+    def shared_fields(
         sequence: TemplateSequence,
         *,
         outcome: PredictionOutcome,
-    ) -> SequencePrediction:
-        """Build a serialized prediction from a sequence and detector outcome.
+    ) -> _SharedPredictionFields:
+        """Build shared serialized prediction fields from detector output.
 
         Args:
             sequence (TemplateSequence): Sequence being serialized.
             outcome (PredictionOutcome): Detector output for the sequence.
 
         Returns:
-            SequencePrediction: Serializable prediction record.
+            _SharedPredictionFields: Shared serialized prediction fields.
         """
-        return cls(
-            window_id=sequence.window_id,
-            split_label=sequence.split_label.value,
-            label=sequence.label,
-            predicted_label=outcome.predicted_label,
-            score=outcome.score,
-            entity_ids=sequence.entity_ids,
-            event_count=len(sequence.events),
-            key_phrases=outcome.key_phrases,
-        )
+        return {
+            "window_id": sequence.window_id,
+            "split_label": sequence.split_label.value,
+            "label": sequence.label,
+            "predicted_label": outcome.predicted_label,
+            "score": outcome.score,
+            "entity_ids": sequence.entity_ids,
+            "event_count": len(sequence.events),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +286,13 @@ class ExperimentDetector(Protocol):
 
     detector_name: str
 
-    def fit(self, train_sequences: list[TemplateSequence]) -> None:
+    def fit(
+        self,
+        train_sequences: Iterable[TemplateSequence],
+        *,
+        progress: Progress,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Fit the detector from the training split."""
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:

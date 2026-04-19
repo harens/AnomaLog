@@ -13,12 +13,63 @@ from experiments.models.base import (
     ModelManifest,
     PhraseModelConfig,
     PredictionOutcome,
+    SequencePrediction,
     SequenceSummary,
 )
 
 if TYPE_CHECKING:
+    import logging
+    from collections.abc import Iterable
+
+    from rich.progress import Progress
+
     from anomalog.representations import TemplatePhraseRepresentation
     from anomalog.sequences import TemplateSequence
+
+
+@dataclass(frozen=True, slots=True)
+class NaiveBayesPredictionOutcome(PredictionOutcome):
+    """Naive Bayes prediction with phrase-level explanation fields."""
+
+    key_phrases: list[str]
+
+    def to_prediction_record(self, sequence: TemplateSequence) -> SequencePrediction:
+        """Return a serialized prediction record for one sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence being serialized.
+
+        Returns:
+            SequencePrediction: Naive Bayes serialized prediction record.
+        """
+        return NaiveBayesSequencePrediction.from_sequence(sequence, outcome=self)
+
+
+class NaiveBayesSequencePrediction(SequencePrediction, frozen=True):
+    """Serialized Naive Bayes prediction record."""
+
+    key_phrases: list[str]
+
+    @classmethod
+    def from_sequence(
+        cls,
+        sequence: TemplateSequence,
+        *,
+        outcome: NaiveBayesPredictionOutcome,
+    ) -> NaiveBayesSequencePrediction:
+        """Build a serialized prediction record from detector output.
+
+        Args:
+            sequence (TemplateSequence): Sequence being serialized.
+            outcome (NaiveBayesPredictionOutcome): Detector output to serialize.
+
+        Returns:
+            NaiveBayesSequencePrediction: Serialized prediction record.
+        """
+        return cls(
+            **SequencePrediction.shared_fields(sequence, outcome=outcome),
+            key_phrases=outcome.key_phrases,
+        )
 
 
 class NaiveBayesModelConfig(
@@ -77,20 +128,33 @@ class NaiveBayesDetector(ExperimentDetector):
     total_phrases_by_class: dict[int, int] = field(default_factory=dict)
     vocabulary: set[str] = field(default_factory=set)
 
-    def fit(self, train_sequences: list[TemplateSequence]) -> None:
+    def fit(
+        self,
+        train_sequences: Iterable[TemplateSequence],
+        *,
+        progress: Progress,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Fit class priors and phrase likelihoods from train sequences.
 
         Args:
-            train_sequences (list[TemplateSequence]): Training split sequences.
+            train_sequences (Iterable[TemplateSequence]): Training split
+                sequences.
+            progress (Progress): Progress reporter.
+            logger (logging.Logger | None): Optional logger for fit diagnostics.
 
         Raises:
             ValueError: If the training split does not contain both classes.
         """
+        del logger
         class_counts: Counter[int] = Counter()
         phrase_counts_by_class = {0: Counter(), 1: Counter()}
         total_phrases_by_class = {0: 0, 1: 0}
         vocabulary: set[str] = set()
-        for sequence in train_sequences:
+        for sequence in progress.track(
+            train_sequences,
+            description="Fitting naive_bayes sequences",
+        ):
             class_counts[sequence.label] += 1
             sequence_phrases = Counter(self.representation.represent(sequence))
             phrase_counts_by_class[sequence.label].update(sequence_phrases)
@@ -112,14 +176,14 @@ class NaiveBayesDetector(ExperimentDetector):
         self.total_phrases_by_class = total_phrases_by_class
         self.vocabulary = vocabulary
 
-    def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+    def predict(self, sequence: TemplateSequence) -> NaiveBayesPredictionOutcome:
         """Return anomalous posterior and most informative phrases."""
         sequence_phrases = Counter(self.representation.represent(sequence))
         anomalous_posterior = self.score(sequence_phrases)
         predicted_label = int(
             anomalous_posterior >= self.anomalous_posterior_threshold,
         )
-        return PredictionOutcome(
+        return NaiveBayesPredictionOutcome(
             predicted_label=predicted_label,
             score=anomalous_posterior,
             key_phrases=self._key_phrases_for_prediction(

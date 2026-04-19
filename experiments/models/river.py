@@ -17,8 +17,11 @@ from experiments.models.base import (
 )
 
 if TYPE_CHECKING:
+    import logging
     from collections import Counter
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+
+    from rich.progress import Progress
 
     from anomalog.representations import TemplatePhraseRepresentation
     from anomalog.sequences import TemplateSequence
@@ -88,19 +91,32 @@ class RiverDetector(ExperimentDetector):
     model: RiverEstimator | None = None
     feature_count: int = 0
 
-    def fit(self, train_sequences: list[TemplateSequence]) -> None:
+    def fit(
+        self,
+        train_sequences: Iterable[TemplateSequence],
+        *,
+        progress: Progress,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Train the River classifier over the training split.
 
         Args:
-            train_sequences (list[TemplateSequence]): Training split sequences.
+            train_sequences (Iterable[TemplateSequence]): Training split
+                sequences.
+            progress (Progress): Progress reporter.
+            logger (logging.Logger | None): Optional logger for fit diagnostics.
 
         Raises:
             ValueError: If the training split does not contain both classes.
         """
+        del logger
         model = _RIVER_ESTIMATORS[self.estimator_name](self.smoothing)
         label_counts = {0: 0, 1: 0}
         feature_names: set[str] = set()
-        for sequence in train_sequences:
+        for sequence in progress.track(
+            train_sequences,
+            description=f"Fitting {self.detector_name} sequences",
+        ):
             features = self.representation.represent(sequence)
             model.learn_one(features, sequence.label)
             label_counts[sequence.label] = label_counts.get(sequence.label, 0) + 1

@@ -10,8 +10,10 @@ from prefect.logging import get_run_logger
 from rich.progress import (
     BarColumn,
     DownloadColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
+    TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
@@ -53,6 +55,26 @@ def make_spinner_progress(unit: str = "lines processed") -> Progress:
         TextColumn(f"{{task.completed:,}} {unit}"),
         "•",
         TimeElapsedColumn(),
+    )
+
+
+def make_count_progress() -> Progress:
+    """Create a progress bar suitable for bounded count-based work.
+
+    Returns:
+        Progress: Rich progress instance configured for count-based tasks.
+    """
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        SpinnerColumn(),
+        BarColumn(),
+        TaskProgressColumn(),
+        "•",
+        MofNCompleteColumn(),
+        "•",
+        TimeElapsedColumn(),
+        "•",
+        TimeRemainingColumn(),
     )
 
 

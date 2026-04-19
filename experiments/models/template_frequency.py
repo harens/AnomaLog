@@ -17,6 +17,11 @@ from experiments.models.base import (
 )
 
 if TYPE_CHECKING:
+    import logging
+    from collections.abc import Iterable
+
+    from rich.progress import Progress
+
     from anomalog.sequences import TemplateSequence
 
 
@@ -73,20 +78,41 @@ class TemplateFrequencyDetector(ExperimentDetector):
     score_threshold: float = 0.0
     threshold_source: str = "configured"
 
-    def fit(self, train_sequences: list[TemplateSequence]) -> None:
+    def fit(
+        self,
+        train_sequences: Iterable[TemplateSequence],
+        *,
+        progress: Progress,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Fit template counts from train sequences.
 
         Args:
-            train_sequences (list[TemplateSequence]): Training split sequences.
+            train_sequences (Iterable[TemplateSequence]): Training split
+                sequences.
+            progress (Progress): Progress reporter.
+            logger (logging.Logger | None): Optional logger for fit diagnostics.
 
         Raises:
             ValueError: If the training split contains zero events.
         """
         counts: Counter[str] = Counter()
         total_events = 0
-        for sequence in train_sequences:
+        del logger
+        calibration_sequences: list[TemplateSequence] = []
+        all_sequences: list[TemplateSequence] | None = (
+            [] if self.configured_score_threshold is None else None
+        )
+        for sequence in progress.track(
+            train_sequences,
+            description="Fitting template_frequency sequences",
+        ):
             counts.update(sequence.templates)
             total_events += len(sequence.templates)
+            if all_sequences is not None:
+                all_sequences.append(sequence)
+                if sequence.label == 0:
+                    calibration_sequences.append(sequence)
         if total_events == 0:
             msg = "Cannot fit template_frequency detector with zero train events."
             raise ValueError(msg)
@@ -97,11 +123,11 @@ class TemplateFrequencyDetector(ExperimentDetector):
             self.threshold_source = "configured"
             return
 
-        calibration_sequences = [
-            sequence for sequence in train_sequences if sequence.label == 0
-        ]
         if not calibration_sequences:
-            calibration_sequences = train_sequences
+            if all_sequences is None:
+                msg = "template_frequency calibration requires replayable train data."
+                raise ValueError(msg)
+            calibration_sequences = all_sequences
         calibration_scores = sorted(
             self.score(sequence) for sequence in calibration_sequences
         )

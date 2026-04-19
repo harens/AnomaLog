@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from anomalog.io_utils import make_count_progress
 from anomalog.sequences import SplitLabel
 from experiments.models.base import (
     ExperimentDetector,
@@ -19,7 +20,7 @@ from experiments.models.base import (
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
     from pathlib import Path
 
     from anomalog.sequences import TemplateSequence
@@ -117,7 +118,7 @@ def run_model(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
     config: ExperimentModelConfig,
     predictions_path: Path,
-    logger: logging.Logger | None = None,
+    logger: logging.Logger,
 ) -> ModelRunSummary:
     """Fit the configured detector and stream predictions to disk.
 
@@ -126,7 +127,7 @@ def run_model(
             producing the full sequence stream.
         config (ExperimentModelConfig): Model config used to build the detector.
         predictions_path (Path): Output path for streamed JSONL predictions.
-        logger (logging.Logger | None): Optional logger for progress messages.
+        logger (logging.Logger): Logger for progress messages.
 
     Returns:
         ModelRunSummary: Metrics, manifest, and sequence summary for the run.
@@ -134,7 +135,7 @@ def run_model(
     detector = config.build_detector()
     fit_detector(
         detector=detector,
-        train_sequences=list(iter_train_sequences(sequence_factory)),
+        train_sequences=iter_train_sequences(sequence_factory),
         logger=logger,
     )
     accumulator = stream_predictions(
@@ -171,15 +172,14 @@ def iter_train_sequences(
 def fit_detector(
     *,
     detector: ExperimentDetector,
-    train_sequences: list[TemplateSequence],
-    logger: logging.Logger | None,
+    train_sequences: Iterable[TemplateSequence],
+    logger: logging.Logger,
 ) -> None:
     """Fit a detector on the training split."""
-    if logger is not None:
-        logger.info("Fitting %s detector on training split", detector.detector_name)
-    detector.fit(train_sequences)
-    if logger is not None:
-        logger.info("Finished fitting %s detector", detector.detector_name)
+    logger.info("Fitting %s detector on training split", detector.detector_name)
+    with make_count_progress() as progress:
+        detector.fit(train_sequences, progress=progress, logger=logger)
+    logger.info("Finished fitting %s detector", detector.detector_name)
 
 
 def stream_predictions(
@@ -187,7 +187,7 @@ def stream_predictions(
     detector: ExperimentDetector,
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
     predictions_path: Path,
-    logger: logging.Logger | None,
+    logger: logging.Logger,
 ) -> RunMetrics:
     """Write predictions incrementally while accumulating metrics.
 
@@ -196,22 +196,26 @@ def stream_predictions(
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
             producing the full sequence stream.
         predictions_path (Path): Output path for streamed JSONL predictions.
-        logger (logging.Logger | None): Optional logger for progress messages.
+        logger (logging.Logger): Logger for progress messages.
 
     Returns:
         RunMetrics: Accumulated metrics for the streamed predictions.
     """
     accumulator = RunMetrics()
-    with predictions_path.open("w", encoding="utf-8") as file_obj:
-        for sequence in sequence_factory():
-            prediction = SequencePrediction.from_sequence(
-                sequence,
-                outcome=detector.predict(sequence),
-            )
+    with (
+        predictions_path.open("w", encoding="utf-8") as file_obj,
+        make_count_progress() as progress,
+    ):
+        for sequence in progress.track(
+            sequence_factory(),
+            description=f"Scoring {detector.detector_name} sequences",
+        ):
+            outcome = detector.predict(sequence)
+            prediction = outcome.to_prediction_record(sequence)
             file_obj.write(msgspec.json.encode(prediction).decode("utf-8"))
             file_obj.write("\n")
             accumulator.update(sequence, prediction)
-            if logger is not None and accumulator.sequence_count % _PROGRESS_EVERY == 0:
+            if accumulator.sequence_count % _PROGRESS_EVERY == 0:
                 logger.info(
                     "Processed %s sequences for %s detector",
                     accumulator.sequence_count,

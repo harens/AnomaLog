@@ -24,7 +24,6 @@ FINGERPRINT_HEX_LENGTH = 64
 class _PredictionRecord(TypedDict):
     entity_ids: list[str]
     event_count: int
-    key_phrases: list[str]
     label: int
     predicted_label: int
     score: float
@@ -41,7 +40,6 @@ def _read_predictions(run_dir: Path) -> list[_PredictionRecord]:
         prediction: _PredictionRecord = {
             "entity_ids": [str(value) for value in raw["entity_ids"]],
             "event_count": int(raw["event_count"]),
-            "key_phrases": [str(value) for value in raw["key_phrases"]],
             "label": int(raw["label"]),
             "predicted_label": int(raw["predicted_label"]),
             "score": float(raw["score"]),
