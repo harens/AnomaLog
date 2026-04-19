@@ -28,7 +28,6 @@ Changelog = "https://github.com/harens/AnomaLog/blob/main/CHANGELOG.md"
 dev = [
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
-    "pydoclint>=0.8.3",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.8",
@@ -43,6 +42,7 @@ experiments = [
     # River 0.24.0 shipped a broken release layout for our naive_bayes usage:
     # https://github.com/online-ml/river/issues/1806
     "river>=0.23.0,<0.24.0",
+    "torch>=2.11.0",
 ]
 
 [tool.ruff.lint]
