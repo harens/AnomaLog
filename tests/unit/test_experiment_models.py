@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from experiments.models.deeplog import DeepLogModelConfig
 from rich.progress import Progress
 
 from anomalog.representations import (
@@ -18,7 +19,6 @@ from anomalog.sequences import (
 )
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary
-from experiments.models.deeplog import DeepLogModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
 from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
