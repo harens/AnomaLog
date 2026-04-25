@@ -52,11 +52,11 @@ def dataset_source_summary(
     """Return a stable source summary for the dataset manifest.
 
     Args:
-        config (DatasetVariantConfig): Dataset variant config to summarize.
+        config (DatasetVariantConfig): Dataset variant config to summarise.
         repo_root (Path): Repository root used to resolve relative paths.
 
     Returns:
-        dict[str, str | None]: Stable JSON-serializable source summary.
+        dict[str, str | None]: Stable JSON-serialisable source summary.
     """
     return config.source_summary(repo_root=repo_root)
 

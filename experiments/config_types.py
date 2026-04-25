@@ -25,16 +25,30 @@ if TYPE_CHECKING:
 
 
 class DatasetSourceConfig(msgspec.Struct, frozen=True, tag_field="type"):
-    """Tagged config base for materializing a dataset source."""
+    """Tagged config base for materialising a dataset source."""
 
     def build(self, *, repo_root: Path) -> DatasetSource:
-        """Build the runtime dataset source."""
+        """Build the runtime dataset source.
+
+        Args:
+            repo_root (Path): Repository root used to resolve relative paths.
+
+        Raises:
+            NotImplementedError: Always, until implemented by a concrete source config.
+        """
         del repo_root
         msg = f"{type(self).__name__} must implement build()."
         raise NotImplementedError(msg)
 
     def manifest_entry(self, *, repo_root: Path) -> dict[str, str | None]:
-        """Return a stable source manifest entry."""
+        """Return a stable source manifest entry.
+
+        Args:
+            repo_root (Path): Repository root used to resolve relative paths.
+
+        Raises:
+            NotImplementedError: Always, until implemented by a concrete source config.
+        """
         del repo_root
         msg = f"{type(self).__name__} must implement manifest_entry()."
         raise NotImplementedError(msg)
@@ -45,7 +59,13 @@ class LocalDirSourceConfig(
     tag="local_dir",
     frozen=True,
 ):
-    """Use an existing local directory as the dataset root."""
+    """Use an existing local directory as the dataset root.
+
+    Attributes:
+        path (Path): Source directory, relative to the repo when not absolute.
+        raw_logs_relpath (Path | None): Optional raw-log path relative to the
+            source directory.
+    """
 
     path: Path
     raw_logs_relpath: Path | None = None
@@ -85,7 +105,14 @@ class LocalZipSourceConfig(
     tag="local_zip",
     frozen=True,
 ):
-    """Use a local zip archive as the dataset source."""
+    """Use a local zip archive as the dataset source.
+
+    Attributes:
+        zip_path (Path): Archive path, relative to the repo when not absolute.
+        raw_logs_relpath (Path | None): Optional raw-log path relative to the
+            extracted dataset root.
+        md5_checksum (str | None): Optional checksum used to verify the archive.
+    """
 
     zip_path: Path
     raw_logs_relpath: Path | None = None
@@ -128,7 +155,14 @@ class RemoteZipSourceConfig(
     tag="remote_zip",
     frozen=True,
 ):
-    """Download a remote zip archive for the dataset."""
+    """Download a remote zip archive for the dataset.
+
+    Attributes:
+        url (str): Absolute URL of the dataset archive.
+        md5_checksum (str): Expected checksum for the archive.
+        raw_logs_relpath (Path | None): Optional raw-log path relative to the
+            extracted dataset root.
+    """
 
     url: str
     md5_checksum: str
@@ -172,7 +206,12 @@ class LabelReaderConfig(msgspec.Struct, frozen=True, tag_field="type"):
     """Tagged config base for anomaly-label readers."""
 
     def build(self) -> AnomalyLabelReader:
-        """Build the runtime anomaly-label reader."""
+        """Build the runtime anomaly-label reader.
+
+        Raises:
+            NotImplementedError: Always, until implemented by a concrete
+                label-reader config.
+        """
         msg = f"{type(self).__name__} must implement build()."
         raise NotImplementedError(msg)
 
@@ -182,7 +221,13 @@ class CSVLabelReaderConfig(
     tag="csv",
     frozen=True,
 ):
-    """Read anomaly labels from a CSV file."""
+    """Read anomaly labels from a CSV file.
+
+    Attributes:
+        relative_path (Path): CSV path relative to the materialised dataset root.
+        entity_column (str): CSV column containing the entity/group id.
+        label_column (str): CSV column containing the integer anomaly label.
+    """
 
     relative_path: Path
     entity_column: str = "entity_id"
@@ -213,7 +258,12 @@ _LABEL_READER_CONFIG_TYPES: dict[str, type[LabelReaderConfig]] = {
 
 
 class CachePathsConfigModel(msgspec.Struct, frozen=True):
-    """Cache/data root paths for dataset materialization."""
+    """Cache/data root paths for dataset materialsation.
+
+    Attributes:
+        data_root (Path): Root for materialised raw datasets.
+        cache_root (Path): Root for derived artifacts and cached outputs.
+    """
 
     data_root: Path
     cache_root: Path
@@ -240,7 +290,13 @@ class SequenceConfigBase(
     forbid_unknown_fields=True,
     tag_field="grouping",
 ):
-    """Shared sequence-generation settings for a dataset variant."""
+    """Shared sequence-generation settings for a dataset variant.
+
+    Attributes:
+        step (int | None): Grouping-specific step between windows. `None`
+            delegates to the grouping mode's default.
+        train_fraction (float): Requested training fraction for generated sequences.
+    """
 
     step: int | None = None
     train_fraction: float = 0.8
@@ -268,7 +324,15 @@ class SequenceConfigBase(
         return self._apply_split_settings(self._group_sequences(templated))
 
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
-        """Apply the grouping-specific builder transformation."""
+        """Apply the grouping-specific builder transformation.
+
+        Args:
+            templated (TemplatedDataset): Built dataset to group into sequences.
+
+        Raises:
+            NotImplementedError: Always, until implemented by a concrete
+                grouping config.
+        """
         cls_name = type(self).__name__
         del self, templated
         msg = f"{cls_name} must implement _group_sequences()."
@@ -293,7 +357,12 @@ class EntitySequenceConfig(
     frozen=True,
     kw_only=True,
 ):
-    """Entity-based sequence configuration."""
+    """Entity-based sequence configuration.
+
+    Attributes:
+        train_on_normal_entities_only (bool): Whether anomalous entities are
+            excluded from the training split budget.
+    """
 
     train_on_normal_entities_only: bool = False
 
@@ -330,7 +399,11 @@ class FixedSequenceConfig(
     frozen=True,
     kw_only=True,
 ):
-    """Fixed-window sequence configuration."""
+    """Fixed-window sequence configuration.
+
+    Attributes:
+        window_size (int): Number of rows per fixed window.
+    """
 
     window_size: int
 
@@ -353,7 +426,11 @@ class TimeSequenceConfig(
     frozen=True,
     kw_only=True,
 ):
-    """Time-window sequence configuration."""
+    """Time-window sequence configuration.
+
+    Attributes:
+        time_span_ms (int): Duration of each emitted time window in milliseconds.
+    """
 
     time_span_ms: int
 
@@ -376,7 +453,20 @@ SequenceConfig: TypeAlias = (
 
 
 class DatasetVariantConfig(msgspec.Struct, frozen=True):
-    """Dataset preprocessing and sequence-generation configuration."""
+    """Dataset preprocessing and sequence-generation configuration.
+
+    Attributes:
+        name (str): Human-readable dataset variant name.
+        dataset_name (str): Dataset identifier used for runtime caches/artifacts.
+        preset (str | None): Optional built-in dataset preset name.
+        source (DatasetSourceConfig | None): Source config for custom datasets.
+        structured_parser (str | None): Structured parser name for custom datasets.
+        template_parser (str): Template parser name.
+        label_reader (LabelReaderConfig | None): Optional anomaly label reader config.
+        cache_paths (CachePathsConfigModel | None): Optional cache/data root override.
+        sequence (SequenceConfigBase): Sequence grouping and split config.
+        description (str | None): Optional free-text dataset description.
+    """
 
     name: str
     dataset_name: str
@@ -428,7 +518,7 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
             repo_root (Path): Repository root used to resolve relative source paths.
 
         Returns:
-            dict[str, str | None]: Stable JSON-serializable source summary.
+            dict[str, str | None]: Stable JSON-serialisable source summary.
         """
         if self.preset is not None:
             return {"preset": self.preset, "type": "preset"}
@@ -437,7 +527,15 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
 
 
 class RunConfig(msgspec.Struct, frozen=True):
-    """Top-level experiment run configuration."""
+    """Top-level experiment run configuration.
+
+    Attributes:
+        name (str): Human-readable run name.
+        dataset (str): Referenced dataset config name.
+        model (str): Referenced model config name.
+        results_root (Path): Root directory for run outputs.
+        description (str | None): Optional free-text run description.
+    """
 
     name: str
     dataset: str
@@ -447,7 +545,18 @@ class RunConfig(msgspec.Struct, frozen=True):
 
 
 class ExperimentBundle(msgspec.Struct, frozen=True):
-    """Resolved run, dataset, and model configs for an experiment."""
+    """Resolved run, dataset, and model configs for an experiment.
+
+    Attributes:
+        repo_root (Path): Repository root used for path resolution.
+        experiments_root (Path): Root directory containing experiment configs.
+        run_path (Path): Resolved run config path.
+        dataset_path (Path): Resolved dataset config path.
+        model_path (Path): Resolved model config path.
+        run (RunConfig): Decoded run config.
+        dataset (DatasetVariantConfig): Decoded dataset config.
+        model (ExperimentModelConfig): Decoded model config.
+    """
 
     experiments_root: Path
     repo_root: Path
@@ -459,10 +568,10 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
     model: ExperimentModelConfig
 
     def normalized_config(self) -> dict[str, object]:
-        """Return a JSON-like normalized config payload for manifests.
+        """Return a JSON-like normalised config payload for manifests.
 
         Returns:
-            dict[str, object]: Normalized config payload for hashing and manifests.
+            dict[str, object]: Normalised config payload for hashing and manifests.
 
         Raises:
             TypeError: If msgspec returns a non-dict payload unexpectedly.
@@ -493,11 +602,11 @@ def _path_to_string(obj: object) -> str:
     raise NotImplementedError(msg)
 
 
-def serialize_config(value: object) -> dict[str, object]:
+def serialise_config(value: object) -> dict[str, object]:
     """Convert config structs into builtins for hashing and manifests.
 
     Args:
-        value (object): Config object or struct to serialize.
+        value (object): Config object or struct to serialise.
 
     Returns:
         dict[str, object]: JSON-like builtins representation of the config.

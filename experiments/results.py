@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from experiments.config import serialize_config
+from experiments.config import serialise_config
 from experiments.datasets import dataset_source_summary
 
 if TYPE_CHECKING:
@@ -27,7 +27,23 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class ResultPaths:
-    """Concrete artifact paths inside a single run directory."""
+    """Concrete artifact paths inside a single run directory.
+
+    The run fingerprint is derived from the fully resolved config so repeated
+    executions of the same experiment land in a deterministic directory. Keeping
+    all artifact paths together avoids ad-hoc filename drift across result
+    writers.
+
+    Attributes:
+        run_fingerprint (str): Stable fingerprint for the resolved run config.
+        run_dir (Path): Root directory containing all artifacts for the run.
+        config_path (Path): Serialised normalised run config path.
+        dataset_manifest_path (Path): Dataset provenance manifest path.
+        metrics_path (Path): Detector metrics output path.
+        predictions_path (Path): Prediction records output path.
+        environment_path (Path): Environment/provenance metadata path.
+        run_log_path (Path): Captured run log path.
+    """
 
     run_fingerprint: str
     run_dir: Path
@@ -88,7 +104,18 @@ def write_run_outputs(
     model_summary: ModelRunSummary,
     result_paths: ResultPaths,
 ) -> None:
-    """Persist the full experiment result bundle."""
+    """Persist the full experiment result bundle.
+
+    Args:
+        bundle (ExperimentBundle): Resolved experiment bundle for the run.
+        templated (TemplatedDataset): Built templated dataset consumed by the
+            detector.
+        sequences (SequenceBuilder): Sequence builder used to derive model input.
+        model_summary (ModelRunSummary): Detector outputs, metrics, and summary
+            counts to persist.
+        result_paths (ResultPaths): Concrete filesystem targets for the run's
+            artifacts.
+    """
     _write_json(result_paths.config_path, bundle.normalized_config())
     _write_json(
         result_paths.dataset_manifest_path,
@@ -111,13 +138,13 @@ def write_run_outputs(
 
 
 def stable_fingerprint(payload: object) -> str:
-    """Return a deterministic fingerprint for a JSON-serializable payload.
+    """Return a deterministic fingerprint for a JSON-serialisable payload.
 
     Args:
-        payload (object): JSON-serializable payload to fingerprint.
+        payload (object): JSON-serialisable payload to fingerprint.
 
     Returns:
-        str: SHA-256 fingerprint for the serialized payload.
+        str: SHA-256 fingerprint for the serialised payload.
     """
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
         "utf-8",
@@ -140,7 +167,7 @@ def build_dataset_manifest(
         templated (TemplatedDataset): Built templated dataset used for the run.
         sequences (SequenceBuilder): Sequence builder used for the detector input.
         model_summary (ModelRunSummary): Detector outputs and summary metrics.
-        result_paths (ResultPaths): Materialized artifact paths for the run.
+        result_paths (ResultPaths): Materialsed artifact paths for the run.
 
     Returns:
         dict[str, object]: Dataset and sequence provenance manifest.
@@ -148,7 +175,7 @@ def build_dataset_manifest(
     sequence_summary = model_summary.sequence_summary
     raw_logs_path = templated.sink.raw_dataset_path.resolve()
     timestamp_min, timestamp_max = templated.sink.timestamp_bounds()
-    dataset_fingerprint = stable_fingerprint(serialize_config(bundle.dataset))
+    dataset_fingerprint = stable_fingerprint(serialise_config(bundle.dataset))
     structured_parser_name = _structured_parser_name(bundle)
     split_summary = build_sequence_split_summary(
         sequences,
@@ -175,7 +202,7 @@ def build_dataset_manifest(
             "min_unix_ms": timestamp_min,
             "max_unix_ms": timestamp_max,
         },
-        "sequence_config": serialize_config(bundle.dataset.sequence),
+        "sequence_config": serialise_config(bundle.dataset.sequence),
         "sequence_split_summary": split_summary.as_dict(),
         "sequence_count": sequence_summary.sequence_count,
         "sequence_split_counts": {
@@ -199,7 +226,7 @@ def build_sequence_split_summary(
 
     Args:
         sequences (SequenceBuilder): Sequence builder whose split semantics are
-            being summarized.
+            being summarised.
         sequence_summary (SequenceSummary): Aggregate split and label counts.
 
     Returns:
@@ -222,10 +249,10 @@ def build_environment_metadata(
 
     Args:
         bundle (ExperimentBundle): Resolved experiment bundle.
-        result_paths (ResultPaths): Materialized artifact paths for the run.
+        result_paths (ResultPaths): Materialised artifact paths for the run.
 
     Returns:
-        dict[str, object]: Serializable environment metadata.
+        dict[str, object]: Serialisable environment metadata.
     """
     return {
         "recorded_at_utc": datetime.now(tz=timezone.utc).isoformat(),

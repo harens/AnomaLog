@@ -17,7 +17,7 @@ from experiments.config_types import (
     SequenceConfig,
     SequenceConfigBase,
     TimeSequenceConfig,
-    serialize_config,
+    serialise_config,
 )
 
 __all__ = [
@@ -37,5 +37,5 @@ __all__ = [
     "SequenceConfigBase",
     "TimeSequenceConfig",
     "load_experiment_bundle",
-    "serialize_config",
+    "serialise_config",
 ]
