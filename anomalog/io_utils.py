@@ -12,6 +12,7 @@ from rich.progress import (
     DownloadColumn,
     MofNCompleteColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
@@ -58,24 +59,35 @@ def make_spinner_progress(unit: str = "lines processed") -> Progress:
     )
 
 
-def make_count_progress() -> Progress:
+def make_count_progress(unit: str | None = None) -> Progress:
     """Create a progress bar suitable for bounded count-based work.
+
+    Args:
+        unit (str | None): Optional unit label shown after the bounded item
+            count.
 
     Returns:
         Progress: Rich progress instance configured for count-based tasks.
     """
-    return Progress(
+    columns: list[str | ProgressColumn] = [
         TextColumn("[bold blue]{task.description}"),
         SpinnerColumn(),
         BarColumn(),
         TaskProgressColumn(),
         "•",
         MofNCompleteColumn(),
-        "•",
-        TimeElapsedColumn(),
-        "•",
-        TimeRemainingColumn(),
+    ]
+    if unit is not None:
+        columns.append(TextColumn(unit))
+    columns.extend(
+        (
+            "•",
+            TimeElapsedColumn(),
+            "•",
+            TimeRemainingColumn(),
+        ),
     )
+    return Progress(*columns)
 
 
 def verify_md5(
