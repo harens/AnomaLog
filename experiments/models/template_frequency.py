@@ -5,15 +5,20 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
-from experiments import ConfigError
+import msgspec
+
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
     ModelManifest,
+    NonNegativeFloat,
+    PositiveFloat,
     PredictionOutcome,
+    Probability,
     SequenceSummary,
+    SingleFitMixin,
 )
 
 if TYPE_CHECKING:
@@ -30,27 +35,37 @@ class TemplateFrequencyModelConfig(
     tag="template_frequency",
     frozen=True,
 ):
-    """Baseline detector using template frequencies from train sequences."""
+    """Baseline detector using template frequencies from train sequences.
 
-    score_threshold: float | None = None
-    calibration_quantile: float = 0.95
-    smoothing: float = 1.0
+    Attributes:
+        score_threshold: Optional fixed anomaly threshold. When omitted, the
+            detector calibrates from training scores.
+        calibration_quantile: Quantile used when calibrating the score threshold.
+        smoothing: Additive smoothing applied to template counts.
+    """
 
-    def __post_init__(self) -> None:
-        """Validate detector-specific model settings.
-
-        Raises:
-            ConfigError: If detector-specific settings are invalid.
-        """
-        if self.score_threshold is not None and self.score_threshold < 0:
-            msg = "model.score_threshold must be non-negative."
-            raise ConfigError(msg)
-        if not 0.0 <= self.calibration_quantile <= 1.0:
-            msg = "model.calibration_quantile must be between 0.0 and 1.0."
-            raise ConfigError(msg)
-        if self.smoothing <= 0:
-            msg = "model.smoothing must be positive."
-            raise ConfigError(msg)
+    score_threshold: Annotated[
+        NonNegativeFloat | None,
+        msgspec.Meta(
+            description=(
+                "Optional fixed anomaly score threshold. When omitted, the "
+                "detector calibrates from normal training scores."
+            ),
+        ),
+    ] = None
+    calibration_quantile: Annotated[
+        Probability,
+        msgspec.Meta(
+            description=(
+                "Training-score quantile used to choose a threshold when "
+                "score_threshold is omitted."
+            ),
+        ),
+    ] = 0.95
+    smoothing: Annotated[
+        PositiveFloat,
+        msgspec.Meta(description="Additive smoothing value for template frequencies."),
+    ] = 1.0
 
     def build_detector(self) -> TemplateFrequencyDetector:
         """Construct the configured template-frequency detector.
@@ -66,8 +81,19 @@ class TemplateFrequencyModelConfig(
 
 
 @dataclass(slots=True)
-class TemplateFrequencyDetector(ExperimentDetector):
-    """Baseline detector scoring sequences by train-set template frequencies."""
+class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
+    """Baseline detector scoring sequences by train-set template frequencies.
+
+    Attributes:
+        detector_name (ClassVar[str]): Stable detector name for manifests/logging.
+        configured_score_threshold (float | None): User-provided threshold, if any.
+        calibration_quantile (float): Quantile used when calibrating a threshold.
+        smoothing (float): Additive smoothing applied to template counts.
+        template_counts (Counter[str]): Learned train-set template counts.
+        total_events (int): Total number of training events seen.
+        score_threshold (float): Effective anomaly threshold after fitting.
+        threshold_source (str): Whether the threshold was configured or calibrated.
+    """
 
     detector_name: ClassVar[str] = "template_frequency"
     configured_score_threshold: float | None
@@ -96,6 +122,7 @@ class TemplateFrequencyDetector(ExperimentDetector):
         Raises:
             ValueError: If the training split contains zero events.
         """
+        self._ensure_unfit(detector_name=self.detector_name)
         counts: Counter[str] = Counter()
         total_events = 0
         del logger
@@ -121,6 +148,7 @@ class TemplateFrequencyDetector(ExperimentDetector):
         if self.configured_score_threshold is not None:
             self.score_threshold = self.configured_score_threshold
             self.threshold_source = "configured"
+            self._mark_fit_complete()
             return
 
         if not calibration_sequences:
@@ -136,9 +164,17 @@ class TemplateFrequencyDetector(ExperimentDetector):
             self.calibration_quantile,
         )
         self.threshold_source = "train_score_quantile"
+        self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
-        """Return a prediction record for a sequence."""
+        """Return a prediction record for a sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            PredictionOutcome: Predicted label and anomaly score for the sequence.
+        """
         score = self.score(sequence)
         predicted_label = int(score > self.score_threshold)
         return PredictionOutcome(
@@ -147,7 +183,15 @@ class TemplateFrequencyDetector(ExperimentDetector):
         )
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
-        """Return serializable detector metadata."""
+        """Return serialisable detector metadata.
+
+        Args:
+            sequence_summary (SequenceSummary): Aggregate split and label counts
+                for the run.
+
+        Returns:
+            ModelManifest: Serialisable template-frequency manifest for the run.
+        """
         return TemplateFrequencyManifest.from_sequence_summary(
             detector=self.detector_name,
             sequence_summary=sequence_summary,
@@ -160,7 +204,14 @@ class TemplateFrequencyDetector(ExperimentDetector):
         )
 
     def score(self, sequence: TemplateSequence) -> float:
-        """Return the mean negative log-probability for a sequence."""
+        """Return the mean negative log-probability for a sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            float: Mean negative log-probability under the learned template model.
+        """
         if not sequence.templates:
             return 0.0
         vocab_size = max(len(self.template_counts), 1)
@@ -174,7 +225,16 @@ class TemplateFrequencyDetector(ExperimentDetector):
 
 
 class TemplateFrequencyManifest(ModelManifest, frozen=True):
-    """Serializable template-frequency detector metadata."""
+    """Serialisable template-frequency detector metadata.
+
+    Attributes:
+        score_threshold (float): Effective anomaly threshold after fitting.
+        threshold_source (str): Whether the threshold was configured or calibrated.
+        calibration_quantile (float): Quantile used during calibration.
+        smoothing (float): Additive smoothing applied to template counts.
+        train_event_count (int): Total number of training events seen.
+        train_template_vocabulary (int): Learned template vocabulary size.
+    """
 
     score_threshold: float
     threshold_source: str
