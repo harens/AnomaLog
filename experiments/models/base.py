@@ -93,6 +93,37 @@ class PredictionOutcome:
         }
 
 
+@dataclass(slots=True)
+class SingleFitMixin:
+    """Shared state for detectors that may only be fit once.
+
+    The experiment layer treats fitting as a one-way transition. Re-running fit
+    on the same detector instance would otherwise mix stale and fresh state, so
+    detectors call `_ensure_unfit()` before any mutation and `_mark_fit_complete()`
+    only after a successful fit.
+    """
+
+    _fit_completed: bool = field(default=False, init=False, repr=False)
+
+    def _ensure_unfit(self, *, detector_name: str) -> None:
+        """Reject repeated fitting on the same detector instance.
+
+        Args:
+            detector_name (str): Human-readable detector name used in the
+                error message.
+
+        Raises:
+            RuntimeError: If fitting has already completed once.
+        """
+        if self._fit_completed:
+            msg = f"{detector_name} can only be fit once."
+            raise RuntimeError(msg)
+
+    def _mark_fit_complete(self) -> None:
+        """Record that the detector has finished a successful fit."""
+        self._fit_completed = True
+
+
 @dataclass(frozen=True, slots=True)
 class _SharedPredictionFields:
     """Common serialised prediction fields.
