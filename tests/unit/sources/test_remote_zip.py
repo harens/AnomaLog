@@ -14,7 +14,13 @@ def test_remote_zip_source_materialise_short_circuits_existing_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Existing extracted datasets are reused without attempting a download."""
+    """Existing extracted datasets are reused without attempting a download.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces runtime hooks so the download
+            path would fail loudly if invoked.
+    """
     dst_dir = tmp_path / "dataset"
     dst_dir.mkdir()
     (dst_dir / "demo.log").write_text("hello\n", encoding="utf-8")
@@ -46,7 +52,13 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Download path verifies the archive, extracts it, and removes the zip file."""
+    """Download path verifies the archive, extracts it, and removes the zip file.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network and archive helpers so
+            the non-network download path can be exercised deterministically.
+    """
     dst_dir = tmp_path / "dataset"
     zip_path = dst_dir.with_suffix(".zip")
     source = RemoteZipSource(
@@ -99,7 +111,13 @@ def test_remote_zip_source_rejects_missing_resolved_raw_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resolved raw log paths are validated after extraction."""
+    """Resolved raw log paths are validated after extraction.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network and archive helpers so
+            the missing-raw-log validation can be isolated.
+    """
     dst_dir = tmp_path / "dataset"
     source = RemoteZipSource(
         url="https://example.com/data.zip",

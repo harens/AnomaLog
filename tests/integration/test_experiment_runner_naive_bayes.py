@@ -99,7 +99,11 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
 
 
 def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> None:
-    """Naive Bayes runs should write phrase-aware predictions and model metadata."""
+    """Naive Bayes runs should write phrase-aware predictions and model metadata.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
     run_config = _prepare_run_tree(tmp_path)
 
     run_dir = run_experiment(run_config)

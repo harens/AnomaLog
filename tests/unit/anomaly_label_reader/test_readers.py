@@ -34,7 +34,11 @@ class _ParquetParser(NullStructuredParser):
 
 
 def test_csv_reader_loads_group_labels_and_ignores_invalid_rows(tmp_path: Path) -> None:
-    """CSVReader returns only valid integer labels for configured entity ids."""
+    """CSVReader returns only valid integer labels for configured entity ids.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for label fixtures.
+    """
     labels_file = tmp_path / "labels.csv"
     labels_file.write_text(
         "entity_id,anomalous\nnode-a,1\nnode-b,nope\nnode-c,0\n",
@@ -50,7 +54,11 @@ def test_csv_reader_loads_group_labels_and_ignores_invalid_rows(tmp_path: Path) 
 
 
 def test_csv_reader_with_context_binds_sink_dataset_root(tmp_path: Path) -> None:
-    """CSVReader resolves relative_path from the provided dataset root."""
+    """CSVReader resolves relative_path from the provided dataset root.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for dataset and label files.
+    """
     sink_dataset_root = tmp_path / "data" / "demo"
     sink_dataset_root.mkdir(parents=True)
     (sink_dataset_root / "labels.csv").write_text(
@@ -94,7 +102,11 @@ def test_csv_reader_with_context_binds_sink_dataset_root(tmp_path: Path) -> None
 # The parquet-backed fast path has its own dedicated coverage test below.
 @pytest.mark.allow_no_new_coverage
 def test_inline_reader_loads_sparse_line_and_group_labels(tmp_path: Path) -> None:
-    """InlineReader preserves the first non-zero label for each line and group."""
+    """InlineReader preserves the first non-zero label for each line and group.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for synthetic sink paths.
+    """
     sink = InMemoryStructuredSink(
         dataset_name="demo",
         raw_dataset_path=tmp_path / "structured.parquet",
@@ -141,7 +153,11 @@ def test_inline_reader_loads_sparse_line_and_group_labels(tmp_path: Path) -> Non
 
 
 def test_inline_reader_loads_sparse_labels_from_parquet_sink(tmp_path: Path) -> None:
-    """InlineReader uses the parquet-backed fast path without changing results."""
+    """InlineReader uses the parquet-backed fast path without changing results.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parquet sink artifacts.
+    """
     cache_paths = CachePathsConfig(
         data_root=tmp_path / "data",
         cache_root=tmp_path / "cache",

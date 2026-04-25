@@ -244,7 +244,11 @@ def test_dataset_spec_build_requires_non_empty_dataset_name() -> None:
 
 
 def test_dataset_spec_clear_cache_removes_dataset_roots(tmp_path: Path) -> None:
-    """Cache clearing should remove only the targeted dataset roots."""
+    """Cache clearing should remove only the targeted dataset roots.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for data and cache roots.
+    """
     cache_paths = CachePathsConfig(
         data_root=tmp_path / "data",
         cache_root=tmp_path / "cache",
@@ -279,7 +283,11 @@ def test_dataset_spec_clear_cache_requires_non_empty_dataset_name() -> None:
 
 
 def test_dataset_spec_clear_cache_ignores_missing_dataset_roots(tmp_path: Path) -> None:
-    """Clearing a dataset with no local cache should succeed silently."""
+    """Clearing a dataset with no local cache should succeed silently.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for data and cache roots.
+    """
     DatasetSpec("demo").with_cache_paths(
         CachePathsConfig(
             data_root=tmp_path / "data",
@@ -289,7 +297,11 @@ def test_dataset_spec_clear_cache_ignores_missing_dataset_roots(tmp_path: Path) 
 
 
 def test_dataset_spec_build_uses_configured_sink_type(tmp_path: Path) -> None:
-    """Build should use the configured sink type instead of hardcoding parquet."""
+    """Build should use the configured sink type instead of hardcoding parquet.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the fake dataset tree.
+    """
     dataset_root = tmp_path / "dataset"
     dataset_root.mkdir()
     raw_logs_path = dataset_root / "demo.log"

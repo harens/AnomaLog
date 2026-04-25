@@ -504,7 +504,7 @@ def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
         == updated_train_fraction
     )
     assert (
-        builder.eligible_train_sequence_count(
+        builder.train_fraction_eligible_sequence_count(
             sequence_count=expected_sequence_count,
             train_label_counts={0: 1},
             test_label_counts={1: 2},
@@ -518,8 +518,7 @@ def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
         test_label_counts={},
     ) == SequenceSplitSummary(
         requested_train_fraction=0.8,
-        train_fraction_scope="all_sequences",
-        train_on_normal_entities_only=False,
+        train_on_normal_entities_only=None,
         eligible_train_sequence_count=0,
         effective_train_fraction_of_eligible=0.0,
         effective_train_fraction_overall=0.0,
@@ -546,7 +545,7 @@ def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract()
         is False
     )
     assert (
-        builder.eligible_train_sequence_count(
+        builder.train_fraction_eligible_sequence_count(
             sequence_count=all_eligible_sequences,
             train_label_counts={0: 2},
             test_label_counts={1: 3},
@@ -554,7 +553,7 @@ def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract()
         == all_eligible_sequences
     )
     assert (
-        builder.with_train_on_normal_entities_only().eligible_train_sequence_count(
+        builder.with_train_on_normal_entities_only().train_fraction_eligible_sequence_count(
             sequence_count=all_eligible_sequences,
             train_label_counts={0: 2},
             test_label_counts={0: 1, 1: 2},

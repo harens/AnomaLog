@@ -42,7 +42,11 @@ def _skip_materialize(
 
 
 def test_drain3_parser_inference_requires_training(tmp_path: Path) -> None:
-    """Drain3Parser refuses inference until training has produced a model."""
+    """Drain3Parser refuses inference until training has produced a model.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+    """
     parser = Drain3Parser(dataset_name="demo", cache_path=tmp_path / "cache")
 
     with pytest.raises(ValueError, match="not been trained"):
@@ -56,7 +60,13 @@ def test_drain3_parser_trains_and_extracts_parameters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Drain3Parser learns a template and returns extracted parameters."""
+    """Drain3Parser learns a template and returns extracted parameters.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+        monkeypatch (pytest.MonkeyPatch): Patches Prefect materialization so the
+            test can exercise training logic directly.
+    """
     monkeypatch.setattr(
         "anomalog.cache.materialize",
         _direct_materialize,
@@ -80,7 +90,11 @@ def test_drain3_parser_trains_and_extracts_parameters(
 
 
 def test_drain3_parser_uses_bound_dataset_name_for_cache_paths(tmp_path: Path) -> None:
-    """Bound Drain3Parser instances resolve both explicit and default cache paths."""
+    """Bound Drain3Parser instances resolve both explicit and default cache paths.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for explicit cache roots.
+    """
     with pytest.raises(ValueError, match="requires a dataset name"):
         _ = Drain3Parser().cache_file_path
 
@@ -100,7 +114,13 @@ def test_drain3_parser_recovers_when_prefect_skips_and_local_cache_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Drain3Parser still trains if Prefect skips execution without a cache file."""
+    """Drain3Parser still trains if Prefect skips execution without a cache file.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+        monkeypatch (pytest.MonkeyPatch): Patches Prefect materialization to
+            simulate a cached Prefect state with no local cache file.
+    """
     # This keeps the public "train then infer" contract covered for the skip
     # scenario even though the cache-reload branch is exercised explicitly below.
     # There is no distinct nearby uncovered branch left for this behavior.
@@ -143,7 +163,13 @@ def test_drain3_parser_loads_inference_from_existing_cache_when_training_is_skip
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Train should recover inference from a persisted cache when Prefect skips work."""
+    """Train should recover inference from a persisted cache when Prefect skips work.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+        monkeypatch (pytest.MonkeyPatch): Patches Prefect materialization at the
+            parser module boundary to simulate a cache hit.
+    """
 
     def _skip_materialize_at_parser(
         *_args: object,
@@ -180,7 +206,13 @@ def test_drain3_parser_train_deletes_stale_cache_and_handles_empty_training_inpu
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Training should remove stale cache files and allow empty iterator runs."""
+    """Training should remove stale cache files and allow empty iterator runs.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+        monkeypatch (pytest.MonkeyPatch): Replaces Drain3's miner with a minimal
+            fake so the test can isolate cache cleanup behavior.
+    """
     monkeypatch.setattr(
         "anomalog.parsers.template.parsers.materialize",
         _direct_materialize,

@@ -53,7 +53,11 @@ def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
 def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
     tmp_path: Path,
 ) -> None:
-    """Asset path resolution should only succeed for file-backed assets."""
+    """Asset path resolution should only succeed for file-backed assets.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local asset paths.
+    """
     asset_file_path = vars(cache_files)["_asset_file_path"]
     local_path = tmp_path / "demo.txt"
     asset = asset_from_local_path(local_path)
@@ -80,7 +84,12 @@ def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
 def test_asset_deps_fingerprint_policy_uses_placeholder_for_no_upstream_assets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty upstream set should still contribute a deterministic key."""
+    """An empty upstream set should still contribute a deterministic key.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces asset-context lookup for the
+            duration of the test.
+    """
     monkeypatch.setattr(
         "anomalog.cache.files.AssetContext.get",
         lambda: _AssetContext(direct_asset_dependencies=[]),
@@ -99,7 +108,13 @@ def test_asset_deps_fingerprint_policy_changes_when_local_file_metadata_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Local file metadata should affect the fingerprint contribution."""
+    """Local file metadata should affect the fingerprint contribution.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local asset files.
+        monkeypatch (pytest.MonkeyPatch): Replaces asset-context lookup for the
+            duration of the test.
+    """
     local_file = tmp_path / "input.txt"
     local_file.write_text("first", encoding="utf-8")
     asset = asset_from_local_path(local_file)
@@ -133,7 +148,13 @@ def test_materialize_reruns_function_when_output_path_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Local-output materialization should recover from stale Prefect cache hits."""
+    """Local-output materialization should recover from stale Prefect cache hits.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub so the fallback path can be exercised directly.
+    """
     output_path = tmp_path / "artifact.txt"
 
     monkeypatch.setattr("anomalog.cache.materialize", _skip_materialize)

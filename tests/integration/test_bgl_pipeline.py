@@ -127,7 +127,12 @@ def _assert_inline_labels(
     rows: list[StructuredLine],
     dataset: TemplatedDataset,
 ) -> None:
-    """Assert the parser and materialization preserve BGL anomaly flags."""
+    """Assert the parser and materialization preserve BGL anomaly flags.
+
+    Args:
+        rows (list[StructuredLine]): Persisted structured rows in source order.
+        dataset (TemplatedDataset): Built dataset exposing inline anomaly labels.
+    """
     assert [row.line_order for row in rows] == list(range(EXPECTED_ROW_COUNT))
     assert [row.anomalous for row in rows] == [0, 0, 0, 1, 1, 0, 0, 0]
     assert dataset.anomaly_labels.label_for_line(3) == 1
@@ -138,7 +143,12 @@ def _assert_inline_labels(
 
 
 def _assert_template_groups(templates_by_message: dict[str, str]) -> None:
-    """Assert repeated message families collapse into stable templates."""
+    """Assert repeated message families collapse into stable templates.
+
+    Args:
+        templates_by_message (dict[str, str]): Template text keyed by original
+            raw message text.
+    """
     link_templates = {
         template
         for message, template in templates_by_message.items()
@@ -162,7 +172,15 @@ def _assert_entity_sequences_are_reproducible(
     templates_by_message: dict[str, str],
     rows: list[StructuredLine],
 ) -> None:
-    """Assert entity grouping and train/test assignment stay deterministic."""
+    """Assert entity grouping and train/test assignment stay deterministic.
+
+    Args:
+        first_pass (list[TemplateSequence]): First iteration over the builder.
+        second_pass (list[TemplateSequence]): Second iteration over the same
+            builder to check determinism.
+        templates_by_message (dict[str, str]): Template text keyed by message.
+        rows (list[StructuredLine]): Persisted structured rows in source order.
+    """
     first_by_entity = _sequences_by_entity(first_pass)
     second_by_entity = _sequences_by_entity(second_pass)
     normal_entities = {NORMAL_ENTITY_A, NORMAL_ENTITY_B}
@@ -211,7 +229,11 @@ def _assert_entity_sequences_are_reproducible(
 def test_user_can_turn_a_small_bgl_archive_into_reproducible_entity_sequences(
     tmp_path: Path,
 ) -> None:
-    """A user can preprocess a tiny BGL archive into stable train/test sequences."""
+    """A user can preprocess a tiny BGL archive into stable train/test sequences.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for archive and cache roots.
+    """
     archive_path = tmp_path / "tiny-bgl.zip"
     raw_lines = _build_local_bgl_archive(archive_path)
     dataset = _dataset_from_local_archive(tmp_path, archive_path)

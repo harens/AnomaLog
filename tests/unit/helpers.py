@@ -82,7 +82,11 @@ def label_lookup(
 
 @dataclass(frozen=True)
 class NullStructuredParser(StructuredParser):
-    """Minimal parser double for tests that only need sink wiring."""
+    """Minimal parser double for tests that only need sink wiring.
+
+    Attributes:
+        name (ClassVar[str]): Stable parser name for registry-compatible tests.
+    """
 
     name: ClassVar[str] = "null"
 
@@ -102,7 +106,17 @@ class NullStructuredParser(StructuredParser):
 
 @dataclass(frozen=True)
 class InMemoryStructuredSink(StructuredSink):
-    """StructuredSink backed by an in-memory list of rows for unit tests."""
+    """StructuredSink backed by an in-memory list of rows for unit tests.
+
+    Attributes:
+        dataset_name (str): Dataset identifier exposed through the sink contract.
+        raw_dataset_path (Path): Synthetic raw dataset path carried for contract
+            compatibility.
+        parser (StructuredParser): Parser instance associated with the sink.
+        rows (list[StructuredLine]): Stored structured rows returned by the sink.
+        anomalies_inline (bool | None): Optional override for whether the sink
+            should report inline anomalies without recalculating from rows.
+    """
 
     dataset_name: str
     raw_dataset_path: Path
@@ -162,7 +176,11 @@ class InMemoryStructuredSink(StructuredSink):
         return line_labels, group_labels
 
     def count_rows(self) -> int:
-        """Return the number of stored rows."""
+        """Return the number of stored rows.
+
+        Returns:
+            int: Number of rows currently stored in the sink.
+        """
         return len(self.rows)
 
     def count_entities_by_label(
@@ -188,7 +206,12 @@ class InMemoryStructuredSink(StructuredSink):
         )
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
-        """Return the minimum and maximum non-null timestamps."""
+        """Return the minimum and maximum non-null timestamps.
+
+        Returns:
+            tuple[int | None, int | None]: Minimum and maximum timestamp across
+                stored rows, or `(None, None)` when no timestamps are present.
+        """
         timestamps = [
             row.timestamp_unix_ms
             for row in self.rows

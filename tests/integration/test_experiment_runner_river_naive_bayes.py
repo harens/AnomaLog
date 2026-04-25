@@ -50,7 +50,11 @@ def _read_predictions(run_dir: Path) -> list[_PredictionRecord]:
 def test_run_experiment_with_river_multinomial_nb_writes_predictions(
     tmp_path: Path,
 ) -> None:
-    """River runs should write probabilities and backend metadata."""
+    """River runs should write probabilities and backend metadata.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
     run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_river_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset_nb.toml"

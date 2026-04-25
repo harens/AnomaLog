@@ -10,7 +10,11 @@ from anomalog.sources.local import LocalDirSource, LocalZipSource
 
 
 def test_local_dir_source_returns_existing_directory(tmp_path: Path) -> None:
-    """LocalDirSource.materialise returns the configured raw log path."""
+    """LocalDirSource.materialise returns the configured raw log path.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local source fixtures.
+    """
     source_dir = tmp_path / "dataset"
     source_dir.mkdir()
     log_path = source_dir / "demo.log"
@@ -30,7 +34,11 @@ def test_local_dir_source_returns_existing_directory(tmp_path: Path) -> None:
 def test_local_dir_source_rejects_missing_and_non_directory_paths(
     tmp_path: Path,
 ) -> None:
-    """LocalDirSource raises the appropriate filesystem exceptions."""
+    """LocalDirSource raises the appropriate filesystem exceptions.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local source fixtures.
+    """
     missing = tmp_path / "missing"
     file_path = tmp_path / "file.txt"
     file_path.write_text("data", encoding="utf-8")
@@ -49,7 +57,11 @@ def test_local_dir_source_rejects_missing_and_non_directory_paths(
 def test_local_zip_source_extracts_archive_contents(
     tmp_path: Path,
 ) -> None:
-    """LocalZipSource extracts a valid zip archive into the destination."""
+    """LocalZipSource extracts a valid zip archive into the destination.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for archive fixtures.
+    """
     zip_path = tmp_path / "dataset.zip"
     dst_dir = tmp_path / "out"
     with zipfile.ZipFile(zip_path, "w") as zf:
@@ -71,7 +83,11 @@ def test_local_zip_source_extracts_archive_contents(
 def test_local_zip_source_short_circuits_when_destination_is_non_empty(
     tmp_path: Path,
 ) -> None:
-    """Existing extracted content is reused before zip validation."""
+    """Existing extracted content is reused before zip validation.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for archive fixtures.
+    """
     dst_dir = tmp_path / "out"
     dst_dir.mkdir()
     (dst_dir / "already.txt").write_text("ready", encoding="utf-8")
@@ -90,7 +106,11 @@ def test_local_zip_source_short_circuits_when_destination_is_non_empty(
 
 
 def test_local_dir_source_rejects_invalid_raw_logs_relpath(tmp_path: Path) -> None:
-    """Raw log paths must remain within the dataset root and point to a file."""
+    """Raw log paths must remain within the dataset root and point to a file.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local source fixtures.
+    """
     source_dir = tmp_path / "dataset"
     source_dir.mkdir()
     (tmp_path / "outside.log").write_text("line\n", encoding="utf-8")

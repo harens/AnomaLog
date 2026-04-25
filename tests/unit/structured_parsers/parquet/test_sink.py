@@ -29,7 +29,11 @@ from tests.unit.helpers import structured_line
 
 
 class _Parser(StructuredParser):
-    """Test-only parser for compact fixture rows written to the raw log file."""
+    """Test-only parser for compact fixture rows written to the raw log file.
+
+    Attributes:
+        name (ClassVar[str]): Stable parser name for sink tests.
+    """
 
     name: ClassVar[str] = "test"
 
@@ -45,7 +49,11 @@ class _Parser(StructuredParser):
 
 
 class _NullParser(StructuredParser):
-    """Parser that drops every line for empty-output extraction tests."""
+    """Parser that drops every line for empty-output extraction tests.
+
+    Attributes:
+        name (ClassVar[str]): Stable parser name for sink tests.
+    """
 
     name: ClassVar[str] = "null"
 
@@ -91,7 +99,14 @@ def _write_rows(
     sink: ParquetStructuredSink,
     rows: list[StructuredLine],
 ) -> None:
-    """Persist fixture rows through the real extractor into parquet files."""
+    """Persist fixture rows through the real extractor into parquet files.
+
+    Args:
+        sink (ParquetStructuredSink): Sink whose real extractor/cache should be
+            exercised.
+        rows (list[StructuredLine]): Structured rows to serialise back into the
+            compact raw fixture format.
+    """
     sink.raw_dataset_path.write_text(
         "\n".join(_raw_line(row) for row in rows),
         encoding="utf-8",
@@ -114,10 +129,10 @@ def _write_rows(
 
 
 def _raw_line(row: StructuredLine) -> str:
-    """Serialize a fixture row into the compact format consumed by `_Parser`.
+    """Serialise a fixture row into the compact format consumed by `_Parser`.
 
     Args:
-        row (StructuredLine): Structured row to serialize.
+        row (StructuredLine): Structured row to serialise.
 
     Returns:
         str: Pipe-delimited raw line for the test parser.
@@ -223,7 +238,11 @@ ENTITY_GROUP_ROWS = [
 def test_rows_from_batch_applies_defaults_for_missing_and_null_columns(
     tmp_path: Path,
 ) -> None:
-    """Row decoding should fall back to current defaults for missing columns."""
+    """Row decoding should fall back to current defaults for missing columns.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     # This locks in the row-decoding defaults for missing projected columns. The
     # remaining uncovered lines in this area belong to parquet scan paths rather
     # than the batch-decoding contract exercised here.
@@ -248,7 +267,11 @@ def test_rows_from_batch_applies_defaults_for_missing_and_null_columns(
 def test_iter_structured_lines_reads_rows_from_real_parquet_dataset(
     tmp_path: Path,
 ) -> None:
-    """Iterating structured lines should round-trip rows written by the extractor."""
+    """Iterating structured lines should round-trip rows written by the extractor.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -263,7 +286,11 @@ def test_iter_structured_lines_reads_rows_from_real_parquet_dataset(
 def test_iter_structured_lines_projection_applies_defaults_from_real_dataset(
     tmp_path: Path,
 ) -> None:
-    """Projected parquet scans should fill omitted columns with defaults."""
+    """Projected parquet scans should fill omitted columns with defaults.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -297,7 +324,11 @@ def test_iter_structured_lines_projection_applies_defaults_from_real_dataset(
 def test_sink_statistics_and_entity_grouping_use_real_dataset(
     tmp_path: Path,
 ) -> None:
-    """Entity-aware statistics should come from persisted parquet data."""
+    """Entity-aware statistics should come from persisted parquet data.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     expected_row_count = 3
     _write_rows(
@@ -322,7 +353,13 @@ def test_sink_entity_grouping_skips_null_entity_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Entity grouping should skip rows without an entity id."""
+    """Entity grouping should skip rows without an entity id.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals to isolate the
+            null-entity grouping behavior.
+    """
     sink = _make_sink(tmp_path)
 
     def _iter_buckets(_self: ParquetStructuredSink) -> set[int]:
@@ -369,7 +406,11 @@ def test_sink_entity_grouping_skips_null_entity_rows(
 def test_sink_timestamp_bounds_reads_min_and_max_from_real_dataset(
     tmp_path: Path,
 ) -> None:
-    """Timestamp bounds should scan persisted parquet data for min and max."""
+    """Timestamp bounds should scan persisted parquet data for min and max.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     # This guards the externally visible min/max contract. Nearby uncovered
     # branches are empty-batch and null-handling details that do not replace
     # this persisted-dataset regression check.
@@ -385,7 +426,11 @@ def test_sink_timestamp_bounds_reads_min_and_max_from_real_dataset(
 def test_sink_time_window_iteration_uses_global_timestamp_order_across_partitions(
     tmp_path: Path,
 ) -> None:
-    """Time-window iteration should follow persisted timestamp order."""
+    """Time-window iteration should follow persisted timestamp order.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -405,7 +450,11 @@ def test_sink_time_window_iteration_uses_global_timestamp_order_across_partition
 def test_sink_time_window_iteration_includes_null_bucket_rows_in_timestamp_order(
     tmp_path: Path,
 ) -> None:
-    """Timestamp ordering should merge null-entity rows with bucketed rows."""
+    """Timestamp ordering should merge null-entity rows with bucketed rows.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -434,7 +483,11 @@ def test_sink_time_window_iteration_includes_null_bucket_rows_in_timestamp_order
 def test_sink_fixed_window_iteration_uses_global_order_across_partitions(
     tmp_path: Path,
 ) -> None:
-    """Fixed-size windows should preserve global line order across partitions."""
+    """Fixed-size windows should preserve global line order across partitions.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -454,7 +507,11 @@ def test_sink_fixed_window_iteration_uses_global_order_across_partitions(
 def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buffer(
     tmp_path: Path,
 ) -> None:
-    """Fixed-size windows should emit a trailing partial window when rows remain."""
+    """Fixed-size windows should emit a trailing partial window when rows remain.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -474,7 +531,11 @@ def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buff
 def test_sink_time_window_iteration_rejects_non_positive_sizes(
     tmp_path: Path,
 ) -> None:
-    """Time-window iteration should reject non-positive span and step values."""
+    """Time-window iteration should reject non-positive span and step values.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -491,7 +552,11 @@ def test_sink_time_window_iteration_rejects_non_positive_sizes(
 def test_sink_time_window_iteration_requires_at_least_one_timestamp(
     tmp_path: Path,
 ) -> None:
-    """Time-window iteration should fail when the dataset has no timestamps."""
+    """Time-window iteration should fail when the dataset has no timestamps.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -508,7 +573,11 @@ def test_sink_time_window_iteration_requires_at_least_one_timestamp(
 def test_sink_fixed_window_iteration_rejects_non_positive_sizes(
     tmp_path: Path,
 ) -> None:
-    """Fixed-window iteration should reject non-positive size and step values."""
+    """Fixed-window iteration should reject non-positive size and step values.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -525,7 +594,11 @@ def test_sink_fixed_window_iteration_rejects_non_positive_sizes(
 def test_iter_record_batches_skips_unparseable_rows_and_populates_null_entity_bucket(
     tmp_path: Path,
 ) -> None:
-    """Batch iteration should skip parser misses and preserve null entity buckets."""
+    """Batch iteration should skip parser misses and preserve null entity buckets.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for raw input files.
+    """
     expected_rows = 2
     raw_input_path = tmp_path / "raw.log"
     raw_input_path.write_text(
@@ -551,7 +624,11 @@ def test_iter_record_batches_skips_unparseable_rows_and_populates_null_entity_bu
 def test_extract_structured_components_rejects_missing_input_path(
     tmp_path: Path,
 ) -> None:
-    """Extraction should fail fast when the raw log file is absent."""
+    """Extraction should fail fast when the raw log file is absent.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for missing-path assertions.
+    """
     with (
         disable_run_logger(),
         pytest.raises(FileNotFoundError, match="Input file does not exist"),
@@ -566,7 +643,11 @@ def test_extract_structured_components_rejects_missing_input_path(
 def test_extract_structured_components_rejects_empty_parser_output(
     tmp_path: Path,
 ) -> None:
-    """Extraction should fail when parsing produces no structured rows."""
+    """Extraction should fail when parsing produces no structured rows.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for raw input and output.
+    """
     raw_input_path = tmp_path / "raw.log"
     raw_input_path.write_text("invalid line\n", encoding="utf-8")
 
@@ -588,7 +669,13 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cleanup should ignore a directory disappearing between exists and rmtree."""
+    """Cleanup should ignore a directory disappearing between exists and rmtree.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for raw input and output.
+        monkeypatch (pytest.MonkeyPatch): Replaces `rmtree` to simulate a racing
+            external cleanup of the output directory.
+    """
     raw_input_path = tmp_path / "raw.log"
     raw_input_path.write_text("100|node-a|first|0\n", encoding="utf-8")
     parquet_out_dir = tmp_path / "out"
@@ -628,7 +715,11 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
 def test_projected_columns_preserves_order_while_deduplicating(
     tmp_path: Path,
 ) -> None:
-    """Projected columns should preserve caller order while dropping duplicates."""
+    """Projected columns should preserve caller order while dropping duplicates.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
 
     # Keep this direct assertion because higher-level projection tests would not

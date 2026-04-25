@@ -14,7 +14,7 @@ from anomalog.sequences import EntitySequenceBuilder
 from experiments import ConfigError
 from experiments.config import load_experiment_bundle
 from experiments.datasets import build_dataset_spec
-from experiments.models import run_model
+from experiments.models import TrainProgressHint, run_model
 from experiments.results import (
     build_sequence_split_summary,
     prepare_result_paths,
@@ -61,11 +61,20 @@ def run_experiment(config_path: Path, *, force: bool = False) -> Path:
         templated = dataset_spec.build()
         sequences = bundle.dataset.sequence.apply(templated)
         logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
+        train_sequence_count_hint = sequences.train_sequence_count_hint()
         model_summary = run_model(
             sequence_factory=lambda: iter(sequences),
             config=bundle.model,
             predictions_path=result_paths.predictions_path,
             logger=logger,
+            train_progress_hint=(
+                None
+                if train_sequence_count_hint is None
+                else TrainProgressHint(
+                    total=train_sequence_count_hint,
+                    unit=sequences.train_sequence_count_unit_hint(),
+                )
+            ),
         )
         split_summary = build_sequence_split_summary(
             sequences,

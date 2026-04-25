@@ -19,7 +19,12 @@ class _AssetContext:
 def test_asset_deps_fingerprint_policy_returns_none_without_asset_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No asset context means no additional cache key contribution."""
+    """No asset context means no additional cache key contribution.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces asset-context lookup for the
+            duration of the test.
+    """
     monkeypatch.setattr("anomalog.cache.files.AssetContext.get", lambda: None)
 
     key = AssetDepsFingerprintPolicy().compute_key(
@@ -35,7 +40,13 @@ def test_asset_deps_fingerprint_policy_handles_file_and_nonfile_assets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Dependency order does not affect mixed file/non-file asset fingerprints."""
+    """Dependency order does not affect mixed file/non-file asset fingerprints.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local asset files.
+        monkeypatch (pytest.MonkeyPatch): Replaces asset-context lookup for the
+            duration of the test.
+    """
     local_file = tmp_path / "input.txt"
     local_file.write_text("payload", encoding="utf-8")
     file_asset = asset_from_local_path(local_file)

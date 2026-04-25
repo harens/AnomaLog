@@ -15,7 +15,11 @@ from anomalog.io_utils import extract_zip, verify_md5
 def test_verify_md5_reads_entire_file_before_raising_on_mismatch(
     tmp_path: Path,
 ) -> None:
-    """Checksum verification should advance through the full file on failure."""
+    """Checksum verification should advance through the full file on failure.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the checksum fixture.
+    """
     progress = Progress(disable=True)
     file_path = tmp_path / "payload.bin"
     payload = b"abcdef"
@@ -38,7 +42,11 @@ def test_verify_md5_reads_entire_file_before_raising_on_mismatch(
 def test_extract_zip_extracts_files_into_destination(
     tmp_path: Path,
 ) -> None:
-    """Zip extraction should create the destination and reject corrupt members."""
+    """Zip extraction should create the destination and reject corrupt members.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for zip and extraction paths.
+    """
     zip_path = tmp_path / "archive.zip"
     destination = tmp_path / "out"
     source_file = tmp_path / "source.txt"
@@ -60,7 +68,13 @@ def test_extract_zip_raises_for_corrupt_member(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Zip extraction should fail before extracting when integrity checks fail."""
+    """Zip extraction should fail before extracting when integrity checks fail.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for zip and extraction paths.
+        monkeypatch (pytest.MonkeyPatch): Replaces `ZipFile` with a corrupt-archive
+            double so the test can isolate integrity handling.
+    """
     zip_path = tmp_path / "archive.zip"
     destination = tmp_path / "out"
     zip_path.write_bytes(b"placeholder")

@@ -52,7 +52,6 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     )
 
     assert summary.requested_train_fraction == expected_requested_train_fraction
-    assert summary.train_fraction_scope == "all_sequences"
     assert (
         summary.eligible_train_sequence_count == expected_eligible_train_sequence_count
     )

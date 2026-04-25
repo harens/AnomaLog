@@ -15,7 +15,12 @@ def _project_conftest() -> str:
 
 
 def test_warns_when_test_does_not_add_new_coverage(pytester: pytest.Pytester) -> None:
-    """Tests that only repeat covered behavior should emit a warning."""
+    """Tests that only repeat covered behavior should emit a warning.
+
+    Args:
+        pytester (pytest.Pytester): Ephemeral pytest project used to exercise the
+            coverage warning hook end-to-end.
+    """
     pytester.makeconftest(_project_conftest())
     pytester.makepyfile(
         module_under_test="""
@@ -52,7 +57,12 @@ def test_warns_when_test_does_not_add_new_coverage(pytester: pytest.Pytester) ->
 
 
 def test_marker_suppresses_warning(pytester: pytest.Pytester) -> None:
-    """Tests can opt out when zero new coverage is intentional."""
+    """Tests can opt out when zero new coverage is intentional.
+
+    Args:
+        pytester (pytest.Pytester): Ephemeral pytest project used to exercise the
+            coverage warning hook end-to-end.
+    """
     pytester.makeconftest(_project_conftest())
     pytester.makepyfile(
         module_under_test="""

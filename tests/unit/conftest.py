@@ -45,7 +45,15 @@ def _introduces_new_coverage(
     before: dict[str, frozenset[int]],
     after: dict[str, frozenset[int]],
 ) -> bool:
-    """Return whether any new covered lines were added."""
+    """Return whether any new covered lines were added.
+
+    Args:
+        before (dict[str, frozenset[int]]): Coverage snapshot before the test.
+        after (dict[str, frozenset[int]]): Coverage snapshot after the test.
+
+    Returns:
+        bool: Whether the later snapshot covers at least one new line.
+    """
     return any(
         lines - before.get(filename, frozenset()) for filename, lines in after.items()
     )
@@ -76,7 +84,15 @@ def pytest_runtest_makereport(
 def warn_when_test_adds_no_new_coverage(
     request: pytest.FixtureRequest,
 ) -> Generator[None]:
-    """Warn when a unit test does not increase cumulative line coverage."""
+    """Warn when a unit test does not increase cumulative line coverage.
+
+    Args:
+        request (pytest.FixtureRequest): Current test request used to inspect
+            markers and emit warnings on the active node.
+
+    Yields:
+        None: Control around the wrapped test execution.
+    """
     if request.node.get_closest_marker("allow_no_new_coverage") is not None:
         yield
         return
