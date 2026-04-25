@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, TypedDict, TypeVar, runtime_checkable
+from contextvars import ContextVar
+from dataclasses import dataclass, field, fields
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
 
 import msgspec
 from typing_extensions import Self
@@ -13,118 +21,91 @@ from experiments import ConfigError
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
     from rich.progress import Progress
 
     from anomalog.sequences import TemplateSequence
 
 TModelManifest = TypeVar("TModelManifest", bound="ModelManifest")
+TExperimentModelConfig = TypeVar(
+    "TExperimentModelConfig",
+    bound="ExperimentModelConfig",
+)
+_MODEL_CONFIG_DECODING: ContextVar[bool] = ContextVar(
+    "_MODEL_CONFIG_DECODING",
+    default=False,
+)
+
+NonNegativeFloat = Annotated[float, msgspec.Meta(ge=0.0)]
+NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
+OpenProbability = Annotated[float, msgspec.Meta(gt=0.0, lt=1.0)]
+Probability = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
+PositiveInt = Annotated[int, msgspec.Meta(gt=0)]
+PositiveSeconds = PositiveFloat
 
 
 @dataclass(frozen=True, slots=True)
 class PredictionOutcome:
-    """Shared prediction fields for a single sequence."""
+    """In-memory detector output for one scored sequence.
+
+    `PredictionOutcome` is the runtime-facing form: the detector returns this
+    after it has made a decision. It keeps only the fields needed for
+    evaluation and allows detector-specific subclasses to attach richer
+    explanation payloads before anything is serialised.
+
+    Attributes:
+        predicted_label (int): Detector-predicted anomaly label.
+        score (float): Detector-specific anomaly score.
+    """
 
     predicted_label: int
     score: float
 
     def to_prediction_record(self, sequence: TemplateSequence) -> SequencePrediction:
-        """Return a serializable prediction record for one sequence.
+        """Return a serialisable prediction record for one sequence.
 
         Args:
-            sequence (TemplateSequence): Sequence being serialized.
+            sequence (TemplateSequence): Sequence being serialised.
 
         Returns:
-            SequencePrediction: Shared serialized prediction record.
+            SequencePrediction: Shared serialised prediction record.
         """
-        return SequencePrediction(
-            **SequencePrediction.shared_fields(sequence, outcome=self),
+        return SequencePrediction.from_sequence(
+            sequence,
+            outcome=self,
+            detector_fields=self.detector_prediction_fields(),
         )
 
+    def detector_prediction_fields(self) -> dict[str, Any]:
+        """Return detector-specific fields to flatten into prediction output.
 
-class DeepLogTopPrediction(msgspec.Struct, frozen=True):
-    """Top-`g` key prediction candidate from DeepLog's next-event model.
+        Returns:
+            dict[str, Any]: Dataclass fields defined by detector-specific
+                outcome subclasses, excluding the shared label and score.
+        """
+        prediction_outcome_fields = {item.name for item in fields(PredictionOutcome)}
+        return {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if item.name not in prediction_outcome_fields
+        }
 
-    This corresponds to the paper's log-key anomaly detection component, which
-    treats an event as normal when the observed next log key is among the
-    highest-probability predicted candidates.
+
+@dataclass(frozen=True, slots=True)
+class _SharedPredictionFields:
+    """Common serialised prediction fields.
+
+    Attributes:
+        window_id (int): Stable sequence window identifier.
+        split_label (str): Train/test split label.
+        label (int): Ground-truth sequence label.
+        predicted_label (int): Detector-predicted label.
+        score (float): Detector-specific anomaly score.
+        entity_ids (list[str]): Entity ids present in the sequence.
+        event_count (int): Number of events in the sequence.
     """
-
-    template: str
-    probability: float
-
-
-class DeepLogKeyFinding(msgspec.Struct, frozen=True):
-    """Event-level finding from DeepLog's stacked-LSTM key predictor.
-
-    This captures the paper's next-log-key anomaly decision for one target
-    event, including the observed template, whether it was out of vocabulary,
-    how unknown history items were handled, and the ranked top-`g` candidates
-    produced by the model.
-    """
-
-    event_index: int
-    history_templates: list[str]
-    unknown_history_templates: list[str]
-    actual_template: str
-    actual_probability: float | None
-    is_anomalous: bool
-    is_oov: bool
-    top_predictions: list[DeepLogTopPrediction]
-
-
-class DeepLogParameterFinding(msgspec.Struct, frozen=True):
-    """Event-level finding from a per-template DeepLog parameter model.
-
-    This corresponds to the paper's parameter-value anomaly detection model:
-    one LSTM per log key, residual scored by MSE, and thresholded by a
-    Gaussian fitted on validation residuals.
-    """
-
-    event_index: int
-    template: str
-    feature_names: list[str]
-    observed_vector: list[float | None]
-    predicted_vector: list[float | None]
-    residual_mse: float
-    gaussian_mean: float
-    gaussian_stddev: float
-    gaussian_lower_bound: float
-    gaussian_upper_bound: float
-    most_anomalous_feature: str | None
-    is_anomalous: bool
-
-
-class DeepLogEventFinding(msgspec.Struct, frozen=True):
-    """Combined DeepLog event-level anomaly finding.
-
-    DeepLog reports anomalies at the event level, then aggregates them into a
-    sequence-level prediction for the surrounding AnomaLog experiment contract.
-    """
-
-    event_index: int
-    template: str
-    key_model_finding: DeepLogKeyFinding | None = None
-    parameter_model_finding: DeepLogParameterFinding | None = None
-
-
-class DeepLogSequenceDetails(msgspec.Struct, frozen=True):
-    """DeepLog-specific sequence prediction payload.
-
-    This preserves the scoped DeepLog event-level outputs while allowing the
-    shared experiment layer to continue writing one serialized prediction
-    record per `TemplateSequence`.
-    """
-
-    is_sequence_anomalous: bool
-    triggered_by_key_model: bool
-    triggered_by_parameter_model: bool
-    findings: list[DeepLogEventFinding] = msgspec.field(default_factory=list)
-
-
-class _SharedPredictionFields(TypedDict):
-    """Common serialized prediction fields."""
 
     window_id: int
     split_label: str
@@ -134,17 +115,78 @@ class _SharedPredictionFields(TypedDict):
     entity_ids: list[str]
     event_count: int
 
+    @classmethod
+    def field_names(cls) -> tuple[str, ...]:
+        """Return shared prediction field names in serialised order.
 
-class SequencePrediction(msgspec.Struct, frozen=True):
-    """Serializable prediction record for a single sequence."""
+        Returns:
+            tuple[str, ...]: Ordered shared prediction field names.
+        """
+        return tuple(item.name for item in fields(cls))
 
-    window_id: int
-    split_label: str
-    label: int
-    predicted_label: int
-    score: float
-    entity_ids: list[str]
-    event_count: int
+    def to_shared_dict(self) -> dict[str, Any]:
+        """Return shared prediction fields as a JSON-ready mapping.
+
+        Returns:
+            dict[str, Any]: Shared prediction fields ready for serialisation.
+        """
+        return {
+            field_name: getattr(self, field_name) for field_name in self.field_names()
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SequencePrediction(_SharedPredictionFields):
+    """Serializable prediction record for a single sequence.
+
+    This is the persisted/output-facing form, not the detector's internal
+    return type. The split from `PredictionOutcome` keeps runtime detector code
+    focused on prediction logic while giving the experiment runner one stable
+    JSON-friendly schema to write to disk.
+
+    Attributes:
+        detector_fields (dict[str, Any]): Detector-specific serialised fields to
+            merge into the shared prediction payload.
+    """
+
+    detector_fields: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_sequence(
+        cls,
+        sequence: TemplateSequence,
+        *,
+        outcome: PredictionOutcome,
+        detector_fields: dict[str, Any] | None = None,
+    ) -> SequencePrediction:
+        """Build a prediction record from a sequence and detector output.
+
+        Args:
+            sequence (TemplateSequence): Sequence being serialised.
+            outcome (PredictionOutcome): Detector output for the sequence.
+            detector_fields (dict[str, Any] | None): Detector-specific fields
+                to flatten into serialised output.
+
+        Returns:
+            SequencePrediction: Shared record plus detector-specific fields.
+        """
+        shared_fields = cls.shared_fields(sequence, outcome=outcome)
+        return cls(
+            **shared_fields.to_shared_dict(),
+            detector_fields=detector_fields or {},
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a flattened JSON-ready prediction record.
+
+        Returns:
+            dict[str, Any]: Shared prediction fields with detector-specific
+                fields merged at the top level.
+        """
+        return {
+            **self.to_shared_dict(),
+            **self.detector_fields,
+        }
 
     @staticmethod
     def shared_fields(
@@ -152,29 +194,61 @@ class SequencePrediction(msgspec.Struct, frozen=True):
         *,
         outcome: PredictionOutcome,
     ) -> _SharedPredictionFields:
-        """Build shared serialized prediction fields from detector output.
+        """Build shared serialised prediction fields from detector output.
 
         Args:
-            sequence (TemplateSequence): Sequence being serialized.
+            sequence (TemplateSequence): Sequence being serialised.
             outcome (PredictionOutcome): Detector output for the sequence.
 
         Returns:
-            _SharedPredictionFields: Shared serialized prediction fields.
+            _SharedPredictionFields: Shared serialised prediction fields.
         """
-        return {
-            "window_id": sequence.window_id,
-            "split_label": sequence.split_label.value,
-            "label": sequence.label,
-            "predicted_label": outcome.predicted_label,
-            "score": outcome.score,
-            "entity_ids": sequence.entity_ids,
-            "event_count": len(sequence.events),
-        }
+        return _SharedPredictionFields(
+            window_id=sequence.window_id,
+            split_label=sequence.split_label.value,
+            label=sequence.label,
+            predicted_label=outcome.predicted_label,
+            score=outcome.score,
+            entity_ids=sequence.entity_ids,
+            event_count=len(sequence.events),
+        )
+
+
+def require_entity_local_sequences(
+    sequences: Iterable[TemplateSequence],
+    *,
+    detector_name: str,
+) -> None:
+    """Reject sequences that already span multiple entity ids.
+
+    Args:
+        sequences (Iterable[TemplateSequence]): Sequences to validate.
+        detector_name (str): Detector name used in the validation error.
+
+    Raises:
+        ValueError: If any sequence contains multiple entity ids.
+    """
+    for sequence in sequences:
+        if len(sequence.entity_ids) <= 1:
+            continue
+        msg = (
+            f"{detector_name} requires entity-local sequences. "
+            f"Found multiple entity_ids in one sequence: {sequence.entity_ids!r}."
+        )
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
 class SequenceSummary:
-    """Counts describing the generated sequence dataset."""
+    """Counts describing the generated sequence dataset.
+
+    Attributes:
+        sequence_count (int): Total number of generated sequences.
+        train_sequence_count (int): Number of train-split sequences.
+        test_sequence_count (int): Number of test-split sequences.
+        train_label_counts (dict[int, int]): Train label histogram.
+        test_label_counts (dict[int, int]): Test label histogram.
+    """
 
     sequence_count: int
     train_sequence_count: int
@@ -184,7 +258,15 @@ class SequenceSummary:
 
 
 class ModelManifest(msgspec.Struct, frozen=True):
-    """Serializable manifest for one detector run."""
+    """Serialisable manifest for one detector run.
+
+    Attributes:
+        detector (str): Stable detector name.
+        train_sequence_count (int): Number of train-split sequences.
+        test_sequence_count (int): Number of test-split sequences.
+        train_label_counts (dict[int, int]): Train label histogram.
+        test_label_counts (dict[int, int]): Test label histogram.
+    """
 
     detector: str
     train_sequence_count: int
@@ -222,7 +304,13 @@ class ModelManifest(msgspec.Struct, frozen=True):
 
 @dataclass(frozen=True, slots=True)
 class ModelRunSummary:
-    """Detector outputs and run summaries."""
+    """Detector outputs and run summaries.
+
+    Attributes:
+        metrics (dict[str, int | float]): Aggregate run metrics.
+        model_manifest (ModelManifest): Detector manifest for the run.
+        sequence_summary (SequenceSummary): Split and label counts for the run.
+    """
 
     metrics: dict[str, int | float]
     model_manifest: ModelManifest
@@ -230,10 +318,35 @@ class ModelRunSummary:
 
 
 class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
-    """Tagged experiment-model config base."""
+    """Tagged experiment-model config base.
 
-    name: str
-    description: str | None = None
+    Attributes:
+        name: Human-readable model config name.
+        description: Optional free-text model config description.
+    """
+
+    name: Annotated[
+        str,
+        msgspec.Meta(description="Human-readable model config name."),
+    ]
+    description: Annotated[
+        str | None,
+        msgspec.Meta(description="Optional free-text model config description."),
+    ] = None
+
+    def __post_init__(self) -> None:
+        """Reject direct construction so msgspec metadata remains authoritative.
+
+        Raises:
+            TypeError: If a model config is constructed directly.
+        """
+        if _MODEL_CONFIG_DECODING.get():
+            return
+        msg = (
+            "Experiment model configs must be decoded with "
+            "decode_experiment_model_config()."
+        )
+        raise TypeError(msg)
 
     @property
     def detector(self) -> str:
@@ -249,40 +362,92 @@ class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
         return detector
 
     def build_detector(self) -> ExperimentDetector:
-        """Construct the runtime detector for this config."""
+        """Construct the runtime detector for this config.
+
+        Raises:
+            NotImplementedError: Always, until implemented by a concrete model config.
+        """
         msg = f"{type(self).__name__} must implement build_detector()."
         raise NotImplementedError(msg)
 
 
 class PhraseModelConfig(ExperimentModelConfig, frozen=True):
-    """Shared phrase-feature config for bag-of-phrases detectors."""
+    """Shared phrase-feature config for bag-of-phrases detectors.
 
-    smoothing: float = 1.0
-    phrase_ngram_min: int = 1
-    phrase_ngram_max: int = 2
+    Attributes:
+        smoothing: Additive smoothing value for phrase counts.
+        phrase_ngram_min: Smallest template phrase n-gram size to extract.
+        phrase_ngram_max: Largest template phrase n-gram size to extract.
+    """
 
-    def _validate_phrase_features(self) -> None:
-        if self.smoothing <= 0:
-            msg = "model.smoothing must be positive."
-            raise ConfigError(msg)
-        if self.phrase_ngram_min < 1:
-            msg = "model.phrase_ngram_min must be at least 1."
-            raise ConfigError(msg)
+    smoothing: Annotated[
+        PositiveFloat,
+        msgspec.Meta(description="Additive smoothing value for phrase counts."),
+    ] = 1.0
+    phrase_ngram_min: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Smallest template phrase n-gram size to extract."),
+    ] = 1
+    phrase_ngram_max: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Largest template phrase n-gram size to extract."),
+    ] = 2
+
+    def __post_init__(self) -> None:
+        """Validate shared phrase-feature settings.
+
+        Raises:
+            ConfigError: If phrase n-gram bounds are invalid.
+        """
+        super().__post_init__()
         if self.phrase_ngram_max < self.phrase_ngram_min:
             msg = "model.phrase_ngram_max must be >= phrase_ngram_min."
             raise ConfigError(msg)
 
     def representation(self) -> TemplatePhraseRepresentation:
-        """Return the phrase representation required by the detector."""
+        """Return the phrase representation required by the detector.
+
+        Returns:
+            TemplatePhraseRepresentation: Phrase representation configured from
+                the shared phrase settings.
+        """
         return TemplatePhraseRepresentation(
             phrase_ngram_min=self.phrase_ngram_min,
             phrase_ngram_max=self.phrase_ngram_max,
         )
 
 
+def decode_experiment_model_config(
+    raw_config: Mapping[str, Any],
+    *,
+    config_type: type[TExperimentModelConfig],
+    dec_hook: Callable[[type, object], object] | None = None,
+) -> TExperimentModelConfig:
+    """Decode an experiment model config through msgspec validation.
+
+    Args:
+        raw_config (Mapping[str, Any]): Raw decoded config mapping.
+        config_type (type[TExperimentModelConfig]): Concrete model config type.
+        dec_hook (Callable[[type, object], object] | None): Optional msgspec
+            decode hook.
+
+    Returns:
+        TExperimentModelConfig: Validated model config.
+    """
+    token = _MODEL_CONFIG_DECODING.set(True)
+    try:
+        return msgspec.convert(raw_config, type=config_type, dec_hook=dec_hook)
+    finally:
+        _MODEL_CONFIG_DECODING.reset(token)
+
+
 @runtime_checkable
 class ExperimentDetector(Protocol):
-    """Common detector runtime interface."""
+    """Common detector runtime interface.
+
+    Attributes:
+        detector_name (str): Stable detector name for manifests and logging.
+    """
 
     detector_name: str
 
@@ -293,10 +458,31 @@ class ExperimentDetector(Protocol):
         progress: Progress,
         logger: logging.Logger | None = None,
     ) -> None:
-        """Fit the detector from the training split."""
+        """Fit the detector from the training split.
+
+        Args:
+            train_sequences (Iterable[TemplateSequence]): Training sequences to fit on.
+            progress (Progress): Progress reporter supplied by the runner.
+            logger (logging.Logger | None): Optional logger for fit diagnostics.
+        """
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
-        """Return detector-specific output for one sequence."""
+        """Return detector-specific output for one sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            PredictionOutcome: Detector-specific runtime prediction outcome.
+        """
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
-        """Return serializable detector metadata."""
+        """Return serialisable detector metadata.
+
+        Args:
+            sequence_summary (SequenceSummary): Aggregate split and label counts
+                for the run.
+
+        Returns:
+            ModelManifest: Serialisable detector manifest for the run.
+        """

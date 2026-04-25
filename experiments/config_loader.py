@@ -22,6 +22,7 @@ from experiments.config_types import (
     _optional_str,
 )
 from experiments.models import resolve_model_config_type
+from experiments.models.base import decode_experiment_model_config
 
 if TYPE_CHECKING:
     from experiments.models import ExperimentModelConfig
@@ -167,9 +168,9 @@ def _decode_model_config(obj: object) -> ExperimentModelConfig:
     if not isinstance(detector_name, str):
         msg = "model config must define `detector`."
         raise TypeError(msg)
-    return msgspec.convert(
+    return decode_experiment_model_config(
         raw_config,
-        type=resolve_model_config_type(detector_name),
+        config_type=resolve_model_config_type(detector_name),
         dec_hook=_path_dec_hook,
     )
 
