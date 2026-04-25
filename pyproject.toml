@@ -38,6 +38,7 @@ docs = [
     "zensical>=0.0.29",
 ]
 experiments = [
+    "deepcase",
     "msgspec>=0.20.0",
     # River 0.24.0 shipped a broken release layout for our naive_bayes usage:
     # https://github.com/online-ml/river/issues/1806
@@ -49,10 +50,12 @@ experiments = [
 # select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
 select = ['ALL']
 ignore = ["TD", "FIX002", "ERA001", "CPY001", "D107"]
+external = ["DOC603"]
 preview = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -71,3 +74,5 @@ module-name = "anomalog"
 [tool.uv.sources]
 # See https://github.com/logpai/Drain3/issues/98
 drain3 = { git = "https://github.com/logpai/Drain3" }
+# See https://github.com/harens/DeepCASE/blob/main/docs/deepcase-audit.md
+deepcase = { git = "https://github.com/harens/DeepCASE.git" }
