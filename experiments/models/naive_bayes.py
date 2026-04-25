@@ -5,16 +5,19 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
-from experiments import ConfigError
+import msgspec
+
 from experiments.models.base import (
     ExperimentDetector,
     ModelManifest,
     PhraseModelConfig,
+    PositiveInt,
     PredictionOutcome,
-    SequencePrediction,
+    Probability,
     SequenceSummary,
+    SingleFitMixin,
 )
 
 if TYPE_CHECKING:
@@ -29,47 +32,14 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class NaiveBayesPredictionOutcome(PredictionOutcome):
-    """Naive Bayes prediction with phrase-level explanation fields."""
+    """Naive Bayes prediction with phrase-level explanation fields.
+
+    Attributes:
+        key_phrases (list[str]): Most informative phrases supporting the predicted
+            class for this sequence.
+    """
 
     key_phrases: list[str]
-
-    def to_prediction_record(self, sequence: TemplateSequence) -> SequencePrediction:
-        """Return a serialized prediction record for one sequence.
-
-        Args:
-            sequence (TemplateSequence): Sequence being serialized.
-
-        Returns:
-            SequencePrediction: Naive Bayes serialized prediction record.
-        """
-        return NaiveBayesSequencePrediction.from_sequence(sequence, outcome=self)
-
-
-class NaiveBayesSequencePrediction(SequencePrediction, frozen=True):
-    """Serialized Naive Bayes prediction record."""
-
-    key_phrases: list[str]
-
-    @classmethod
-    def from_sequence(
-        cls,
-        sequence: TemplateSequence,
-        *,
-        outcome: NaiveBayesPredictionOutcome,
-    ) -> NaiveBayesSequencePrediction:
-        """Build a serialized prediction record from detector output.
-
-        Args:
-            sequence (TemplateSequence): Sequence being serialized.
-            outcome (NaiveBayesPredictionOutcome): Detector output to serialize.
-
-        Returns:
-            NaiveBayesSequencePrediction: Serialized prediction record.
-        """
-        return cls(
-            **SequencePrediction.shared_fields(sequence, outcome=outcome),
-            key_phrases=outcome.key_phrases,
-        )
 
 
 class NaiveBayesModelConfig(
@@ -77,24 +47,28 @@ class NaiveBayesModelConfig(
     tag="naive_bayes",
     frozen=True,
 ):
-    """Multinomial Naive Bayes classifier over extracted template phrases."""
+    """Multinomial Naive Bayes classifier over extracted template phrases.
 
-    top_k_phrases: int = 5
-    anomalous_posterior_threshold: float = 0.5
+    Attributes:
+        top_k_phrases: Number of explanatory phrases to include per prediction.
+        anomalous_posterior_threshold: Posterior threshold for predicting the
+            anomalous class.
+    """
 
-    def __post_init__(self) -> None:
-        """Validate detector-specific model settings.
-
-        Raises:
-            ConfigError: If detector-specific settings are invalid.
-        """
-        self._validate_phrase_features()
-        if self.top_k_phrases < 1:
-            msg = "model.top_k_phrases must be at least 1."
-            raise ConfigError(msg)
-        if not 0.0 <= self.anomalous_posterior_threshold <= 1.0:
-            msg = "model.anomalous_posterior_threshold must be between 0.0 and 1.0."
-            raise ConfigError(msg)
+    top_k_phrases: Annotated[
+        PositiveInt,
+        msgspec.Meta(
+            description="Number of most informative phrases to report per prediction.",
+        ),
+    ] = 5
+    anomalous_posterior_threshold: Annotated[
+        Probability,
+        msgspec.Meta(
+            description=(
+                "Posterior probability threshold for predicting the anomalous class."
+            ),
+        ),
+    ] = 0.5
 
     def build_detector(self) -> NaiveBayesDetector:
         """Construct the configured Naive Bayes detector.
@@ -113,8 +87,25 @@ class NaiveBayesModelConfig(
 
 
 @dataclass(slots=True)
-class NaiveBayesDetector(ExperimentDetector):
-    """Multinomial Naive Bayes classifier over extracted template phrases."""
+class NaiveBayesDetector(SingleFitMixin, ExperimentDetector):
+    """Multinomial Naive Bayes classifier over extracted template phrases.
+
+    Attributes:
+        detector_name (ClassVar[str]): Stable detector name for manifests/logging.
+        smoothing (float): Additive smoothing applied to phrase counts.
+        phrase_ngram_min (int): Minimum token n-gram size in the representation.
+        phrase_ngram_max (int): Maximum token n-gram size in the representation.
+        top_k_phrases (int): Number of explanatory phrases to return.
+        anomalous_posterior_threshold (float): Posterior threshold for predicting
+            the anomalous class.
+        representation (TemplatePhraseRepresentation): Phrase representation used
+            for fitting and inference.
+        class_priors (dict[int, float]): Learned class priors.
+        phrase_counts_by_class (dict[int, Counter[str]]): Learned phrase counts
+            per class.
+        total_phrases_by_class (dict[int, int]): Total phrase counts per class.
+        vocabulary (set[str]): Learned phrase vocabulary.
+    """
 
     detector_name: ClassVar[str] = "naive_bayes"
     smoothing: float
@@ -147,6 +138,7 @@ class NaiveBayesDetector(ExperimentDetector):
             ValueError: If the training split does not contain both classes.
         """
         del logger
+        self._ensure_unfit(detector_name=self.detector_name)
         class_counts: Counter[int] = Counter()
         phrase_counts_by_class = {0: Counter(), 1: Counter()}
         total_phrases_by_class = {0: 0, 1: 0}
@@ -175,9 +167,18 @@ class NaiveBayesDetector(ExperimentDetector):
         self.phrase_counts_by_class = phrase_counts_by_class
         self.total_phrases_by_class = total_phrases_by_class
         self.vocabulary = vocabulary
+        self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> NaiveBayesPredictionOutcome:
-        """Return anomalous posterior and most informative phrases."""
+        """Return anomalous posterior and most informative phrases.
+
+        Args:
+            sequence (TemplateSequence): Sequence to classify.
+
+        Returns:
+            NaiveBayesPredictionOutcome: Predicted label, score, and explanation
+                phrases for the sequence.
+        """
         sequence_phrases = Counter(self.representation.represent(sequence))
         anomalous_posterior = self.score(sequence_phrases)
         predicted_label = int(
@@ -193,7 +194,15 @@ class NaiveBayesDetector(ExperimentDetector):
         )
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
-        """Return serializable model metadata and globally informative phrases."""
+        """Return serialisable model metadata and globally informative phrases.
+
+        Args:
+            sequence_summary (SequenceSummary): Aggregate split and label counts
+                for the run.
+
+        Returns:
+            ModelManifest: Serialisable Naive Bayes manifest for the run.
+        """
         return NaiveBayesManifest.from_sequence_summary(
             detector=self.detector_name,
             sequence_summary=sequence_summary,
@@ -211,7 +220,15 @@ class NaiveBayesDetector(ExperimentDetector):
         )
 
     def score(self, sequence_phrases: Counter[str]) -> float:
-        """Return anomalous posterior probability for a phrase bag."""
+        """Return anomalous posterior probability for a phrase bag.
+
+        Args:
+            sequence_phrases (Counter[str]): Phrase counts extracted from one
+                sequence.
+
+        Returns:
+            float: Posterior probability of the anomalous class.
+        """
         log_prob_normal = self._log_joint_probability(
             label=0,
             phrases=sequence_phrases,
@@ -306,7 +323,20 @@ def _phrase_rank(*, score: float, phrase: str) -> tuple[float, float, int, str]:
 
 
 class NaiveBayesManifest(ModelManifest, frozen=True):
-    """Serializable Naive Bayes metadata."""
+    """Serialisable Naive Bayes metadata.
+
+    Attributes:
+        smoothing (float): Additive smoothing used during fitting.
+        phrase_ngram_min (int): Minimum token n-gram size in the representation.
+        phrase_ngram_max (int): Maximum token n-gram size in the representation.
+        top_k_phrases (int): Number of explanatory phrases reported.
+        anomalous_posterior_threshold (float): Posterior threshold for anomaly
+            predictions.
+        train_template_phrase_vocabulary (int): Learned phrase vocabulary size.
+        class_priors (dict[int, float]): Learned class priors.
+        key_phrases_by_class (dict[str, list[str]]): Globally informative phrases
+            per class.
+    """
 
     smoothing: float
     phrase_ngram_min: int
