@@ -68,7 +68,7 @@ jobs:
 
       - name: Docstring lint
         # See: https://github.com/jsh9/pydoclint/issues/162
-        run: uvx --from pydoclint pydoclint --style=google anomalog experiments tests
+        run: uvx --from pydoclint pydoclint --style=google --skip-checking-short-docstrings=False --check-style-mismatch=True anomalog experiments tests
 
   pytest:
     runs-on: ubuntu-latest
