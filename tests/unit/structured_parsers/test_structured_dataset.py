@@ -18,7 +18,6 @@ from anomalog.parsers.template.dataset import (
 from anomalog.sequences import (
     EntitySequenceBuilder,
     FixedSequenceBuilder,
-    GroupingMode,
     TimeSequenceBuilder,
 )
 from tests.unit.helpers import (
@@ -104,7 +103,7 @@ def test_structured_dataset_mine_templates_trains_parser_from_sink_rows() -> Non
 
 
 def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
-    """Grouping helpers delegate to the expected SequenceBuilder modes."""
+    """Grouping helpers delegate to the expected SequenceBuilder types."""
     sink = InMemoryStructuredSink(
         dataset_name="demo",
         raw_dataset_path=Path("raw.log"),
@@ -119,7 +118,6 @@ def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
     ).mine_templates_with(parser)
 
     assert isinstance(templated.group_by_entity(), EntitySequenceBuilder)
-    assert templated.group_by_entity().mode is GroupingMode.ENTITY
     assert hasattr(templated.group_by_entity(), "with_train_on_normal_entities_only")
     assert isinstance(
         templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP),
@@ -128,10 +126,6 @@ def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
     assert not hasattr(
         templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP),
         "with_train_on_normal_entities_only",
-    )
-    assert (
-        templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP).mode
-        is GroupingMode.FIXED
     )
     assert (
         templated.group_by_fixed_window(WINDOW_SIZE, step_size=WINDOW_STEP).window_size
@@ -148,10 +142,6 @@ def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
     assert not hasattr(
         templated.group_by_time_window(TIME_SPAN_MS, step_span_ms=TIME_STEP_MS),
         "with_train_on_normal_entities_only",
-    )
-    assert (
-        templated.group_by_time_window(TIME_SPAN_MS, step_span_ms=TIME_STEP_MS).mode
-        is GroupingMode.TIME
     )
     assert (
         templated.group_by_time_window(
