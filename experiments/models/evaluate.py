@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Iterator, Sized
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 import msgspec
 
@@ -20,17 +21,73 @@ from experiments.models.base import (
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable
     from pathlib import Path
 
     from anomalog.sequences import TemplateSequence
 
 _PROGRESS_EVERY = 10_000
+TItem = TypeVar("TItem")
+
+
+@dataclass(frozen=True, slots=True)
+class _SizedIterable(Iterable[TItem], Sized, Generic[TItem]):
+    """Lazy iterable wrapper that exposes a known total via ``len()``.
+
+    Attributes:
+        items (Iterable[TItem]): Underlying lazy item stream.
+        total (int): Exact number of items expected from ``items``.
+    """
+
+    items: Iterable[TItem]
+    total: int
+
+    def __iter__(self) -> Iterator[TItem]:
+        """Yield the wrapped item stream lazily.
+
+        Returns:
+            Iterator[TItem]: Iterator over the wrapped item stream.
+        """
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        """Return the known number of wrapped sequences.
+
+        Returns:
+            int: Exact number of wrapped sequences.
+        """
+        return self.total
+
+
+@dataclass(frozen=True, slots=True)
+class TrainProgressHint:
+    """Optional bounded-progress metadata for detector fitting.
+
+    Attributes:
+        total (int): Exact number of training items expected.
+        unit (str | None): Optional unit label for the bounded item count.
+    """
+
+    total: int
+    unit: str | None = None
 
 
 @dataclass(slots=True)
 class RunMetrics:
-    """Accumulate split counts and classification metrics while streaming."""
+    """Accumulate split counts and classification metrics while streaming.
+
+    Attributes:
+        sequence_count (int): Total scored sequences across all splits.
+        train_sequence_count (int): Number of train-split sequences seen.
+        test_sequence_count (int): Number of test-split sequences seen.
+        tp (int): True positives on the test split.
+        tn (int): True negatives on the test split.
+        fp (int): False positives on the test split.
+        fn (int): False negatives on the test split.
+        test_score_sum (float): Running sum of test-split anomaly scores.
+        train_label_counts (Counter[int]): Train label histogram.
+        test_label_counts (Counter[int]): Test label histogram.
+    """
 
     sequence_count: int = 0
     train_sequence_count: int = 0
@@ -48,7 +105,13 @@ class RunMetrics:
         sequence: TemplateSequence,
         prediction: SequencePrediction,
     ) -> None:
-        """Update metrics from one streamed prediction."""
+        """Update metrics from one streamed prediction.
+
+        Args:
+            sequence (TemplateSequence): Sequence that produced the prediction.
+            prediction (SequencePrediction): Serialised prediction record for the
+                sequence.
+        """
         self.sequence_count += 1
         if sequence.split_label is SplitLabel.TRAIN:
             self.train_sequence_count += 1
@@ -68,7 +131,7 @@ class RunMetrics:
             self.fn += 1
 
     def metrics(self) -> dict[str, int | float]:
-        """Return finalized run metrics.
+        """Return finalised run metrics.
 
         Returns:
             dict[str, int | float]: Aggregate classification and split metrics.
@@ -99,7 +162,7 @@ class RunMetrics:
         }
 
     def summary(self) -> SequenceSummary:
-        """Return finalized sequence summary.
+        """Return finalised sequence summary.
 
         Returns:
             SequenceSummary: Aggregate split and label counts.
@@ -119,6 +182,7 @@ def run_model(
     config: ExperimentModelConfig,
     predictions_path: Path,
     logger: logging.Logger,
+    train_progress_hint: TrainProgressHint | None = None,
 ) -> ModelRunSummary:
     """Fit the configured detector and stream predictions to disk.
 
@@ -128,6 +192,8 @@ def run_model(
         config (ExperimentModelConfig): Model config used to build the detector.
         predictions_path (Path): Output path for streamed JSONL predictions.
         logger (logging.Logger): Logger for progress messages.
+        train_progress_hint (TrainProgressHint | None): Exact bounded train-fit
+            progress metadata when the caller can provide it cheaply.
 
     Returns:
         ModelRunSummary: Metrics, manifest, and sequence summary for the run.
@@ -137,6 +203,7 @@ def run_model(
         detector=detector,
         train_sequences=iter_train_sequences(sequence_factory),
         logger=logger,
+        train_progress_hint=train_progress_hint,
     )
     accumulator = stream_predictions(
         detector=detector,
@@ -174,10 +241,26 @@ def fit_detector(
     detector: ExperimentDetector,
     train_sequences: Iterable[TemplateSequence],
     logger: logging.Logger,
+    train_progress_hint: TrainProgressHint | None = None,
 ) -> None:
-    """Fit a detector on the training split."""
+    """Fit a detector on the training split.
+
+    Args:
+        detector (ExperimentDetector): Detector to fit.
+        train_sequences (Iterable[TemplateSequence]): Training sequences to replay.
+        logger (logging.Logger): Logger used for progress messages.
+        train_progress_hint (TrainProgressHint | None): Exact bounded train-fit
+            progress metadata when known cheaply by the caller.
+    """
     logger.info("Fitting %s detector on training split", detector.detector_name)
-    with make_count_progress() as progress:
+    if train_progress_hint is not None:
+        train_sequences = _SizedIterable(
+            items=train_sequences,
+            total=train_progress_hint.total,
+        )
+    with make_count_progress(
+        unit=None if train_progress_hint is None else train_progress_hint.unit,
+    ) as progress:
         detector.fit(train_sequences, progress=progress, logger=logger)
     logger.info("Finished fitting %s detector", detector.detector_name)
 
@@ -212,7 +295,7 @@ def stream_predictions(
         ):
             outcome = detector.predict(sequence)
             prediction = outcome.to_prediction_record(sequence)
-            file_obj.write(msgspec.json.encode(prediction).decode("utf-8"))
+            file_obj.write(msgspec.json.encode(prediction.to_dict()).decode("utf-8"))
             file_obj.write("\n")
             accumulator.update(sequence, prediction)
             if accumulator.sequence_count % _PROGRESS_EVERY == 0:
