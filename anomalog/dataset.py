@@ -20,7 +20,28 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class DatasetSpec:
-    """Immutable fluent builder for configuring a dataset pipeline."""
+    """Immutable fluent builder for configuring a dataset pipeline.
+
+    The builder captures dataset preprocessing choices without executing any
+    pipeline stage immediately. Each fluent method returns a new spec so callers
+    can share partially configured specs safely and only trigger orchestration at
+    `build()` time.
+
+    Attributes:
+        dataset_name (str): Stable dataset identifier used for cache roots and
+            materialised outputs.
+        source (DatasetSource | None): Source that materialises or locates the raw
+            dataset contents before parsing.
+        structured_parser (StructuredParser | None): Parser that turns raw log
+            lines into structured records.
+        structured_sink (type[StructuredSink]): Sink implementation responsible
+            for persisting structured rows and later grouped iteration.
+        cache_paths (CachePathsConfig): Data/cache roots used by the build.
+        anomaly_label_reader (AnomalyLabelReader | None): Optional anomaly label
+            reader bound after structured parsing.
+        template_parser (type[TemplateParser]): Template parser type used to mine
+            message templates from structured records.
+    """
 
     dataset_name: str
     source: DatasetSource | None = None
@@ -33,27 +54,75 @@ class DatasetSpec:
     template_parser: type[TemplateParser] = field(default=Drain3Parser)
 
     def from_source(self, source: DatasetSource) -> DatasetSpec:
-        """Return a copy configured with a dataset source."""
+        """Bind the raw dataset source for later materialisation.
+
+        Args:
+            source (DatasetSource): Source strategy that knows how to provide the
+                raw logs for this dataset.
+
+        Returns:
+            DatasetSpec: New spec with the supplied source attached.
+        """
         return replace(self, source=source)
 
     def parse_with(self, structured_parser: StructuredParser) -> DatasetSpec:
-        """Return a copy configured with a structured parser."""
+        """Bind the structured parser that defines log-line semantics.
+
+        Args:
+            structured_parser (StructuredParser): Parser used during build to
+                convert raw lines into structured records.
+
+        Returns:
+            DatasetSpec: New spec with the supplied parser attached.
+        """
         return replace(self, structured_parser=structured_parser)
 
     def store_with(self, structured_sink: type[StructuredSink]) -> DatasetSpec:
-        """Return a copy configured with a structured sink type."""
+        """Override the structured sink implementation for this dataset.
+
+        Args:
+            structured_sink (type[StructuredSink]): Sink type that owns
+                persistence and grouped access for structured rows.
+
+        Returns:
+            DatasetSpec: New spec with the supplied sink type attached.
+        """
         return replace(self, structured_sink=structured_sink)
 
     def label_with(self, anomaly_label_reader: AnomalyLabelReader) -> DatasetSpec:
-        """Return a copy configured with an anomaly label reader."""
+        """Attach an anomaly label reader to enrich the built dataset.
+
+        Args:
+            anomaly_label_reader (AnomalyLabelReader): Reader used to resolve
+                per-line or per-entity anomaly labels after parsing.
+
+        Returns:
+            DatasetSpec: New spec with the supplied label reader attached.
+        """
         return replace(self, anomaly_label_reader=anomaly_label_reader)
 
     def template_with(self, template_parser: type[TemplateParser]) -> DatasetSpec:
-        """Return a copy configured with a template parser type."""
+        """Select the template parser implementation used during build.
+
+        Args:
+            template_parser (type[TemplateParser]): Template parser type trained on
+                the structured dataset before the templated view is returned.
+
+        Returns:
+            DatasetSpec: New spec with the supplied template parser type attached.
+        """
         return replace(self, template_parser=template_parser)
 
     def with_cache_paths(self, cache_paths: CachePathsConfig) -> DatasetSpec:
-        """Return a copy configured with explicit cache and data roots."""
+        """Override the default data and cache roots for this dataset.
+
+        Args:
+            cache_paths (CachePathsConfig): Explicit roots to use for source
+                materialisation and derived local artifacts.
+
+        Returns:
+            DatasetSpec: New spec with the supplied cache paths attached.
+        """
         return replace(self, cache_paths=cache_paths)
 
     def build(self) -> TemplatedDataset:

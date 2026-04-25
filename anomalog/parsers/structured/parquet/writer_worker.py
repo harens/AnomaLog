@@ -30,7 +30,19 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class WriterConfig:
-    """Tuning parameters for converting raw logs to parquet."""
+    """Tuning parameters for converting raw logs to parquet.
+
+    Attributes:
+        buckets (int): Number of hash buckets for partitioning entity ids.
+        batch_rows (int): Number of parsed rows to accumulate before emitting a
+            record batch.
+        max_rows_per_file (int): Maximum rows per parquet file.
+        max_rows_per_group (int): Maximum rows per row group inside each file.
+        max_open_files (int): Maximum parquet files kept open by the dataset
+            writer at once.
+        log_every_rows (int): Logging cadence while parsing raw input rows.
+        max_partitions (int): Maximum distinct partition directories to create.
+    """
 
     buckets: int = 32
     batch_rows: int = 400_000

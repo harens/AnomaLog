@@ -28,7 +28,13 @@ _ALLOWED_SCHEMES = {"https", "http"}
 
 @dataclass
 class _DownloadProgress:
-    """Track download progress for callback-based reporting."""
+    """Track download progress for callback-based reporting.
+
+    Attributes:
+        task_id (TaskID | None): Rich progress task id once the transfer starts.
+        last_downloaded (int): Last byte count reported to the progress bar.
+        total (int | None): Expected total download size in bytes when known.
+    """
 
     task_id: TaskID | None = None
     last_downloaded: int = 0
@@ -37,7 +43,15 @@ class _DownloadProgress:
 
 @dataclass(frozen=True)
 class RemoteZipSource(DatasetSource):
-    """Download a dataset zip from a remote URL and extract it locally."""
+    """Download a dataset zip from a remote URL and extract it locally.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the source.
+        url (str): Absolute HTTP(S) URL of the dataset archive.
+        md5_checksum (str): Expected checksum for the downloaded archive.
+        raw_logs_relpath (Path | None): Optional raw-log path relative to the
+            extracted dataset root.
+    """
 
     name: ClassVar[str] = "remote_zip"
     url: str

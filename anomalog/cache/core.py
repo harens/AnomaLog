@@ -27,7 +27,18 @@ R = TypeVar("R")
 
 @dataclass(frozen=True, slots=True)
 class CachePathsConfig:
-    """Resolved locations for data and cache storage."""
+    """Resolved locations for data and cache storage.
+
+    The project keeps source materialisation under `data_root` and derived,
+    reproducible build artifacts under `cache_root`. Carrying both roots together
+    makes dataset-scoped cleanup and path derivation deterministic across the
+    builder, runtime, and experiment layers.
+
+    Attributes:
+        data_root (Path): Root directory for raw or materialised dataset inputs.
+        cache_root (Path): Root directory for derived local artifacts and Prefect
+            cache storage.
+    """
 
     data_root: Path = field(default_factory=lambda: Path(user_data_dir("anomalog")))
     cache_root: Path = field(default_factory=lambda: Path(user_cache_dir("anomalog")))
@@ -51,7 +62,7 @@ def clear_dataset_cache(
 ) -> None:
     """Delete all local cached artifacts for a dataset.
 
-    This removes the dataset source materialization under `data_root` and all
+    This removes the dataset source materialisation under `data_root` and all
     derived dataset-scoped artifacts under `cache_root`.
 
     Args:
@@ -77,7 +88,7 @@ def clear_dataset_cache(
 def asset_from_local_path(path: Path) -> Asset:
     """Create a Prefect Asset from a local filesystem path.
 
-    - Asset key is a sanitized identifier derived from the path
+    - Asset key is a sanitised identifier derived from the path
     - Real path is stored in Asset.properties.url
     - Deterministic: same path -> same key
 
@@ -124,7 +135,7 @@ def materialize(
     asset_deps: list[Asset] | None = None,
     **task_kwargs: Unpack["TaskOptions"],
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Wrap Prefect materialization with a local output existence check.
+    """Wrap Prefect materialsation with a local output existence check.
 
     Prefect can reuse a cached completed state without re-checking whether the
     local output path still exists. This helper reruns the wrapped function
@@ -134,12 +145,12 @@ def materialize(
     Args:
         output_path (Path): Local path that must exist after Prefect returns.
         asset_deps (list[Asset] | None): Upstream asset dependencies for the
-            wrapped task materialization.
+            wrapped task materialisation.
         **task_kwargs (Unpack[TaskOptions]): Additional Prefect task options
-            forwarded to `prefect.assets.materialize`.
+            forwarded to `prefect.assets.materialise`.
 
     Returns:
-        Callable[[Callable[P, R]], Callable[P, R]]: Decorator that materializes
+        Callable[[Callable[P, R]], Callable[P, R]]: Decorator that materialises
             the wrapped function and falls back to rerunning it when the local
             output path is missing.
     """

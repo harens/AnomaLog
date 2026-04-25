@@ -22,12 +22,23 @@ class SequenceRepresentation(Protocol[TRepresentation]):
     Implementations receive the complete `TemplateSequence`, including event
     timings, extracted parameters, entity IDs, labels, and split metadata, and
     may choose whichever fields are relevant for a detector.
+
+    Attributes:
+        name (ClassVar[str]): Stable registry/config name for the representation.
     """
 
     name: ClassVar[str]
 
     def represent(self, sequence: TemplateSequence) -> TRepresentation:
-        """Convert one grouped sequence into a representation payload."""
+        """Convert one grouped sequence into a representation payload.
+
+        Args:
+            sequence (TemplateSequence): Full grouped sequence carrying events,
+                labels, entity ids, and split metadata.
+
+        Returns:
+            TRepresentation: Detector-specific representation of the sequence.
+        """
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,6 +47,14 @@ class SequenceSample(Generic[TRepresentation]):
 
     `TemplateSequence` is the grouped log window; `SequenceSample` is the
     representation-specific payload passed to a detector.
+
+    Attributes:
+        data (TRepresentation): Detector-ready representation payload.
+        label (int): Sequence-level anomaly label derived from the source window.
+        entity_ids (list[str]): Unique entity ids present in the source window.
+        split_label (SplitLabel): Train/test split assigned during sequence
+            building.
+        window_id (int): Stable window identifier within the sequence builder.
     """
 
     data: TRepresentation
@@ -87,6 +106,12 @@ class SequenceRepresentationView(Generic[TRepresentation]):
     The representation stage is the point where a model decides which parts of
     `TemplateSequence` matter; the full sequence object is passed through to the
     representation implementation on each iteration.
+
+    Attributes:
+        sequences (SequenceBuilder): Underlying sequence builder producing
+            `TemplateSequence` objects lazily.
+        representation (SequenceRepresentation[TRepresentation]): Representation
+            applied to each yielded sequence.
     """
 
     sequences: SequenceBuilder
@@ -117,31 +142,65 @@ class SequenceRepresentationView(Generic[TRepresentation]):
 
 @dataclass(slots=True, frozen=True)
 class SequentialRepresentation(SequenceRepresentation[list[str]]):
-    """Ordered template-only representation for sequential models."""
+    """Ordered template-only representation for sequential models.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the representation.
+    """
 
     name: ClassVar[str] = "sequential"
 
     @override
     def represent(self, sequence: TemplateSequence) -> list[str]:
-        """Return the ordered template stream for one sequence."""
+        """Return the ordered template stream for one sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence whose template order should be
+                preserved exactly.
+
+        Returns:
+            list[str]: Ordered template stream for the sequence.
+        """
         return sequence.templates
 
 
 @dataclass(slots=True, frozen=True)
 class TemplateCountRepresentation(SequenceRepresentation[Counter[str]]):
-    """Count-based representation that intentionally uses template text only."""
+    """Count-based representation that intentionally uses template text only.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the representation.
+    """
 
     name: ClassVar[str] = "template_counts"
 
     @override
     def represent(self, sequence: TemplateSequence) -> Counter[str]:
-        """Return one template-count vector."""
+        """Return one template-count vector.
+
+        Args:
+            sequence (TemplateSequence): Sequence whose template frequencies are
+                being counted.
+
+        Returns:
+            Counter[str]: Template-frequency vector for the sequence.
+        """
         return Counter(sequence.templates)
 
 
 @dataclass(slots=True, frozen=True)
 class TemplatePhraseRepresentation(SequenceRepresentation[Counter[str]]):
-    """Phrase-count representation derived from template text only."""
+    """Phrase-count representation derived from template text only.
+
+    This expands each template into normalsed full-template phrases and token
+    n-grams. The representation deliberately ignores parameters and timing so
+    phrase-based detectors react only to recurring message wording.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the representation.
+        phrase_ngram_min (int): Smallest token n-gram size to emit.
+        phrase_ngram_max (int): Largest token n-gram size to emit.
+    """
 
     name: ClassVar[str] = "template_phrases"
     phrase_ngram_min: int = 1
@@ -162,7 +221,15 @@ class TemplatePhraseRepresentation(SequenceRepresentation[Counter[str]]):
 
     @override
     def represent(self, sequence: TemplateSequence) -> Counter[str]:
-        """Return one phrase-count vector."""
+        """Return one phrase-count vector.
+
+        Args:
+            sequence (TemplateSequence): Sequence whose template phrases should be
+                counted.
+
+        Returns:
+            Counter[str]: Phrase-frequency vector for the sequence.
+        """
         phrase_counts: Counter[str] = Counter()
         for template in sequence.templates:
             phrase_counts.update(
@@ -181,15 +248,15 @@ def _extract_template_phrases(
     phrase_ngram_min: int,
     phrase_ngram_max: int,
 ) -> list[str]:
-    """Extract normalized template and token n-gram phrases.
+    """Extract normalised template and token n-gram phrases.
 
     Args:
-        template (str): Template text to tokenize and normalize.
+        template (str): Template text to tokenize and normalise.
         phrase_ngram_min (int): Minimum token n-gram size to include.
         phrase_ngram_max (int): Maximum token n-gram size to include.
 
     Returns:
-        list[str]: Normalized full-template phrases plus token n-grams.
+        list[str]: Normalised full-template phrases plus token n-grams.
     """
     normalized_template = " ".join(template.split()).strip().lower()
     phrases: list[str] = []

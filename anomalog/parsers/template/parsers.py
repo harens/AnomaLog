@@ -179,7 +179,12 @@ class Drain3Parser(TemplateParser):
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
-        """Train Drain3 on an iterator of untemplated log lines."""
+        """Train Drain3 on the dataset's untemplated message stream.
+
+        Args:
+            untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
+                Zero-argument iterator factory over untemplated message text.
+        """
         self.resolved_cache_path.mkdir(parents=True, exist_ok=True)
 
         # Avoid unstable cache keys from the iterator argument by
@@ -240,7 +245,17 @@ class Drain3Parser(TemplateParser):
 
 @dataclass(slots=True)
 class IdentityTemplateParser(TemplateParser):
-    """No-op template parser that returns the input string as its template."""
+    """No-op template parser that returns the input string as its template.
+
+    This parser is useful when experiments should operate on exact message text
+    rather than mined abstractions, or when tests need deterministic,
+    side-effect-free template inference.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the identity parser.
+        dataset_name (str | None): Optional dataset identifier kept only for
+            parity with the shared template-parser contract.
+    """
 
     name: ClassVar[str] = "identity"
     dataset_name: str | None = None
@@ -271,7 +286,12 @@ class IdentityTemplateParser(TemplateParser):
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
-        """No-op training for identity parser."""
+        """Ignore the training stream because identity inference is stateless.
+
+        Args:
+            untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
+                Iterator factory accepted for contract compatibility.
+        """
         del untemplated_text_iterator
         # No training needed for the identity parser
 

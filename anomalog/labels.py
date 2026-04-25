@@ -19,7 +19,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class AnomalyLabelLookup:
-    """Lookup accessors for anomaly labels."""
+    """Normalised access to anomaly labels.
+
+    Both lookup functions return an integer label when one is available, or
+    ``None`` when the source has no label for the requested row or group.
+
+    Attributes:
+        label_for_line (Callable[[int], int | None]): Returns the anomaly label
+            for a structured row's stable `line_order`, or `None` when absent.
+        label_for_group (Callable[[str], int | None]): Returns the anomaly label
+            for a grouped entity identifier, or `None` when absent.
+    """
 
     label_for_line: Callable[[int], int | None]
     label_for_group: Callable[[str], int | None]
@@ -27,10 +37,19 @@ class AnomalyLabelLookup:
 
 @runtime_checkable
 class AnomalyLabelReader(Protocol):
-    """Loads anomaly label lookups."""
+    """Protocol for sources that provide anomaly labels.
+
+    Readers may be configured ahead of time, then bound to dataset-specific
+    resources with ``with_context`` immediately before loading.
+    """
 
     def load(self) -> AnomalyLabelLookup:
-        """Return callables that map line or group identifiers to labels."""
+        """Materialise a normalised label lookup for the current dataset.
+
+        Returns:
+            AnomalyLabelLookup: Callables that expose label lookup by stable line
+                order and by grouped entity identifier.
+        """
 
     def with_context(
         self,
@@ -38,14 +57,34 @@ class AnomalyLabelReader(Protocol):
         dataset_root: Path,
         sink: StructuredSink,
     ) -> AnomalyLabelReader:
-        """Bind dataset context and return a configured reader instance."""
+        """Bind dataset-specific runtime context to the reader.
+
+        Args:
+            dataset_root (Path): Materialised dataset root for path-relative label
+                sources.
+            sink (StructuredSink): Structured sink for readers that need direct
+                access to parsed rows or sink-owned caches.
+
+        Returns:
+            AnomalyLabelReader: Reader instance ready to load labels for this
+                concrete dataset build.
+        """
 
 
 @dataclass(frozen=True, slots=True)
 class CSVReader(AnomalyLabelReader):
     """Reads anomaly labels from a CSV file (group/entity level only).
 
-    Column names are configurable: entity_column, label_column.
+    CSV labels are intentionally group-scoped: they annotate entities/blocks
+    rather than individual structured rows. Invalid or non-integer label values
+    are skipped so malformed rows do not abort the whole dataset build.
+
+    Attributes:
+        relative_path (Path): CSV path relative to the materialised dataset root.
+        dataset_root (Path | None): Bound dataset root used to resolve
+            `relative_path` at runtime.
+        entity_column (str): CSV column containing the group/entity identifier.
+        label_column (str): CSV column containing the integer anomaly label.
     """
 
     relative_path: Path
@@ -125,7 +164,16 @@ class CSVReader(AnomalyLabelReader):
 
 @dataclass(frozen=True, slots=True)
 class InlineReader(AnomalyLabelReader):
-    """Derives labels directly from the structured sink."""
+    """Derives labels directly from the structured sink.
+
+    This reader exists for datasets whose parser already exposes anomaly labels
+    inline. It delegates to the sink so sink implementations can use efficient
+    projected scans instead of forcing full row materialisation.
+
+    Attributes:
+        sink (StructuredSink | None): Bound sink that can supply sparse inline
+            label lookups.
+    """
 
     sink: StructuredSink | None = None
 

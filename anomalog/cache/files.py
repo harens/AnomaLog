@@ -125,7 +125,18 @@ def _asset_file_path(asset: Asset) -> Path | None:
 
 @dataclass
 class AssetDepsFingerprintPolicy(CachePolicy):
-    """Cache key component based on upstream asset dependencies."""
+    """Cache key component based on upstream asset dependencies.
+
+    Prefect's default cache policies do not include local file metadata for asset
+    dependencies. This policy adds a deterministic fingerprint of the direct
+    upstream assets so cache reuse breaks when an upstream file is replaced or
+    edited in place.
+
+    Attributes:
+        include_outputs (bool): Prefect cache-policy compatibility flag retained
+            on the policy instance. The current implementation fingerprints direct
+            upstream dependencies regardless of this value.
+    """
 
     include_outputs: bool = True
 

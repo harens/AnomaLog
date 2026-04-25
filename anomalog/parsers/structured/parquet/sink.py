@@ -41,6 +41,15 @@ class ParquetStructuredSink(StructuredSink):
 
     Provides efficient iteration, windowing helpers, and label-aware counts
     for downstream anomaly workflows.
+
+    Attributes:
+        dataset_name (str): Dataset identifier used to scope parquet cache paths.
+        raw_dataset_path (Path): Materialsed raw log file parsed into parquet.
+        parser (StructuredParser): Parser used to convert raw lines into
+            structured records.
+        cache_paths (CachePathsConfig): Data/cache roots used for parquet output.
+        cache_dir (ClassVar[str]): Dataset-local cache directory name for
+            structured parquet artifacts.
     """
 
     _DEFAULT_BATCH_SIZE: ClassVar[int] = 65_536
@@ -172,7 +181,7 @@ class ParquetStructuredSink(StructuredSink):
 
     @staticmethod
     def _rows_from_batch(batch: pa.RecordBatch) -> Iterator[StructuredLine]:
-        """Yield StructuredLine rows without materializing whole batches as dicts.
+        """Yield StructuredLine rows without materialising whole batches as dicts.
 
         Args:
             batch (pa.RecordBatch): Arrow record batch to decode.

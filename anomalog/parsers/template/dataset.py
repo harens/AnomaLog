@@ -27,6 +27,11 @@ class TemplateParser(Protocol):
 
     Implementations are initialised with an optional dataset name so runtime
     caches can be scoped per dataset when needed.
+
+    Attributes:
+        name (ClassVar[str]): Stable registry/config name for the parser.
+        dataset_name (str | None): Optional dataset identifier used to scope
+            runtime caches or persisted parser state.
     """
 
     name: ClassVar[str]
@@ -36,18 +41,46 @@ class TemplateParser(Protocol):
         self,
         unstructured_text: UntemplatedText,
     ) -> tuple[LogTemplate, ExtractedParameters]:
-        """Return (template, parameters) for an unstructured log line."""
+        """Infer the normalsed template and extracted parameters for one line.
+
+        Args:
+            unstructured_text (UntemplatedText): Raw untemplated message text.
+
+        Returns:
+            tuple[LogTemplate, ExtractedParameters]: Template text plus any
+                extracted parameter values derived from the message.
+        """
 
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
     ) -> None:
-        """Train the parser using an iterator over untemplated text."""
+        """Train the parser on the dataset's untemplated message stream.
+
+        Args:
+            untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
+                Zero-argument iterator factory over untemplated message text.
+        """
 
 
 @dataclass(slots=True, frozen=True)
 class TemplatedDataset:
-    """Structured dataset paired with a trained template parser and labels."""
+    """Structured dataset paired with a trained template parser and labels.
+
+    This is the post-build dataset view returned to callers. It keeps the
+    sink-backed structured rows, trained template inference function, and
+    anomaly labels aligned so sequence builders can derive consistent windows
+    without exposing Prefect or runtime orchestration details.
+
+    Attributes:
+        sink (StructuredSink): Structured sink that owns persisted parsed rows.
+        cache_paths (CachePathsConfig): Data/cache roots associated with the
+            build that produced this dataset.
+        template_parser (TemplateParser): Trained template parser used for
+            template inference over structured rows.
+        anomaly_labels (AnomalyLabelLookup): Normalised anomaly label lookups
+            attached to the dataset.
+    """
 
     sink: StructuredSink
     cache_paths: CachePathsConfig

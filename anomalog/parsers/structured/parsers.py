@@ -15,7 +15,15 @@ UTC = timezone.utc
 
 @dataclass(frozen=True, slots=True)
 class HDFSV1Parser(StructuredParser):
-    """Parse HDFS v1 log lines into structured fields."""
+    """Parse HDFS v1 log lines into structured fields.
+
+    HDFS anomaly datasets are block-centric, so this parser prefers the block id
+    mentioned in the log message as the `entity_id`; when no block is present it
+    falls back to the logging component so entity-based grouping still works.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
 
     name: ClassVar[str] = "hdfs_v1"
 
@@ -122,7 +130,15 @@ class HDFSV1Parser(StructuredParser):
 
 @dataclass(frozen=True, slots=True)
 class BGLParser(StructuredParser):
-    """Parse Blue Gene/L log lines into structured fields with anomaly flag."""
+    """Parse Blue Gene/L log lines into structured fields with anomaly flag.
+
+    The BGL corpus encodes anomaly state in the optional leading dash, so this
+    parser preserves that dataset convention directly in the shared `anomalous`
+    field while keeping the original message tail for template mining.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
 
     name: ClassVar[str] = "bgl"
 

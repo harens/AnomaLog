@@ -15,7 +15,20 @@ from anomalog.parsers.template.dataset import TemplatedDataset, TemplateParser
 # various stages of processing? Maybe a more explicit pipeline definition?
 @dataclass(slots=True)
 class StructuredDataset:
-    """Structured dataset with labels ready for template mining."""
+    """Structured dataset with labels ready for template mining.
+
+    This is the narrow handoff between structured parsing and template mining.
+    It keeps sink-backed structured rows and normalised anomaly label lookups
+    together so downstream stages cannot accidentally mix artifacts from
+    different dataset builds.
+
+    Attributes:
+        sink (StructuredSink): Structured sink that owns persisted parsed rows.
+        cache_paths (CachePathsConfig): Data/cache roots associated with the
+            current dataset build.
+        anomaly_labels (AnomalyLabelLookup): Normalised per-line and per-group
+            anomaly label accessors for the structured dataset.
+    """
 
     sink: StructuredSink
     cache_paths: CachePathsConfig
