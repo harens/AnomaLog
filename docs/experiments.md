@@ -109,7 +109,7 @@ uv sync --group experiments
 
 Each run writes a deterministic result directory containing:
 
-- `run_config.json` with the normalized dataset, model, and run config
+- `run_config.json` with the normalsed dataset, model, and run config
 - `dataset_manifest.json` with preprocessing provenance and sequence metadata
 - `metrics.json` with detector metrics
 - `predictions.jsonl` with per-sequence outputs
@@ -128,6 +128,10 @@ The checked-in examples currently cover:
 - `template_frequency` for a simple template-frequency baseline
 - `naive_bayes` for a phrase-based classifier
 - `river` for online-learning style baselines backed by [`river`](https://riverml.xyz/)
+- `deeplog` for the scoped DeepLog implementation with stacked-LSTM
+  next-log-key prediction and per-template parameter-value models
+- `deepcase` for the official DeepCase Context Builder and Interpreter workflow
+  adapted to entity-grouped AnomaLog sequences
 
 Those models consume AnomaLog sequence representations rather than defining
 their own preprocessing path.

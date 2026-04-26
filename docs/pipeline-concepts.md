@@ -379,7 +379,7 @@ reproducible. The ordering rules in the sink and sequence builder define the
 split behavior.
 
 [Prefect](https://www.prefect.io/) is used internally for task materialisation
-and cache reuse, but the public API is intentionally organized around dataset
+and cache reuse, but the public API is intentionally organised around dataset
 stages rather than orchestration details.
 
 The sink and cache layers are part of that reproducibility story:

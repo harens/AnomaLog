@@ -6,7 +6,8 @@ AnomaLog preprocessing.
 ## Layout
 
 - `configs/datasets/`: dataset variants, usually built from AnomaLog presets like `bgl` and `hdfs_v1`, but also able to define custom sources and parsers.
-- `configs/models/`: detector configurations such as template-frequency, handwritten Naive Bayes, and `river`-backed baselines.
+- `configs/models/`: detector configurations such as template-frequency,
+  handwritten Naive Bayes, `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
 - `configs/runs/`: experiment run definitions that reference one dataset variant and one model config.
 - `runners/`: Python entrypoints for executing experiments.
 - `analysis/`: notebooks and one-off visual analysis only.
@@ -54,7 +55,8 @@ uv run python -m experiments.runners.run_experiment \
 
 Add `--force` to replace the deterministic output directory for the same config fingerprint.
 
-To run `river`-backed experiments, install the optional experiment dependencies first:
+To run `river`-backed or DeepLog/DeepCASE experiments, install the optional
+experiment dependencies first:
 
 ```bash
 uv sync --group experiments
@@ -64,16 +66,16 @@ uv sync --group experiments
 
 Each run writes a deterministic directory under `experiments/results/<run-name>/<fingerprint>/` containing:
 
-- `run_config.json`: normalized run, dataset, and model config
+- `run_config.json`: normalised run, dataset, and model config
 - `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, cache roots, sequence settings, and dataset statistics
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
 - `metrics.json`: detector metrics
-- `predictions.jsonl`: per-sequence outputs, including detector scores and any emitted key phrases
+- `predictions.jsonl`: test-sequence outputs, including detector scores and any emitted key phrases
 - `environment.json`: Python, platform, package, and git metadata
 - `run.log`: run-time logging from dataset build through detector evaluation
 
-Predictions are written as a stream to `predictions.jsonl`, and detector evaluation rereads the sequence builder instead of materializing the full sequence list in memory.
+Predictions are written as a stream to `predictions.jsonl`, and detector evaluation rereads the sequence builder instead of materialising the full sequence list in memory. Train sequences are still consumed for fitting and run summaries, but they are no longer scored or written to the prediction stream.
 
 ## Adding More Experiments
 

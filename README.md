@@ -155,7 +155,7 @@ dataset = (
 
 ## Documentation
 
-The full documentation is organized by task:
+The full documentation is organised by task:
 
 - [Getting started](https://harens.github.io/AnomaLog/getting-started/) for the end-to-end workflow, grouping choices, representation stage, and split semantics
 - [Experiments](https://harens.github.io/AnomaLog/experiments/) for config-driven detector runs and recorded artifacts
@@ -165,6 +165,9 @@ The full documentation is organized by task:
 
 The repository also includes a config-driven experiment layer under
 `experiments/` for model experimentation on top of AnomaLog preprocessing.
+
+Built-in experiment detectors include Template Frequency, [Naive Bayes](https://en.wikipedia.org/wiki/Naive_Bayes_classifier),
+[River](https://riverml.xyz/), and a scoped [DeepLog](https://dl.acm.org/doi/10.1145/3133956.3134015) and [DeepCASE](https://ieeexplore.ieee.org/abstract/document/9833671) reimplementation.
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
