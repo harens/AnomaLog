@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Callable, Iterable, Sized
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from rich.progress import Progress
+from rich.progress import Progress, TextColumn
+from typing_extensions import override
 
 from anomalog.representations import (
     SequenceRepresentationView,
@@ -17,8 +22,19 @@ from anomalog.sequences import (
     TemplateSequence,
 )
 from experiments.models import resolve_model_config_type
-from experiments.models.base import SequenceSummary
+from experiments.models.base import (
+    ExperimentDetector,
+    ModelManifest,
+    PredictionOutcome,
+    SequenceSummary,
+    decode_experiment_model_config,
+)
 from experiments.models.deeplog import DeepLogModelConfig
+from experiments.models.evaluate import (
+    TrainProgressHint,
+    fit_detector,
+    stream_predictions,
+)
 from experiments.models.naive_bayes import NaiveBayesModelConfig
 from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
@@ -31,6 +47,28 @@ from tests.unit.helpers import (
 )
 
 REPRESENTATION_VIEW_WINDOW_ID = 0
+ConfigValue = str | int | float | bool | None
+
+
+def _template_frequency_config(**values: ConfigValue) -> TemplateFrequencyModelConfig:
+    return decode_experiment_model_config(
+        {"name": "template_frequency", **values},
+        config_type=TemplateFrequencyModelConfig,
+    )
+
+
+def _naive_bayes_config(**values: ConfigValue) -> NaiveBayesModelConfig:
+    return decode_experiment_model_config(
+        {"name": "naive_bayes", **values},
+        config_type=NaiveBayesModelConfig,
+    )
+
+
+def _river_config(**values: ConfigValue) -> RiverModelConfig:
+    return decode_experiment_model_config(
+        {"name": "river", **values},
+        config_type=RiverModelConfig,
+    )
 
 
 def _sequence(
@@ -101,6 +139,179 @@ def test_sequence_representation_view_yields_samples_and_labeled_examples() -> N
     assert list(view.iter_labeled_examples()) == [(["login ok", "read block"], 0)]
 
 
+def test_fit_detector_wraps_lazy_train_stream_with_known_total() -> None:
+    """Fitting should preserve laziness while exposing a train total when known."""
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: str = "recording"
+        seen_total: int | None = None
+        seen_unit: str | None = None
+        seen_sequences: list[TemplateSequence] = field(default_factory=list)
+
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del logger
+            if isinstance(train_sequences, Sized):
+                self.seen_total = len(train_sequences)
+            last_column = progress.columns[6]
+            if isinstance(last_column, TextColumn):
+                self.seen_unit = last_column.text_format
+            self.seen_sequences = list(
+                progress.track(train_sequences, description="Recording fit"),
+            )
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            del sequence
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=1_000,
+                entity_id="node-a",
+                untemplated_message_text="login ok",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=1_100,
+                entity_id="node-b",
+                untemplated_message_text="read block",
+                anomalous=0,
+            ),
+        ],
+    )
+    sequences = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=lambda text: (text, []),
+        label_for_group=lambda _entity_id: 0,
+        train_frac=0.5,
+    )
+    detector = _RecordingDetector()
+    logger = logging.getLogger("tests.fit_detector")
+
+    fit_detector(
+        detector=detector,
+        train_sequences=(
+            sequence
+            for sequence in sequences
+            if sequence.split_label is SplitLabel.TRAIN
+        ),
+        logger=logger,
+        train_progress_hint=TrainProgressHint(
+            total=sequences.train_sequence_count_hint(),
+            unit=sequences.train_sequence_count_unit_hint(),
+        ),
+    )
+
+    assert detector.seen_total == 1
+    assert detector.seen_unit == "entities"
+    assert [sequence.entity_ids for sequence in detector.seen_sequences] == [["node-a"]]
+
+
+def test_stream_predictions_only_scores_test_sequences(
+    tmp_path: Path,
+) -> None:
+    """Streaming evaluation should write predictions for the test split only.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the prediction stream.
+    """
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: str = "recording"
+        predicted_window_ids: list[int] = field(default_factory=list)
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del train_sequences, progress, logger
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            self.predicted_window_ids.append(sequence.window_id)
+            return PredictionOutcome(predicted_label=sequence.label, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["train-b"], label=1, split_label=SplitLabel.TRAIN),
+        _sequence(3, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(4, templates=["test-b"], label=1, split_label=SplitLabel.TEST),
+    ]
+    expected_test_window_ids = [sequence.window_id for sequence in sequences[2:]]
+    expected_train_sequence_count = sum(
+        1 for sequence in sequences if sequence.split_label is SplitLabel.TRAIN
+    )
+    expected_test_sequence_count = sum(
+        1 for sequence in sequences if sequence.split_label is SplitLabel.TEST
+    )
+    detector = _RecordingDetector()
+    predictions_path = tmp_path / "predictions.jsonl"
+    logger = logging.getLogger("tests.stream_predictions")
+
+    summary = stream_predictions(
+        detector=detector,
+        sequence_factory=lambda: iter(sequences),
+        predictions_path=predictions_path,
+        logger=logger,
+    )
+
+    assert detector.predicted_window_ids == expected_test_window_ids
+    assert summary.sequence_count == len(sequences)
+    assert summary.train_sequence_count == expected_train_sequence_count
+    assert summary.test_sequence_count == expected_test_sequence_count
+    predictions = [
+        json.loads(line)
+        for line in predictions_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [
+        prediction["window_id"] for prediction in predictions
+    ] == expected_test_window_ids
+    assert [prediction["split_label"] for prediction in predictions] == [
+        "test",
+        "test",
+    ]
+
+
 @pytest.mark.allow_no_new_coverage
 def test_model_registries_resolve_builtins() -> None:
     """Built-in model configs register themselves by detector name."""
@@ -115,11 +326,52 @@ def test_model_registries_resolve_builtins() -> None:
 
 
 @pytest.mark.allow_no_new_coverage
+def test_model_configs_reject_direct_construction() -> None:
+    """Model configs should be decoded so Annotated constraints are enforced."""
+    # This protects the experiment config construction contract outside the
+    # configured `anomalog` coverage target.
+    with pytest.raises(TypeError, match="must be decoded"):
+        TemplateFrequencyModelConfig(name="template_frequency")
+
+
+@pytest.mark.parametrize(
+    "build_detector",
+    [
+        lambda: _template_frequency_config(name="template_frequency").build_detector(),
+        lambda: _naive_bayes_config(name="naive_bayes").build_detector(),
+        lambda: _river_config(name="river").build_detector(),
+    ],
+)
+def test_detectors_only_accept_one_successful_fit(
+    build_detector: Callable[[], ExperimentDetector],
+) -> None:
+    """Detector instances should reject repeated fitting.
+
+    Args:
+        build_detector (Callable[[], ExperimentDetector]): Factory for the
+            detector under test.
+    """
+    detector = build_detector()
+
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
+
+    with (
+        Progress(disable=True) as progress,
+        pytest.raises(
+            RuntimeError,
+            match="can only be fit once",
+        ),
+    ):
+        detector.fit(_supervised_train_sequences(), progress=progress)
+
+
+@pytest.mark.allow_no_new_coverage
 def test_template_frequency_detector_predictions_are_repeatable() -> None:
     """Repeated predictions from the fitted baseline should be identical."""
     # This protects experiment-layer detector determinism, which sits outside
     # the configured `anomalog` coverage target.
-    detector = TemplateFrequencyModelConfig(name="template_frequency").build_detector()
+    detector = _template_frequency_config(name="template_frequency").build_detector()
     with Progress(disable=True) as progress:
         detector.fit(_supervised_train_sequences(), progress=progress)
     sequence = _sequence(
@@ -142,7 +394,7 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
     """Template-frequency defaults should calibrate against train normal scores."""
     # This protects experiment-layer threshold calibration outside the
     # configured `anomalog` coverage target.
-    detector = TemplateFrequencyModelConfig(
+    detector = _template_frequency_config(
         name="template_frequency",
     ).build_detector()
     train_sequences = _supervised_train_sequences()
@@ -170,7 +422,7 @@ def test_naive_bayes_detector_predictions_are_repeatable() -> None:
     """Repeated predictions from the handwritten detector should be identical."""
     # This protects experiment-layer detector determinism, which sits outside
     # the configured `anomalog` coverage target.
-    detector = NaiveBayesModelConfig(name="naive_bayes").build_detector()
+    detector = _naive_bayes_config(name="naive_bayes").build_detector()
     with Progress(disable=True) as progress:
         detector.fit(_supervised_train_sequences(), progress=progress)
     sequence = _sequence(
@@ -191,7 +443,7 @@ def test_river_detector_predictions_are_stable_across_equal_fits() -> None:
     """Two fits on the same training data should produce the same prediction."""
     # This protects experiment-layer detector determinism, which sits outside
     # the configured `anomalog` coverage target.
-    config = RiverModelConfig(name="river")
+    config = _river_config(name="river")
     left = config.build_detector()
     right = config.build_detector()
     train_sequences = _supervised_train_sequences()
@@ -216,7 +468,7 @@ def test_river_model_config_supports_additional_count_based_estimators() -> None
     # This protects experiment-layer estimator registration outside the
     # configured `anomalog` coverage target.
     assert isinstance(
-        RiverModelConfig(
+        _river_config(
             name="river-bernoulli",
             estimator="naive_bayes.BernoulliNB",
         ).build_detector(),
@@ -229,7 +481,7 @@ def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     """Detector manifests should be typed and include shared run summary counts."""
     # This protects experiment-layer manifest shaping outside the configured
     # `anomalog` coverage target.
-    detector = NaiveBayesModelConfig(name="naive_bayes").build_detector()
+    detector = _naive_bayes_config(name="naive_bayes").build_detector()
     with Progress(disable=True) as progress:
         detector.fit(_supervised_train_sequences(), progress=progress)
     sequence_summary = SequenceSummary(
@@ -250,7 +502,7 @@ def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     assert manifest.train_label_counts == sequence_summary.train_label_counts
     assert manifest.test_label_counts == sequence_summary.test_label_counts
     assert isinstance(
-        RiverModelConfig(
+        _river_config(
             name="river-complement",
             estimator="naive_bayes.ComplementNB",
         ).build_detector(),

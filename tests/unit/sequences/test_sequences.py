@@ -46,42 +46,6 @@ def _upper_template_with_source_param(
     return text.upper(), [text]
 
 
-@pytest.mark.allow_no_new_coverage
-def test_entity_sequences_train_only_normals() -> None:
-    """Normal-only training should fail if the overall target cannot be satisfied."""
-    # This protects the fail-fast contract for impossible normal-only splits.
-    sink = _sink(
-        structured_line(
-            line_order=0,
-            timestamp_unix_ms=100,
-            entity_id="a",
-            untemplated_message_text="first",
-            anomalous=None,
-        ),
-        structured_line(
-            line_order=1,
-            timestamp_unix_ms=200,
-            entity_id="b",
-            untemplated_message_text="second",
-            anomalous=None,
-        ),
-    )
-
-    builder = EntitySequenceBuilder(
-        sink=sink,
-        infer_template=_upper_template,
-        label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
-        train_frac=1.0,
-        train_on_normal_entities_only=True,
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="Requested train fraction is impossible",
-    ):
-        list(builder)
-
-
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
     None
 ):

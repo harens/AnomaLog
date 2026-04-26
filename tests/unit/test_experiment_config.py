@@ -48,7 +48,11 @@ def _write_config_tree(
 def test_load_experiment_bundle_resolves_dataset_and_model_configs(
     tmp_path: Path,
 ) -> None:
-    """Run configs resolve dataset/model references under experiments/configs."""
+    """Run configs resolve dataset/model references under experiments/configs.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
     # This protects experiment config resolution without depending on mutable
     # checked-in experiment files.
     # The experiment framework lives outside `--cov=anomalog`, so this test
@@ -89,7 +93,11 @@ def test_load_experiment_bundle_resolves_dataset_and_model_configs(
 def test_load_experiment_bundle_supports_naive_bayes_model_configs(
     tmp_path: Path,
 ) -> None:
-    """Naive Bayes configs should resolve through the same model loader."""
+    """Naive Bayes configs should resolve through the same model loader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
     # This protects model config decoding outside the
     # `anomalog` coverage target.
     run_path = _write_config_tree(
@@ -122,7 +130,11 @@ def test_load_experiment_bundle_supports_naive_bayes_model_configs(
 def test_load_experiment_bundle_supports_river_multinomial_nb_model_configs(
     tmp_path: Path,
 ) -> None:
-    """River model configs should resolve through the same model loader."""
+    """River model configs should resolve through the same model loader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
     # This protects model config decoding outside the
     # `anomalog` coverage target.
     run_path = _write_config_tree(
@@ -148,8 +160,43 @@ def test_load_experiment_bundle_supports_river_multinomial_nb_model_configs(
 
 
 @pytest.mark.allow_no_new_coverage
+def test_load_experiment_bundle_supports_deeplog_model_configs(
+    tmp_path: Path,
+) -> None:
+    """DeepLog model configs should resolve through the same model loader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
+    # This protects experiment model config decoding outside the configured
+    # `anomalog` coverage target.
+    run_path = _write_config_tree(
+        tmp_path,
+        run_name="bgl_deeplog",
+        dataset=(
+            "bgl_entity_supervised",
+            'name = "bgl_entity_supervised"\ndataset_name = "BGL"\npreset = "bgl"\n',
+        ),
+        model=(
+            "deeplog_default",
+            'name = "deeplog_default"\ndetector = "deeplog"\n',
+        ),
+    )
+    bundle = load_experiment_bundle(run_path)
+
+    assert bundle.run.name == "bgl_deeplog"
+    assert bundle.model.name == "deeplog_default"
+    assert bundle.model.detector == "deeplog"
+    assert bundle.dataset.preset == "bgl"
+
+
+@pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundle_rejects_missing_model_config(tmp_path: Path) -> None:
-    """Missing referenced config files should fail fast with a clear error."""
+    """Missing referenced config files should fail fast with a clear error.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
     # This regression check exercises experiment config validation outside the
     # `anomalog` coverage target, so the warning is intentionally suppressed.
     experiments_root = tmp_path / "experiments"
@@ -191,7 +238,11 @@ def test_build_dataset_spec_applies_label_reader_for_custom_datasets() -> None:
 def test_load_experiment_bundle_rejects_normal_only_training_for_fixed_grouping(
     tmp_path: Path,
 ) -> None:
-    """Fixed grouping configs should reject the normal-only training flag."""
+    """Fixed grouping configs should reject the normal-only training flag.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
     # This protects experiment config typing outside the configured
     # `anomalog` coverage target.
     run_path = _write_config_tree(

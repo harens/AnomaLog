@@ -19,6 +19,7 @@ EXPECTED_TRAIN_SEQUENCE_COUNT = 2
 EXPECTED_TEST_SEQUENCE_COUNT = 2
 EXPECTED_STRUCTURED_ROWS = 8
 FINGERPRINT_HEX_LENGTH = 64
+TEMPLATE_FREQUENCY_SCORE_THRESHOLD = 1.2
 
 
 class _PredictionRecord(TypedDict):
@@ -55,23 +56,38 @@ def _assert_template_frequency_predictions(
     *,
     score_threshold: float,
 ) -> None:
-    train_predictions = [
-        prediction for prediction in predictions if prediction["split_label"] == "train"
-    ]
     test_predictions = [
         prediction for prediction in predictions if prediction["split_label"] == "test"
     ]
 
-    assert [prediction["window_id"] for prediction in predictions] == [0, 1, 2, 3]
-    assert len(train_predictions) == EXPECTED_TRAIN_SEQUENCE_COUNT
+    assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
+    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
+    assert [prediction["split_label"] for prediction in predictions] == [
+        "test",
+        "test",
+    ]
     assert len(test_predictions) == EXPECTED_TEST_SEQUENCE_COUNT
     assert [prediction["label"] for prediction in test_predictions] == [0, 0]
-    assert all(prediction["predicted_label"] == 1 for prediction in test_predictions)
-    assert all(prediction["score"] > score_threshold for prediction in test_predictions)
+    flagged_test_prediction = next(
+        prediction
+        for prediction in test_predictions
+        if prediction["predicted_label"] == 1
+    )
+    normal_test_prediction = next(
+        prediction
+        for prediction in test_predictions
+        if prediction["predicted_label"] == 0
+    )
+    assert flagged_test_prediction["score"] > score_threshold
+    assert normal_test_prediction["score"] < score_threshold
 
 
 def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> None:
-    """A run config should materialize dataset, metrics, predictions, and metadata."""
+    """A run config should materialize dataset, metrics, predictions, and metadata.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
     run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
@@ -87,7 +103,12 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
     shutil.copy2(FIXTURE_ROOT / "tiny_run.toml", run_config)
     shutil.copy2(FIXTURE_ROOT / "tiny_dataset.toml", dataset_config)
-    shutil.copy2(FIXTURE_ROOT / "template_frequency.toml", model_config)
+    model_config.write_text(
+        'name = "template_frequency"\n'
+        'detector = "template_frequency"\n'
+        f"score_threshold = {TEMPLATE_FREQUENCY_SCORE_THRESHOLD}\n",
+        encoding="utf-8",
+    )
 
     run_dir = run_experiment(run_config)
     rerun_dir = run_experiment(run_config, force=True)
@@ -123,12 +144,14 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     }
     assert manifest["sequence_split_summary"] == {
         "requested_train_fraction": 0.34,
-        "train_fraction_scope": "all_sequences",
-        "train_on_normal_entities_only": False,
         "eligible_train_sequence_count": EXPECTED_SEQUENCE_COUNT,
         "effective_train_fraction_of_eligible": 0.5,
         "effective_train_fraction_overall": 0.5,
     }
+    assert (
+        manifest["model_manifest"]["score_threshold"]
+        == TEMPLATE_FREQUENCY_SCORE_THRESHOLD
+    )
     assert manifest["raw_logs"]["sha256"] == sha256_for_file(
         tmp_path / "logs" / FIXTURE_LOG.name,
     )
@@ -139,7 +162,7 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     assert "Wrote experiment artifacts" in run_log
     _assert_template_frequency_predictions(
         predictions,
-        score_threshold=float(manifest["model_manifest"]["score_threshold"]),
+        score_threshold=TEMPLATE_FREQUENCY_SCORE_THRESHOLD,
     )
     assert metrics == rerun_metrics
     assert manifest == rerun_manifest
@@ -150,7 +173,11 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
 def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
     tmp_path: Path,
 ) -> None:
-    """Normal-only entity splits should fail when the overall target is impossible."""
+    """Normal-only entity splits should fail when the overall target is impossible.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
     # This protects experiment-runner behavior outside the configured
     # `anomalog` coverage target.
     run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_run.toml"

@@ -1,0 +1,12 @@
+name = "deepcase_dataset"
+dataset_name = "deepcase-bgl-fixture"
+structured_parser = "bgl"
+
+[source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/deepcase_fixture.log"
+
+[sequence]
+grouping = "entity"
+train_fraction = 0.5

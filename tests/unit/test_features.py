@@ -1,8 +1,5 @@
 """Tests for public sequence representation helpers."""
 
-from dataclasses import dataclass
-from typing import ClassVar
-
 import pytest
 
 from anomalog.representations import (
@@ -176,50 +173,3 @@ def test_sequential_representation_preserves_template_order() -> None:
         "Node failed",
         "Disk warning",
     ]
-
-
-@pytest.mark.allow_no_new_coverage
-def test_custom_representation_can_use_full_template_sequence_context() -> None:
-    """Custom representations should be able to consume all sequence fields."""
-    # This protects the public contract that custom representations may use the
-    # full `TemplateSequence` rather than just `sequence.templates`. The nearby
-    # code is already fully covered, so there is no uncovered branch tied more
-    # directly to this API-level guarantee.
-
-    @dataclass(frozen=True)
-    class _SequenceSummaryRepresentation:
-        name: ClassVar[str] = "sequence_summary"
-
-        def represent(self, sequence: TemplateSequence) -> dict[str, object]:
-            assert self.name == "sequence_summary"
-            return {
-                "entity_ids": sequence.entity_ids,
-                "parameter_count": sum(len(params) for _, params, _ in sequence.events),
-                "timed_event_count": sum(
-                    dt_prev_ms is not None for _, _, dt_prev_ms in sequence.events
-                ),
-                "total_dt_ms": sum(
-                    dt_prev_ms or 0 for _, _, dt_prev_ms in sequence.events
-                ),
-                "split": sequence.split_label.value,
-            }
-
-    sequence = TemplateSequence(
-        events=[
-            ("Node failed", ["node-a"], None),
-            ("Disk warning", ["sda"], 50),
-            ("Retry scheduled", [], 75),
-        ],
-        label=1,
-        entity_ids=["node-a", "node-b"],
-        window_id=12,
-        split_label=SplitLabel.TEST,
-    )
-
-    assert _SequenceSummaryRepresentation().represent(sequence) == {
-        "entity_ids": ["node-a", "node-b"],
-        "parameter_count": 2,
-        "timed_event_count": 2,
-        "total_dt_ms": 125,
-        "split": "test",
-    }

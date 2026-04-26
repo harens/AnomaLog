@@ -1,0 +1,17 @@
+name = "deeplog_dataset"
+dataset_name = "deeplog-paper-fixture"
+structured_parser = "bgl"
+
+[source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/deeplog_bgl.log"
+
+[cache_paths]
+data_root = "./data"
+cache_root = "./cache"
+
+[sequence]
+grouping = "entity"
+train_fraction = 0.4
+train_on_normal_entities_only = true

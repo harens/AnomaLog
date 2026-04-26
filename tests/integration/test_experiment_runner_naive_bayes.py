@@ -116,18 +116,11 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
     predictions = _read_predictions(run_dir)
     rerun_predictions = _read_predictions(rerun_dir)
     run_log = (run_dir / "run.log").read_text(encoding="utf-8")
-    train_predictions = [
-        prediction for prediction in predictions if prediction["split_label"] == "train"
-    ]
     test_predictions = [
         prediction for prediction in predictions if prediction["split_label"] == "test"
     ]
-    anomalous_training_prediction = next(
-        prediction for prediction in train_predictions if prediction["label"] == 1
-    )
     held_out_prediction = test_predictions[0]
     key_phrases_by_class = _model_key_phrases_by_class(manifest)
-    anomalous_key_phrases = key_phrases_by_class["anomalous"]
     normal_key_phrases = key_phrases_by_class["normal"]
 
     assert run_dir.name == manifest["run_fingerprint"][:12]
@@ -136,25 +129,13 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
     assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
     assert manifest["model_manifest"]["detector"] == "naive_bayes"
     assert normal_key_phrases
-    assert anomalous_key_phrases
     assert any(
         "ras app fatal" in phrase
         for phrase in manifest["model_manifest"]["key_phrases_by_class"]["anomalous"]
     )
-    assert [prediction["window_id"] for prediction in predictions] == [0, 1, 2, 3]
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "train",
-        "train",
-        "train",
-        "test",
-    ]
-    assert anomalous_training_prediction["predicted_label"] == 1
-    assert anomalous_training_prediction["score"] >= POSTERIOR_THRESHOLD
-    assert anomalous_training_prediction["key_phrases"]
-    assert any(
-        phrase in anomalous_key_phrases
-        for phrase in anomalous_training_prediction["key_phrases"]
-    )
+    assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
+    assert [prediction["window_id"] for prediction in predictions] == [3]
+    assert [prediction["split_label"] for prediction in predictions] == ["test"]
     assert held_out_prediction["label"] == 0
     assert held_out_prediction["predicted_label"] == 0
     assert held_out_prediction["score"] < POSTERIOR_THRESHOLD

@@ -1,0 +1,3 @@
+name = "deeplog_paper_defaults"
+dataset = "deeplog_dataset"
+model = "deeplog"

@@ -1,0 +1,4 @@
+name = "deepcase_runner_smoke"
+dataset = "deepcase_dataset"
+model = "deepcase"
+results_root = "experiments/results"
