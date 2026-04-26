@@ -6,5 +6,5 @@ description = "Built-in HDFS_v1 preset grouped by entity with supervised train/t
 
 [sequence]
 grouping = "entity"
-train_fraction = 0.8
+train_fraction = 0.2
 train_on_normal_entities_only = false
