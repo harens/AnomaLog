@@ -28,6 +28,7 @@ from experiments.models.base import (
     ExperimentDetector,
     ModelManifest,
     PredictionOutcome,
+    SequencePrediction,
     SequenceSummary,
     decode_experiment_model_config,
 )
@@ -312,6 +313,118 @@ def test_stream_predictions_only_scores_test_sequences(
         "test",
         "test",
     ]
+
+
+@pytest.mark.allow_no_new_coverage
+def test_sequence_prediction_to_dict_keeps_detector_fields_nested_once() -> None:
+    """Sequence predictions should flatten detector fields without duplication."""
+    # This protects the duplicated-field regression; the shared-field branch is
+    # already exercised by neighbouring tests in this module.
+    sequence = _sequence(
+        1,
+        templates=["test-a"],
+        label=0,
+        split_label=SplitLabel.TEST,
+    )
+    prediction = SequencePrediction.from_sequence(
+        sequence,
+        outcome=PredictionOutcome(predicted_label=1, score=0.5),
+        detector_fields={"key_phrases": ["foo", "bar"]},
+    )
+
+    assert prediction.to_shared_dict() == {
+        "window_id": 1,
+        "split_label": "test",
+        "label": 0,
+        "predicted_label": 1,
+        "score": 0.5,
+        "entity_ids": ["entity-1"],
+        "event_count": 1,
+    }
+    assert prediction.to_dict() == {
+        "window_id": 1,
+        "split_label": "test",
+        "label": 0,
+        "predicted_label": 1,
+        "score": 0.5,
+        "entity_ids": ["entity-1"],
+        "event_count": 1,
+        "key_phrases": ["foo", "bar"],
+    }
+    assert "detector_fields" not in prediction.to_dict()
+
+
+def test_stream_predictions_logs_scored_test_sequence_counts(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Score-progress logs should count only scored test sequences.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the prediction stream.
+        caplog (pytest.LogCaptureFixture): Captured log records for the scoring run.
+    """
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: str = "recording"
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del train_sequences, progress, logger
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            del sequence
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(
+            window_id=index,
+            templates=[f"train-{index}"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+        )
+        for index in range(10_000)
+    ] + [
+        _sequence(
+            window_id=10_000 + index,
+            templates=[f"test-{index}"],
+            label=0,
+            split_label=SplitLabel.TEST,
+        )
+        for index in range(10_000)
+    ]
+    detector = _RecordingDetector()
+    predictions_path = tmp_path / "predictions.jsonl"
+    logger = logging.getLogger("tests.stream_predictions_progress")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        stream_predictions(
+            detector=detector,
+            sequence_factory=lambda: iter(sequences),
+            predictions_path=predictions_path,
+            logger=logger,
+        )
+
+    assert "Processed 10000 test sequences for recording detector" in caplog.messages
 
 
 @pytest.mark.allow_no_new_coverage

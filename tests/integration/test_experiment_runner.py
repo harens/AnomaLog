@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 from pathlib import Path
 from typing import TypedDict
@@ -159,7 +160,7 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     assert environment["run_fingerprint"] == manifest["run_fingerprint"]
     assert run_config_payload["run"]["name"] == "tiny_runner_smoke"
     assert "Building dataset tiny-bgl-runner" in run_log
-    assert "Wrote experiment artifacts" in run_log
+    assert f"Wrote experiment artifacts to {shlex.quote(str(run_dir))}" in run_log
     _assert_template_frequency_predictions(
         predictions,
         score_threshold=TEMPLATE_FREQUENCY_SCORE_THRESHOLD,
