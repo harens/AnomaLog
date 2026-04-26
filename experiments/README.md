@@ -55,12 +55,17 @@ uv run python -m experiments.runners.run_experiment \
 
 Add `--force` to replace the deterministic output directory for the same config fingerprint.
 
-To run `river`-backed or DeepLog/DeepCASE experiments, install the optional
-experiment dependencies first:
+To run `river`-backed or DeepLog/DeepCASE experiments, install the matching
+optional extras first:
 
 ```bash
-uv sync --group experiments
+uv sync --extra experiments --extra river
+uv sync --extra experiments --extra deeplog
+uv sync --extra experiments --extra deepcase
 ```
+
+Use `uv sync --all-extras` if you want every experiment backend in one
+environment.
 
 ## Result Artifacts
 

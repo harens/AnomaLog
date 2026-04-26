@@ -24,6 +24,23 @@ Repository = "https://github.com/harens/AnomaLog"
 Issues = "https://github.com/harens/AnomaLog/issues"
 Changelog = "https://github.com/harens/AnomaLog/blob/main/CHANGELOG.md"
 
+[project.optional-dependencies]
+experiments = [
+    "msgspec>=0.20.0",
+]
+deepcase = [
+    "deepcase",
+    "torch>=2.11.0",
+]
+deeplog = [
+    "torch>=2.11.0",
+]
+river = [
+    # River 0.24.0 shipped a broken release layout for our naive_bayes usage:
+    # https://github.com/online-ml/river/issues/1806
+    "river>=0.23.0,<0.24.0",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
@@ -36,14 +53,6 @@ dev = [
 docs = [
     "mkdocstrings-python>=2.0.3",
     "zensical>=0.0.29",
-]
-experiments = [
-    "deepcase",
-    "msgspec>=0.20.0",
-    # River 0.24.0 shipped a broken release layout for our naive_bayes usage:
-    # https://github.com/online-ml/river/issues/1806
-    "river>=0.23.0,<0.24.0",
-    "torch>=2.11.0",
 ]
 
 [tool.ruff.lint]

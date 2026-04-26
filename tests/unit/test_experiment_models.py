@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import types
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ from anomalog.sequences import (
     SplitLabel,
     TemplateSequence,
 )
+from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import (
     ExperimentDetector,
@@ -323,6 +325,81 @@ def test_model_registries_resolve_builtins() -> None:
     assert (
         resolve_model_config_type("template_frequency") is TemplateFrequencyModelConfig
     )
+
+
+def test_model_registry_imports_requested_model_lazily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model resolution should import only the requested detector module.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the module importer so the
+            test can observe which model module is requested.
+    """
+    imported_modules: list[str] = []
+    fake_name = "template_frequency_lazy_test"
+    registration = types.SimpleNamespace(
+        module_path="experiments.models.template_frequency",
+        config_type_name="TemplateFrequencyModelConfig",
+    )
+
+    def _import_module(module_path: str) -> types.SimpleNamespace:
+        imported_modules.append(module_path)
+        return types.SimpleNamespace(
+            TemplateFrequencyModelConfig=TemplateFrequencyModelConfig,
+        )
+
+    monkeypatch.setattr(
+        "experiments.models.registry._MODEL_REGISTRATIONS",
+        {fake_name: registration},
+    )
+    monkeypatch.setattr("experiments.models.registry.import_module", _import_module)
+
+    resolve_model_config_type.cache_clear()
+    try:
+        config_type = resolve_model_config_type(fake_name)
+    finally:
+        resolve_model_config_type.cache_clear()
+
+    assert config_type is TemplateFrequencyModelConfig
+    assert imported_modules == ["experiments.models.template_frequency"]
+
+
+def test_model_registry_reports_missing_optional_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing optional detector dependencies should fail with an install hint.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the module importer so the
+            test can simulate a missing backend dependency.
+    """
+    missing_dependency = ModuleNotFoundError("No module named 'river'")
+    missing_dependency.name = "river"
+    registration = types.SimpleNamespace(
+        module_path="experiments.models.river",
+        config_type_name="RiverModelConfig",
+    )
+
+    def _import_module(module_path: str) -> types.SimpleNamespace:
+        del module_path
+        raise missing_dependency
+
+    monkeypatch.setattr(
+        "experiments.models.registry._MODEL_REGISTRATIONS",
+        {"river": registration},
+    )
+    monkeypatch.setattr("experiments.models.registry.import_module", _import_module)
+
+    resolve_model_config_type.cache_clear()
+    try:
+        with pytest.raises(
+            ConfigError,
+            match=r"Detector 'river' requires optional backend dependencies",
+        ):
+            resolve_model_config_type("river")
+    finally:
+        resolve_model_config_type.cache_clear()
 
 
 @pytest.mark.allow_no_new_coverage

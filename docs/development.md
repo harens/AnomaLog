@@ -14,10 +14,11 @@ cd AnomaLog
 AnomaLog uses `uv` for local development.
 
 ```bash
-uv sync --all-groups
+uv sync --group dev --all-extras
 ```
 
-That installs the main package plus the `dev` and `docs` dependency groups.
+That installs the main package plus the `dev` dependency group and every
+optional experiment backend.
 
 ## :material-tools: Install pre-commit hooks
 

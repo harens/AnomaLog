@@ -25,7 +25,7 @@ jobs:
           enable-cache: true
 
       - name: Sync Dependencies
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --group dev --all-extras
 
       - name: Lint
         run: uv run ruff check .
@@ -46,7 +46,7 @@ jobs:
           enable-cache: true
 
       - name: Sync Dependencies
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --group dev --all-extras
 
       - name: Type check
         run: uv run ty check
@@ -64,7 +64,7 @@ jobs:
           enable-cache: true
 
       - name: Sync Dependencies
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --group dev --all-extras
 
       - name: Docstring lint
         # See: https://github.com/jsh9/pydoclint/issues/162
@@ -101,7 +101,7 @@ jobs:
       - name: Sync Dependencies
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: ${{ matrix.python-version == '3.14' && '1' || '' }}
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --group dev --all-extras
 
       - name: Run tests
         run: >

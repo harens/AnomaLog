@@ -102,8 +102,12 @@ Install the optional experiment dependencies first when you want to run the
 checked-in baselines:
 
 ```bash
-uv sync --group experiments
+uv sync --extra experiments --extra river
+uv sync --extra experiments --extra deeplog
+uv sync --extra experiments --extra deepcase
 ```
+
+Use `uv sync --all-extras` if you want every detector family available at once.
 
 ## :material-file-chart-outline: Artifacts
 
