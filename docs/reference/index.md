@@ -32,6 +32,9 @@ Use it for two things:
 - [Representations](representations.md)
   Model-facing sequence representations and lazy representation views
 
+- [Experiments](experiments.md)
+  Config-driven experiment configs, model runners, and result helpers
+
 </div>
 
 ## :material-compass-outline: Codebase layout
@@ -45,12 +48,14 @@ Use it for two things:
 - `anomalog/sequences.py` contains sequence grouping and split behavior
 - `anomalog/representations/` contains model-facing sequence representations
 - `anomalog/_runtime/` contains internal orchestration code
+- `experiments/` contains the repository-local experiment configs, runners, and result helpers
 
 ## :material-flask-outline: Experiment layer
 
 The `experiments/` directory is useful for reproducible model experimentation
 after preprocessing, but it is separate from the core public API of the
-library.
+library. See [Experiments](experiments.md) for the module reference and
+[`docs/experiments.md`](../experiments.md) for the workflow overview.
 
 !!! note
     The reference pages document symbols. Start with [Getting Started](../getting-started.md) for the onboarding path and [Pipeline Concepts](../pipeline-concepts.md) for the stage-by-stage mental model.

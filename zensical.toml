@@ -24,6 +24,7 @@ nav = [
     {"Labels" = "reference/labels.md"},
     {"Sequences" = "reference/sequences.md"},
     {"Representations" = "reference/representations.md"},
+    {"Experiments" = "reference/experiments.md"},
   ]},
 ]
 

@@ -5,6 +5,9 @@ core library has already given you the sequence view you want and you now want
 reproducible detector runs, model sweeps, or preprocessing ablations recorded
 as artifacts on disk.
 
+If you want the module-level API reference for the separate `experiments`
+package, see [Reference](reference/experiments.md).
+
 ## :material-sign-direction: When to use it
 
 Use the core `anomalog` API when you are:
