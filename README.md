@@ -174,6 +174,10 @@ uv run python -m experiments.runners.run_experiment \
   --config experiments/configs/runs/bgl_template_frequency.toml
 ```
 
+Experiment runs reuse AnomaLog's dataset-side caches and write deterministic
+result directories, but detector training and test scoring are intentionally
+rerun for new config fingerprints.
+
 See [`experiments/README.md`](experiments/README.md) for the experiment layout and artifact format.
 
 ## Development

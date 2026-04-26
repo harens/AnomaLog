@@ -112,6 +112,23 @@ uv sync --extra experiments --extra deepcase
 
 Use `uv sync --all-extras` if you want every detector family available at once.
 
+## :material-database-clock-outline: Caching and reruns
+
+The experiment layer reuses AnomaLog's dataset-side caches, but it does not
+cache detector training or detector scoring as separate reusable stages.
+
+- Dataset sourcing, structured parsing, template mining, and other
+  preprocessing work can be reused through the existing AnomaLog and
+  Prefect-backed caches when their inputs have not changed.
+- Each experiment run writes to a deterministic result directory under
+  `experiments/results/<run-name>/<fingerprint>/`.
+- The fingerprint is derived from the fully resolved run, dataset, and model
+  config, so changing any of those inputs produces a new output directory.
+- Re-running the exact same config targets the same result directory. Use
+  `--force` when you want to replace that existing output.
+- If you change the experiment config, the detector is intentionally retrained
+  and the test split is rescored for the new fingerprint.
+
 ## :material-file-chart-outline: Artifacts
 
 Each run writes a deterministic result directory containing:

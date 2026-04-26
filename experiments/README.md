@@ -55,6 +55,24 @@ uv run python -m experiments.runners.run_experiment \
 
 Add `--force` to replace the deterministic output directory for the same config fingerprint.
 
+## Caching Strategy
+
+AnomaLog caches dataset preprocessing work, not experiment model execution.
+
+- Dataset sourcing, structured parsing, template mining, and other
+  preprocessing stages reuse the existing AnomaLog and Prefect-backed caches
+  when their inputs and upstream assets have not changed.
+- Experiment runs write to a deterministic directory under
+  `experiments/results/<run-name>/<fingerprint>/`, where the fingerprint comes
+  from the fully resolved run, dataset, and model config.
+- Re-running the exact same config reuses that deterministic output directory.
+  Use `--force` when you want to overwrite it.
+- Changing the dataset, sequence settings, or model config produces a new
+  fingerprint and therefore a new result directory.
+- Detector training and test scoring are intentionally not cached as separate
+  reusable stages. If you change an experiment config, the model is retrained
+  and the test split is rescored for that new fingerprint.
+
 To run `river`-backed or DeepLog/DeepCASE experiments, install the matching
 optional extras first:
 
