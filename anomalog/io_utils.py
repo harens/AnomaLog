@@ -1,12 +1,21 @@
 """Input/output helpers for progress reporting and dataset integrity checks."""
 
 import hashlib
+import sys
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
 from prefect.exceptions import MissingContextError
 from prefect.logging import get_run_logger
+from prefect.logging.configuration import (
+    DEFAULT_LOGGING_SETTINGS_PATH,
+    load_logging_config,
+)
+from prefect.logging.highlighters import PrefectConsoleHighlighter
+from prefect.settings import PREFECT_LOGGING_COLORS, PREFECT_LOGGING_MARKUP
+from rich.console import Console
+from rich.highlighter import NullHighlighter
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -20,6 +29,42 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from rich.theme import Theme
+
+_PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
+
+
+def _build_shared_console() -> Console:
+    """Create the Rich console shared by progress bars and experiment logs.
+
+    Returns:
+        Console: Shared stderr-backed console using Prefect's console theme.
+    """
+    handler_config = _PREFECT_LOGGING_CONFIG["handlers"]["console"]
+    if PREFECT_LOGGING_COLORS.value():
+        highlighter = PrefectConsoleHighlighter()
+        theme = Theme(handler_config.get("styles"), inherit=True)
+    else:
+        highlighter = NullHighlighter()
+        theme = None
+    return Console(
+        file=sys.stderr,
+        highlighter=highlighter,
+        theme=theme,
+        markup=PREFECT_LOGGING_MARKUP.value(),
+    )
+
+
+_SHARED_CONSOLE = _build_shared_console()
+
+
+def get_shared_console() -> Console:
+    """Return the Rich console shared by progress bars and experiment logs.
+
+    Returns:
+        Console: Shared stderr-backed Rich console.
+    """
+    return _SHARED_CONSOLE
 
 
 def make_bounded_progress() -> Progress:
@@ -38,6 +83,7 @@ def make_bounded_progress() -> Progress:
         TransferSpeedColumn(),
         "•",
         TimeRemainingColumn(),
+        console=get_shared_console(),
     )
 
 
@@ -56,6 +102,7 @@ def make_spinner_progress(unit: str = "lines processed") -> Progress:
         TextColumn(f"{{task.completed:,}} {unit}"),
         "•",
         TimeElapsedColumn(),
+        console=get_shared_console(),
     )
 
 
@@ -87,7 +134,7 @@ def make_count_progress(unit: str | None = None) -> Progress:
             TimeRemainingColumn(),
         ),
     )
-    return Progress(*columns)
+    return Progress(*columns, console=get_shared_console())
 
 
 def verify_md5(

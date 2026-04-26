@@ -243,6 +243,20 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         del self
         return None
 
+    def sequence_count_hint(self) -> int | None:
+        """Return a cheap exact total sequence count when the builder knows it.
+
+        This is intended for progress reporting only. Builders that cannot know
+        the full emitted sequence count without replaying the stream should
+        return ``None`` rather than an estimate.
+
+        Returns:
+            int | None: Exact total sequence count when cheaply available,
+                otherwise ``None``.
+        """
+        del self
+        return None
+
     def train_sequence_count_unit_hint(self) -> str | None:
         """Return a human-readable unit label for train-count progress.
 
@@ -652,6 +666,16 @@ class EntitySequenceBuilder(SequenceBuilder):
         return "entities"
 
     @override
+    def sequence_count_hint(self) -> int:
+        """Return the exact total sequence count for entity grouping.
+
+        Returns:
+            int: Total number of entity-grouped sequences.
+        """
+        entity_counts = self.sink.count_entities_by_label(self.label_for_group)
+        return entity_counts.total_entities
+
+    @override
     def split_summary_train_on_normal_entities_only(self) -> bool:
         """Return entity split-summary metadata for normal-only training.
 
@@ -852,6 +876,15 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
         return math.ceil(self.train_frac * total_sequences) if total_sequences else 0
 
     @override
+    def sequence_count_hint(self) -> int:
+        """Return the exact total sequence count for fixed windows.
+
+        Returns:
+            int: Total number of fixed windows.
+        """
+        return self.count_windows()
+
+    @override
     def train_sequence_count_unit_hint(self) -> str:
         """Return the unit label for fixed-window train progress.
 
@@ -882,6 +915,15 @@ class TimeSequenceBuilder(NonEntitySequenceBuilder):
             str: Unit label for time-window train progress.
         """
         return "windows"
+
+    @override
+    def sequence_count_hint(self) -> int:
+        """Return the exact total sequence count for time windows.
+
+        Returns:
+            int: Total number of time windows.
+        """
+        return self.count_windows()
 
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:

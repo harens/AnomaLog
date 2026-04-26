@@ -162,7 +162,8 @@ class _SharedPredictionFields:
             dict[str, Any]: Shared prediction fields ready for serialisation.
         """
         return {
-            field_name: getattr(self, field_name) for field_name in self.field_names()
+            field_name: getattr(self, field_name)
+            for field_name in _SharedPredictionFields.field_names()
         }
 
 

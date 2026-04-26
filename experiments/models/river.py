@@ -19,6 +19,7 @@ from experiments.models.base import (
     SequenceSummary,
     SingleFitMixin,
 )
+from experiments.models.progress import fit_stage_description
 
 if TYPE_CHECKING:
     import logging
@@ -179,7 +180,7 @@ class RiverDetector(SingleFitMixin, ExperimentDetector):
         feature_names: set[str] = set()
         for sequence in progress.track(
             train_sequences,
-            description=f"Fitting {self.detector_name} sequences",
+            description=fit_stage_description(self.detector_name),
         ):
             features = self.representation.represent(sequence)
             model.learn_one(features, sequence.label)

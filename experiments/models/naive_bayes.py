@@ -19,6 +19,7 @@ from experiments.models.base import (
     SequenceSummary,
     SingleFitMixin,
 )
+from experiments.models.progress import fit_stage_description
 
 if TYPE_CHECKING:
     import logging
@@ -139,7 +140,7 @@ class NaiveBayesDetector(SingleFitMixin, ExperimentDetector):
         vocabulary: set[str] = set()
         for sequence in progress.track(
             train_sequences,
-            description="Fitting naive_bayes sequences",
+            description=fit_stage_description(self.detector_name),
         ):
             class_counts[sequence.label] += 1
             sequence_phrases = Counter(self.representation.represent(sequence))

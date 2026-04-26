@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shlex
 import shutil
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from prefect.logging.configuration import (
+    DEFAULT_LOGGING_SETTINGS_PATH,
+    load_logging_config,
+)
+from prefect.logging.formatters import PrefectFormatter
+
+from anomalog.io_utils import get_shared_console
 from anomalog.sequences import EntitySequenceBuilder
 from experiments import ConfigError
 from experiments.config import load_experiment_bundle
 from experiments.datasets import build_dataset_spec
-from experiments.models import TrainProgressHint, run_model
+from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.results import (
     build_sequence_split_summary,
     prepare_result_paths,
@@ -23,6 +30,35 @@ from experiments.results import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+_PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
+
+
+class SharedConsoleHandler(logging.Handler):
+    """Write formatted log lines through the shared Rich console."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Render one log record through the shared console.
+
+        Args:
+            record (logging.LogRecord): Log record to render.
+        """
+        get_shared_console().print(self.format(record), soft_wrap=True)
+
+
+def build_prefect_standard_formatter() -> PrefectFormatter:
+    """Build Prefect's standard formatter from the active logging config.
+
+    Returns:
+        PrefectFormatter: Formatter matching Prefect's standard log layout.
+    """
+    formatter_config = _PREFECT_LOGGING_CONFIG["formatters"]["standard"]
+    return PrefectFormatter(
+        format=formatter_config["format"],
+        datefmt=formatter_config["datefmt"],
+        flow_run_fmt=formatter_config["flow_run_fmt"],
+        task_run_fmt=formatter_config["task_run_fmt"],
+    )
 
 
 def run_experiment(config_path: Path, *, force: bool = False) -> Path:
@@ -62,18 +98,28 @@ def run_experiment(config_path: Path, *, force: bool = False) -> Path:
         sequences = bundle.dataset.sequence.apply(templated)
         logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
         train_sequence_count_hint = sequences.train_sequence_count_hint()
+        sequence_count_hint = sequences.sequence_count_hint()
         model_summary = run_model(
             sequence_factory=lambda: iter(sequences),
             config=bundle.model,
             predictions_path=result_paths.predictions_path,
             logger=logger,
-            train_progress_hint=(
-                None
-                if train_sequence_count_hint is None
-                else TrainProgressHint(
-                    total=train_sequence_count_hint,
-                    unit=sequences.train_sequence_count_unit_hint(),
-                )
+            progress_plan=RunProgressPlan(
+                train=(
+                    None
+                    if train_sequence_count_hint is None
+                    else ProgressHint(
+                        total=train_sequence_count_hint,
+                        unit=sequences.train_sequence_count_unit_hint(),
+                    )
+                ),
+                score=(
+                    None
+                    if sequence_count_hint is None or train_sequence_count_hint is None
+                    else ProgressHint(
+                        total=sequence_count_hint - train_sequence_count_hint,
+                    )
+                ),
             ),
         )
         split_summary = build_sequence_split_summary(
@@ -103,7 +149,10 @@ def run_experiment(config_path: Path, *, force: bool = False) -> Path:
             model_summary=model_summary,
             result_paths=result_paths,
         )
-        logger.info("Wrote experiment artifacts to %s", result_paths.run_dir)
+        logger.info(
+            "Wrote experiment artifacts to %s",
+            shlex.quote(str(result_paths.run_dir)),
+        )
     return result_paths.run_dir
 
 
@@ -129,7 +178,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Run the CLI and print the result directory.
+    """Run the CLI entrypoint.
 
     Returns:
         int: Process exit code.
@@ -137,10 +186,9 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     try:
-        run_dir = run_experiment(args.config, force=args.force)
+        run_experiment(args.config, force=args.force)
     except (ConfigError, FileExistsError, ValueError) as exc:
         parser.exit(status=2, message=f"{exc}\n")
-    sys.stdout.write(f"{run_dir}\n")
     return 0
 
 
@@ -149,14 +197,14 @@ def _experiment_logger(log_path: Path) -> Iterator[logging.Logger]:
     logger = logging.getLogger(f"experiments.run.{log_path.parent.name}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = build_prefect_standard_formatter()
+    # Writes log lines for permanent storage
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setFormatter(formatter)
-    stream_handler = logging.StreamHandler(sys.stderr)
+    # Writes log lines to the console
+    stream_handler = SharedConsoleHandler()
     stream_handler.setFormatter(formatter)
+
     logger.handlers.clear()
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
