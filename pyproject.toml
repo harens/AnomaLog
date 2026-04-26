@@ -50,7 +50,7 @@ experiments = [
 # select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
 select = ['ALL']
 ignore = ["TD", "FIX002", "ERA001", "CPY001", "D107"]
-external = ["DOC603"]
+external = ["DOC603", "DOC201", "DOC203"]
 preview = true
 
 [tool.ruff.lint.per-file-ignores]

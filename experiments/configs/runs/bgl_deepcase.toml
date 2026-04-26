@@ -1,0 +1,4 @@
+name = "bgl_deepcase"
+dataset = "bgl_entity"
+model = "deepcase_default"
+description = "DeepCase model on the built-in BGL preset using a supervised entity split."

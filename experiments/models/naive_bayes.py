@@ -47,13 +47,7 @@ class NaiveBayesModelConfig(
     tag="naive_bayes",
     frozen=True,
 ):
-    """Multinomial Naive Bayes classifier over extracted template phrases.
-
-    Attributes:
-        top_k_phrases: Number of explanatory phrases to include per prediction.
-        anomalous_posterior_threshold: Posterior threshold for predicting the
-            anomalous class.
-    """
+    """Multinomial Naive Bayes classifier over extracted template phrases."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     top_k_phrases: Annotated[
         PositiveInt,

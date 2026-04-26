@@ -1,12 +1,14 @@
 """Registry helpers for experiment model configs."""
 
 from experiments.models.base import ExperimentModelConfig
+from experiments.models.deepcase import DeepCaseModelConfig
 from experiments.models.deeplog import DeepLogModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
 from experiments.models.river import RiverModelConfig
 from experiments.models.template_frequency import TemplateFrequencyModelConfig
 
 _MODEL_CONFIG_TYPES: dict[str, type[ExperimentModelConfig]] = {
+    "deepcase": DeepCaseModelConfig,
     "deeplog": DeepLogModelConfig,
     "naive_bayes": NaiveBayesModelConfig,
     "river": RiverModelConfig,

@@ -349,12 +349,7 @@ class ModelRunSummary:
 
 
 class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
-    """Tagged experiment-model config base.
-
-    Attributes:
-        name: Human-readable model config name.
-        description: Optional free-text model config description.
-    """
+    """Tagged experiment-model config base."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     name: Annotated[
         str,
@@ -397,19 +392,13 @@ class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
 
         Raises:
             NotImplementedError: Always, until implemented by a concrete model config.
-        """
+        """  # noqa: DOC201, DOC203 - No return doc since base method always raises.
         msg = f"{type(self).__name__} must implement build_detector()."
         raise NotImplementedError(msg)
 
 
 class PhraseModelConfig(ExperimentModelConfig, frozen=True):
-    """Shared phrase-feature config for bag-of-phrases detectors.
-
-    Attributes:
-        smoothing: Additive smoothing value for phrase counts.
-        phrase_ngram_min: Smallest template phrase n-gram size to extract.
-        phrase_ngram_max: Largest template phrase n-gram size to extract.
-    """
+    """Shared phrase-feature config for bag-of-phrases detectors."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     smoothing: Annotated[
         PositiveFloat,

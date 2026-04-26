@@ -100,24 +100,34 @@ class RunMetrics:
     train_label_counts: Counter[int] = field(default_factory=Counter)
     test_label_counts: Counter[int] = field(default_factory=Counter)
 
-    def update(
+    def record_train(
+        self,
+        sequence: TemplateSequence,
+    ) -> None:
+        """Record one train-split sequence without scoring it.
+
+        Args:
+            sequence (TemplateSequence): Train-split sequence seen while
+                streaming the dataset.
+        """
+        self.sequence_count += 1
+        self.train_sequence_count += 1
+        self.train_label_counts[sequence.label] += 1
+
+    def record_test(
         self,
         sequence: TemplateSequence,
         prediction: SequencePrediction,
     ) -> None:
-        """Update metrics from one streamed prediction.
+        """Update metrics from one test-split prediction.
 
         Args:
-            sequence (TemplateSequence): Sequence that produced the prediction.
-            prediction (SequencePrediction): Serialised prediction record for the
-                sequence.
+            sequence (TemplateSequence): Test-split sequence that produced
+                the prediction.
+            prediction (SequencePrediction): Serialised prediction record for
+                the sequence.
         """
         self.sequence_count += 1
-        if sequence.split_label is SplitLabel.TRAIN:
-            self.train_sequence_count += 1
-            self.train_label_counts[sequence.label] += 1
-            return
-
         self.test_sequence_count += 1
         self.test_label_counts[sequence.label] += 1
         self.test_score_sum += prediction.score
@@ -272,7 +282,7 @@ def stream_predictions(
     predictions_path: Path,
     logger: logging.Logger,
 ) -> RunMetrics:
-    """Write predictions incrementally while accumulating metrics.
+    """Write test predictions incrementally while accumulating metrics.
 
     Args:
         detector (ExperimentDetector): Fitted detector to evaluate.
@@ -282,7 +292,7 @@ def stream_predictions(
         logger (logging.Logger): Logger for progress messages.
 
     Returns:
-        RunMetrics: Accumulated metrics for the streamed predictions.
+        RunMetrics: Accumulated metrics for the streamed run.
     """
     accumulator = RunMetrics()
     with (
@@ -291,13 +301,17 @@ def stream_predictions(
     ):
         for sequence in progress.track(
             sequence_factory(),
-            description=f"Scoring {detector.detector_name} sequences",
+            description=f"Scoring {detector.detector_name} test sequences",
         ):
+            if sequence.split_label is SplitLabel.TRAIN:
+                accumulator.record_train(sequence)
+                continue
+
             outcome = detector.predict(sequence)
             prediction = outcome.to_prediction_record(sequence)
             file_obj.write(msgspec.json.encode(prediction.to_dict()).decode("utf-8"))
             file_obj.write("\n")
-            accumulator.update(sequence, prediction)
+            accumulator.record_test(sequence, prediction)
             if accumulator.sequence_count % _PROGRESS_EVERY == 0:
                 logger.info(
                     "Processed %s sequences for %s detector",

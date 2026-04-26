@@ -1,0 +1,425 @@
+"""DeepLog detector orchestration and manifest reporting."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Annotated, ClassVar
+
+import msgspec
+import torch
+
+from anomalog.sequences import TemplateSequence
+from experiments.models.base import (
+    ExperimentDetector,
+    ExperimentModelConfig,
+    OpenProbability,
+    PositiveFloat,
+    PositiveInt,
+    PredictionOutcome,
+    SequenceSummary,
+    SingleFitMixin,
+    require_entity_local_sequences,
+)
+from experiments.models.deeplog.key import (
+    KeyScoringContext,
+    fit_key_model,
+    score_key_sequence,
+)
+from experiments.models.deeplog.parameters import (
+    fit_parameter_models,
+    parameter_anomaly_score,
+    parameter_covered_event_count,
+    parameter_model_input_size,
+    score_parameter_sequence,
+)
+from experiments.models.deeplog.shared import (
+    DeepLogEventFinding,
+    DeepLogManifest,
+    KeyLSTM,
+    ParameterModelManifestEntry,
+    ParameterModelState,
+    SkippedParameterModelEntry,
+    build_normal_training_corpus,
+)
+from experiments.models.torch_runtime import (
+    TorchDeviceName,
+    resolve_torch_device,
+    set_torch_seed,
+)
+
+if TYPE_CHECKING:
+    import logging
+    from collections.abc import Iterable
+
+    from rich.progress import Progress
+
+    from anomalog.sequences import TemplateSequence
+
+
+@dataclass(frozen=True, slots=True)
+class DeepLogPredictionOutcome(PredictionOutcome):
+    """DeepLog runtime prediction plus detector-specific explanation fields.
+
+    This keeps DeepLog-specific explanation machinery isolated from the generic
+    experiment contract without introducing an extra nested "details" wrapper.
+    The base prediction serialiser flattens these fields into persisted
+    sequence records.
+
+    Attributes:
+        triggered_by_key_model (bool): Whether the key model flagged the
+            sequence.
+        triggered_by_parameter_model (bool): Whether the parameter model
+            flagged the sequence.
+        findings (list[DeepLogEventFinding]): Event-level DeepLog findings.
+    """
+
+    triggered_by_key_model: bool
+    triggered_by_parameter_model: bool
+    findings: list[DeepLogEventFinding]
+
+
+class DeepLogModelConfig(
+    ExperimentModelConfig,
+    tag="deeplog",
+    frozen=True,
+):
+    """Config for the scoped DeepLog reimplementation."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
+
+    history_size: Annotated[
+        PositiveInt,
+        msgspec.Meta(
+            description="Number of prior log keys used to predict the next key.",
+        ),
+    ] = 10
+    top_g: Annotated[
+        PositiveInt,
+        msgspec.Meta(
+            description="Number of top next-key predictions accepted as normal.",
+        ),
+    ] = 9
+    num_layers: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Number of LSTM layers in the key model."),
+    ] = 2
+    hidden_size: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Hidden dimension for DeepLog LSTM models."),
+    ] = 64
+    epochs: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Training epochs for DeepLog neural models."),
+    ] = 30
+    batch_size: Annotated[
+        PositiveInt,
+        msgspec.Meta(description="Training batch size for DeepLog neural models."),
+    ] = 64
+    learning_rate: Annotated[
+        PositiveFloat,
+        msgspec.Meta(description="Optimiser learning rate for DeepLog neural models."),
+    ] = 1e-3
+    validation_fraction: Annotated[
+        OpenProbability,
+        msgspec.Meta(
+            description=(
+                "Fraction of normal training data held out for parameter thresholds."
+            ),
+        ),
+    ] = 0.2
+    gaussian_confidence: Annotated[
+        OpenProbability,
+        msgspec.Meta(
+            description="Gaussian confidence interval used for parameter scoring.",
+        ),
+    ] = 0.99
+    include_elapsed_time: Annotated[
+        bool,
+        msgspec.Meta(
+            description="Whether parameter models include elapsed-time features.",
+        ),
+    ] = True
+    random_seed: Annotated[
+        int,
+        msgspec.Meta(description="Random seed used for deterministic torch training."),
+    ] = 0
+    device: Annotated[
+        TorchDeviceName,
+        msgspec.Meta(description="Torch device selection: auto, cpu, cuda, or mps."),
+    ] = "auto"
+
+    def build_detector(self) -> DeepLogDetector:
+        """Construct a DeepLog detector for experiment execution.
+
+        Returns:
+            DeepLogDetector: Configured detector instance.
+        """
+        return DeepLogDetector(config=self)
+
+
+@dataclass(slots=True)
+class DeepLogDetector(SingleFitMixin, ExperimentDetector):
+    """Scoped DeepLog detector for AnomaLog experiment runs.
+
+    The implementation mirrors the paper's two-stage inference logic:
+
+    1. score the next-log-key model on each eligible event
+    2. only if the key looks normal, score the parameter model for that event
+
+    Attributes:
+        detector_name (ClassVar[str]): Stable detector registry name.
+        config (DeepLogModelConfig): Immutable detector configuration.
+        key_model (KeyLSTM | None): Fitted next-key model.
+        template_to_index (dict[str, int]): Template-to-index vocabulary map.
+        index_to_template (dict[int, str]): Reverse key vocabulary map.
+        parameter_models (dict[str, ParameterModelState]): Fitted per-template
+            parameter models.
+        skipped_parameter_models (dict[str, str]): Reasons template models were
+            skipped during fitting.
+        train_event_count (int): Number of training events seen.
+        train_parameter_covered_event_count (int): Number of training events
+            covered by parameter models.
+        test_event_count (int): Number of test events seen.
+        scored_parameter_event_count (int): Number of scored test events passed
+            to parameter models.
+        device (torch.device): Resolved runtime torch device.
+    """
+
+    detector_name: ClassVar[str] = "deeplog"
+    config: DeepLogModelConfig
+    key_model: KeyLSTM | None = None
+    template_to_index: dict[str, int] = field(default_factory=dict)
+    index_to_template: dict[int, str] = field(default_factory=dict)
+    parameter_models: dict[str, ParameterModelState] = field(default_factory=dict)
+    skipped_parameter_models: dict[str, str] = field(default_factory=dict)
+    train_event_count: int = 0
+    train_parameter_covered_event_count: int = 0
+    test_event_count: int = 0
+    scored_parameter_event_count: int = 0
+    device: torch.device = field(default_factory=lambda: torch.device("cpu"))
+
+    def fit(
+        self,
+        train_sequences: Iterable[TemplateSequence],
+        *,
+        progress: Progress,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        """Fit the DeepLog key and parameter models from normal sequences.
+
+        Args:
+            train_sequences (Iterable[TemplateSequence]): Training split.
+            progress (Progress): Progress reporter.
+            logger (logging.Logger | None): Optional logger for fit diagnostics.
+        """
+        self._ensure_unfit(detector_name=self.detector_name)
+
+        training_corpus = build_normal_training_corpus(
+            train_sequences,
+            progress=progress,
+        )
+        set_torch_seed(self.config.random_seed)
+        device = resolve_torch_device(self.config.device)
+        if logger is not None:
+            logger.info("DeepLog resolved torch device: %s", device)
+        key_model, template_to_index, index_to_template = fit_key_model(
+            training_corpus=training_corpus,
+            config=self.config,
+            device=device,
+            progress=progress,
+        )
+        parameter_models, skipped_parameter_models = fit_parameter_models(
+            training_corpus=training_corpus,
+            config=self.config,
+            device=device,
+            progress=progress,
+        )
+        train_event_count = training_corpus.event_count
+        train_parameter_covered_event_count = parameter_covered_event_count(
+            sequences=training_corpus.sequences,
+            parameter_models=parameter_models,
+        )
+        self.device = device
+        self.key_model = key_model
+        self.template_to_index = template_to_index
+        self.index_to_template = index_to_template
+        self.parameter_models = parameter_models
+        self.skipped_parameter_models = skipped_parameter_models
+        self.train_event_count = train_event_count
+        self.train_parameter_covered_event_count = train_parameter_covered_event_count
+        self._mark_fit_complete()
+
+    def predict(self, sequence: TemplateSequence) -> DeepLogPredictionOutcome:
+        """Return DeepLog findings aggregated to one sequence-level prediction.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            DeepLogPredictionOutcome: Sequence-level DeepLog output.
+
+        Raises:
+            ValueError: If the detector has not been fit yet.
+        """
+        if self.key_model is None:
+            msg = "deeplog must be fit before prediction."
+            raise ValueError(msg)
+        require_entity_local_sequences((sequence,), detector_name="DeepLog")
+
+        findings: list[DeepLogEventFinding] = []
+        key_triggered = False
+        parameter_triggered = False
+        scores: list[float] = []
+        self.test_event_count += len(sequence.events)
+
+        # DeepLog makes one decision per event after the initial warm-up
+        # window. First it asks whether the next log key itself looks normal.
+        key_findings = score_key_sequence(
+            sequence=sequence,
+            context=KeyScoringContext(
+                model=self.key_model,
+                template_to_index=self.template_to_index,
+                index_to_template=self.index_to_template,
+                history_size=self.config.history_size,
+                top_g=self.config.top_g,
+            ),
+        )
+        # The paper's inference path is "key first, parameters second". We
+        # therefore only pay the parameter-model cost for events whose key
+        # history was accepted as normal by the key model.
+        parameter_eligible_event_indexes = {
+            event_index
+            for event_index, key_finding in key_findings.items()
+            if not key_finding.is_anomalous
+        }
+        parameter_findings = score_parameter_sequence(
+            sequence=sequence,
+            parameter_models=self.parameter_models,
+            history_size=self.config.history_size,
+            eligible_event_indexes=parameter_eligible_event_indexes,
+        )
+
+        event_indexes = sorted(set(key_findings) | set(parameter_findings))
+        for event_index in event_indexes:
+            key_finding = key_findings.get(event_index)
+            parameter_finding = parameter_findings.get(event_index)
+            if key_finding is not None and key_finding.is_anomalous:
+                key_triggered = True
+                key_score = (
+                    1.0
+                    if key_finding.actual_probability is None
+                    else (1.0 - key_finding.actual_probability)
+                )
+                scores.append(key_score)
+            if parameter_finding is not None:
+                self.scored_parameter_event_count += 1
+                anomaly_score = parameter_anomaly_score(parameter_finding)
+                if anomaly_score > 0.0:
+                    scores.append(anomaly_score)
+                if parameter_finding.is_anomalous:
+                    parameter_triggered = True
+            findings.append(
+                DeepLogEventFinding(
+                    event_index=event_index,
+                    template=sequence.events[event_index][0],
+                    key_model_finding=key_finding,
+                    parameter_model_finding=parameter_finding,
+                ),
+            )
+
+        # An AnomaLog run still needs one sequence-level label and score, so we
+        # aggregate the paper's event-level decisions here:
+        #
+        # - the sequence is anomalous if any event was anomalous
+        # - the sequence score is the strongest event-level anomaly signal
+        predicted_label = int(key_triggered or parameter_triggered)
+        return DeepLogPredictionOutcome(
+            predicted_label=predicted_label,
+            score=max(scores, default=0.0),
+            triggered_by_key_model=key_triggered,
+            triggered_by_parameter_model=parameter_triggered,
+            findings=findings,
+        )
+
+    def model_manifest(self, *, sequence_summary: SequenceSummary) -> DeepLogManifest:
+        """Return manifest metadata for the fitted DeepLog models.
+
+        Args:
+            sequence_summary (SequenceSummary): Shared sequence-count and label
+                summary for the experiment run.
+
+        Returns:
+            DeepLogManifest: Serialisable metadata describing the fitted
+            DeepLog run.
+        """
+        return DeepLogManifest.from_sequence_summary(
+            detector=self.detector_name,
+            sequence_summary=sequence_summary,
+            implementation_scope="Scoped DeepLog core v1",
+            parameter_schema_policy=(
+                "strict: include only template parameter positions that are "
+                "always numeric in normal training data"
+            ),
+            parameter_validation_policy=(
+                "per-template temporal tail split over history-target pairs; "
+                "Gaussian residuals come from held-out validation pairs scored "
+                "after training on each series prefix"
+            ),
+            history_size=self.config.history_size,
+            top_g=self.config.top_g,
+            num_layers=self.config.num_layers,
+            hidden_size=self.config.hidden_size,
+            epochs=self.config.epochs,
+            batch_size=self.config.batch_size,
+            learning_rate=self.config.learning_rate,
+            validation_fraction=self.config.validation_fraction,
+            gaussian_confidence=self.config.gaussian_confidence,
+            include_elapsed_time=self.config.include_elapsed_time,
+            train_key_vocabulary_size=len(self.template_to_index),
+            trained_parameter_model_count=len(self.parameter_models),
+            skipped_parameter_model_count=len(self.skipped_parameter_models),
+            train_parameter_covered_event_count=self.train_parameter_covered_event_count,
+            train_parameter_covered_event_fraction=_fraction(
+                self.train_parameter_covered_event_count,
+                self.train_event_count,
+            ),
+            scored_parameter_event_count=self.scored_parameter_event_count,
+            scored_parameter_event_fraction=_fraction(
+                self.scored_parameter_event_count,
+                self.test_event_count,
+            ),
+            parameter_models=[
+                ParameterModelManifestEntry(
+                    template=template,
+                    feature_count=len(state.schema.feature_names),
+                    input_feature_count=parameter_model_input_size(
+                        feature_count=len(state.schema.feature_names),
+                    ),
+                    feature_names=state.schema.feature_names,
+                    numeric_parameter_positions=state.schema.numeric_parameter_positions,
+                    dropped_parameter_positions=state.schema.dropped_parameter_positions,
+                    gaussian_mean=state.gaussian.mean,
+                    gaussian_stddev=state.gaussian.stddev,
+                    gaussian_lower_bound=state.gaussian.lower_bound,
+                    gaussian_upper_bound=state.gaussian.upper_bound,
+                )
+                for template, state in sorted(self.parameter_models.items())
+            ],
+            skipped_parameter_models=[
+                SkippedParameterModelEntry(template=template, reason=reason)
+                for template, reason in sorted(self.skipped_parameter_models.items())
+            ],
+        )
+
+
+def _fraction(numerator: int, denominator: int) -> float:
+    """Return a rounded fraction for manifest reporting.
+
+    Args:
+        numerator (int): Numerator for the fraction.
+        denominator (int): Denominator for the fraction.
+
+    Returns:
+        float: Fraction value, or `0.0` when the denominator is zero.
+    """
+    if denominator == 0:
+        return 0.0
+    return numerator / denominator

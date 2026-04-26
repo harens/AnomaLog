@@ -57,7 +57,13 @@ class RiverEstimator(Protocol):
 
 
 class RiverEstimatorName(str, Enum):
-    """Registered River estimator names used as config and runtime keys."""
+    """Registered River estimator names used as config and runtime keys.
+
+    Attributes:
+        BERNOULLI_NB: River Bernoulli Naive Bayes estimator.
+        COMPLEMENT_NB: River Complement Naive Bayes estimator.
+        MULTINOMIAL_NB: River Multinomial Naive Bayes estimator.
+    """
 
     BERNOULLI_NB = "naive_bayes.BernoulliNB"
     COMPLEMENT_NB = "naive_bayes.ComplementNB"
@@ -76,13 +82,7 @@ class RiverModelConfig(
     tag="river",
     frozen=True,
 ):
-    """River-backed classifier over sequence phrase counts.
-
-    Attributes:
-        estimator: Registered River estimator to train.
-        anomalous_posterior_threshold: Posterior threshold for predicting the
-            anomalous class.
-    """
+    """River-backed classifier over sequence phrase counts."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     estimator: Annotated[
         RiverEstimatorName,
@@ -130,7 +130,8 @@ class RiverDetector(SingleFitMixin, ExperimentDetector):
 
     Attributes:
         detector_name (ClassVar[str]): Stable detector name for manifests/logging.
-        estimator_name (str): Registered River estimator to instantiate.
+        estimator_name (RiverEstimatorName): Registered River estimator to
+            instantiate.
         smoothing (float): Smoothing parameter forwarded to the estimator.
         phrase_ngram_min (int): Minimum token n-gram size in the representation.
         phrase_ngram_max (int): Maximum token n-gram size in the representation.

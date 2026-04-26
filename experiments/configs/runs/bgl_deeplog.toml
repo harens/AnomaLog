@@ -1,0 +1,4 @@
+name = "bgl_deeplog"
+dataset = "bgl_entity"
+model = "deeplog_default"
+description = "DeepLog model on the built-in BGL preset using a supervised entity split."

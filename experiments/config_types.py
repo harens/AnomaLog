@@ -35,12 +35,16 @@ class DatasetSourceConfig(msgspec.Struct, frozen=True, tag_field="type"):
 
         Raises:
             NotImplementedError: Always, until implemented by a concrete source config.
-        """
+        """  # noqa: DOC201, DOC203 - No return doc since base method always raises.
         del repo_root
         msg = f"{type(self).__name__} must implement build()."
         raise NotImplementedError(msg)
 
-    def manifest_entry(self, *, repo_root: Path) -> dict[str, str | None]:
+    def manifest_entry(
+        self,
+        *,
+        repo_root: Path,
+    ) -> dict[str, str | None]:
         """Return a stable source manifest entry.
 
         Args:
@@ -48,7 +52,7 @@ class DatasetSourceConfig(msgspec.Struct, frozen=True, tag_field="type"):
 
         Raises:
             NotImplementedError: Always, until implemented by a concrete source config.
-        """
+        """  # noqa: DOC201, DOC203 - No return doc since base method always raises.
         del repo_root
         msg = f"{type(self).__name__} must implement manifest_entry()."
         raise NotImplementedError(msg)
@@ -211,7 +215,7 @@ class LabelReaderConfig(msgspec.Struct, frozen=True, tag_field="type"):
         Raises:
             NotImplementedError: Always, until implemented by a concrete
                 label-reader config.
-        """
+        """  # noqa: DOC201, DOC203 - No return doc since base method always raises.
         msg = f"{type(self).__name__} must implement build()."
         raise NotImplementedError(msg)
 
@@ -323,7 +327,10 @@ class SequenceConfigBase(
         """
         return self._apply_split_settings(self._group_sequences(templated))
 
-    def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
+    def _group_sequences(
+        self,
+        templated: TemplatedDataset,
+    ) -> SequenceBuilder:
         """Apply the grouping-specific builder transformation.
 
         Args:
@@ -332,7 +339,7 @@ class SequenceConfigBase(
         Raises:
             NotImplementedError: Always, until implemented by a concrete
                 grouping config.
-        """
+        """  # noqa: DOC201, DOC203 - No return doc since base method always raises.
         cls_name = type(self).__name__
         del self, templated
         msg = f"{cls_name} must implement _group_sequences()."
@@ -548,8 +555,8 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
     """Resolved run, dataset, and model configs for an experiment.
 
     Attributes:
-        repo_root (Path): Repository root used for path resolution.
         experiments_root (Path): Root directory containing experiment configs.
+        repo_root (Path): Repository root used for path resolution.
         run_path (Path): Resolved run config path.
         dataset_path (Path): Resolved dataset config path.
         model_path (Path): Resolved model config path.

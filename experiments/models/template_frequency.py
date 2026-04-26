@@ -35,14 +35,7 @@ class TemplateFrequencyModelConfig(
     tag="template_frequency",
     frozen=True,
 ):
-    """Baseline detector using template frequencies from train sequences.
-
-    Attributes:
-        score_threshold: Optional fixed anomaly threshold. When omitted, the
-            detector calibrates from training scores.
-        calibration_quantile: Quantile used when calibrating the score threshold.
-        smoothing: Additive smoothing applied to template counts.
-    """
+    """Baseline detector using template frequencies from train sequences."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     score_threshold: Annotated[
         NonNegativeFloat | None,
