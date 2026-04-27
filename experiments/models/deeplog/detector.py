@@ -61,9 +61,8 @@ class DeepLogPredictionOutcome(PredictionOutcome):
     """DeepLog runtime prediction plus detector-specific explanation fields.
 
     This keeps DeepLog-specific explanation machinery isolated from the generic
-    experiment contract without introducing an extra nested "details" wrapper.
-    The base prediction serialiser flattens these fields into persisted
-    sequence records.
+    experiment contract. The base prediction serialiser then flattens these fields
+    into persisted sequence records.
 
     Attributes:
         triggered_by_key_model (bool): Whether the key model flagged the
@@ -88,53 +87,81 @@ class DeepLogModelConfig(
     history_size: Annotated[
         PositiveInt,
         msgspec.Meta(
-            description="Number of prior log keys used to predict the next key.",
+            description="Number of prior log keys used to predict the next key. "
+            "In the paper, the history size `h` is set to 10.",
         ),
     ] = 10
     top_g: Annotated[
         PositiveInt,
         msgspec.Meta(
-            description="Number of top next-key predictions accepted as normal.",
+            description="Number of top next-key predictions accepted as normal. "
+            "In the paper, `g` is set to 9, but evaluates values from 7 to 12 "
+            "in Figure 8.",
         ),
     ] = 9
     num_layers: Annotated[
         PositiveInt,
-        msgspec.Meta(description="Number of LSTM layers in the key model."),
+        msgspec.Meta(
+            description="Number of LSTM layers in the key model. "
+            "In the paper, the number of layers `L` is set to 2, but evaluates "
+            "values from 1 to 5 in Figure 8.",
+        ),
     ] = 2
     hidden_size: Annotated[
         PositiveInt,
-        msgspec.Meta(description="Hidden dimension for DeepLog LSTM models."),
+        msgspec.Meta(
+            description="Hidden dimension for DeepLog LSTM models. "
+            "The paper uses 64 memory units per LSTM layer, but evaluates "
+            "values from 32, 64, 128, 192 and 256 in Figure 8.",
+        ),
     ] = 64
     epochs: Annotated[
         PositiveInt,
-        msgspec.Meta(description="Training epochs for DeepLog neural models."),
+        msgspec.Meta(
+            description="Training epochs for DeepLog neural models. "
+            "This is not defined in the paper.",
+        ),
     ] = 30
     batch_size: Annotated[
         PositiveInt,
-        msgspec.Meta(description="Training batch size for DeepLog neural models."),
-    ] = 64
+        msgspec.Meta(
+            description="Training batch size for DeepLog neural models. "
+            "This is not defined in the paper.",
+        ),
+    ] = 128
     learning_rate: Annotated[
         PositiveFloat,
-        msgspec.Meta(description="Optimiser learning rate for DeepLog neural models."),
+        msgspec.Meta(
+            description="Optimiser learning rate for DeepLog neural models. "
+            "This is not defined in the paper, but 1e-3 is a common default "
+            "for Adam-based training.",
+        ),
     ] = 1e-3
     validation_fraction: Annotated[
         OpenProbability,
         msgspec.Meta(
             description=(
-                "Fraction of normal training data held out for parameter thresholds."
+                "Fraction of normal training data held out to fit Gaussian "
+                "parameter thresholds. The paper requires a validation set for "
+                "modeling MSE distributions but does not define a split fraction."
             ),
         ),
-    ] = 0.2
+    ] = 0.1
     gaussian_confidence: Annotated[
         OpenProbability,
         msgspec.Meta(
-            description="Gaussian confidence interval used for parameter scoring.",
+            description="Gaussian confidence interval used for parameter scoring. "
+            "This is not defined in the paper, but Figure 9 evaluates different "
+            "levels. Default to 99%, the middle of the paper's evaluated CIs: "
+            "98%, 99%, 99.9%.",
         ),
     ] = 0.99
     include_elapsed_time: Annotated[
         bool,
         msgspec.Meta(
-            description="Whether parameter models include elapsed-time features.",
+            description="Whether parameter models include elapsed-time features. "
+            "The paper includes elapsed time as one of the modeled quantitative "
+            "parameters, so this is set to True for paper-faithful modeling.",
         ),
     ] = True
     random_seed: Annotated[

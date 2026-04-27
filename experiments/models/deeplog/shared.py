@@ -237,8 +237,7 @@ class DeepLogEventFinding(msgspec.Struct, frozen=True):
     DeepLog reports anomalies at the event level, then aggregates them into a
     sequence-level prediction for the surrounding AnomaLog experiment contract.
     Keeping both key-model and parameter-model findings here makes it possible
-    to inspect which stage fired without putting DeepLog-specific fields on the
-    shared `PredictionOutcome` base type.
+    to inspect which stage fired.
 
     Attributes:
         event_index (int): Index of the event within the sequence.
