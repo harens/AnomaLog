@@ -1,11 +1,13 @@
-"""CLI entrypoint for a single AnomaLog experiment run."""
+"""CLI entrypoint for an AnomaLog experiment sweep."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shlex
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,7 +21,7 @@ from prefect.logging.formatters import PrefectFormatter
 from anomalog.io_utils import get_shared_console
 from anomalog.sequences import EntitySequenceBuilder
 from experiments import ConfigError
-from experiments.config import load_experiment_bundle
+from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.results import (
@@ -61,22 +63,76 @@ def build_prefect_standard_formatter() -> PrefectFormatter:
     )
 
 
-def run_experiment(config_path: Path, *, force: bool = False) -> Path:
-    """Run a single experiment from a TOML config path.
+def run_experiment(config_path: Path, *, force: bool = False) -> list[Path]:
+    """Run one sweep config and return all concrete result directories.
 
     Args:
-        config_path (Path): Run config TOML path to execute.
+        config_path (Path): Sweep config TOML path to execute.
+        force (bool): Whether to replace an existing deterministic result
+            directories.
+
+    Returns:
+        list[Path]: Deterministic run directories containing the written
+            artifacts.
+
+    Raises:
+        ConfigError: If the sweep does not expand to any concrete runs.
+    """
+    bundles = load_experiment_bundles(config_path)
+    if not bundles:
+        msg = f"Sweep {config_path} did not expand to any concrete runs."
+        raise ConfigError(msg)
+    max_workers = _resolve_max_workers(
+        requested_workers=bundles[0].sweep.max_workers,
+        bundle_count=len(bundles),
+    )
+    if max_workers == 1 or len(bundles) == 1:
+        return [_run_bundle(bundle, force=force) for bundle in bundles]
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        return list(
+            executor.map(
+                _run_bundle_from_sweep_payload,
+                [(config_path, index, force) for index in range(len(bundles))],
+            ),
+        )
+
+
+def _resolve_max_workers(
+    *,
+    requested_workers: int | str,
+    bundle_count: int,
+) -> int:
+    if requested_workers == "auto":
+        return min(bundle_count, os.cpu_count() or 1)
+    if not isinstance(requested_workers, int):
+        msg = f"Unsupported max_workers value: {requested_workers!r}"
+        raise TypeError(msg)
+    return min(bundle_count, requested_workers)
+
+
+def _run_bundle_from_sweep_payload(
+    payload: tuple[Path, int, bool],
+) -> Path:
+    config_path, index, force = payload
+    bundle = load_experiment_bundles(config_path)[index]
+    return _run_bundle(bundle, force=force)
+
+
+def _run_bundle(bundle: ExperimentBundle, *, force: bool = False) -> Path:
+    """Execute one concrete run derived from a sweep.
+
+    Args:
+        bundle (ExperimentBundle): Concrete run bundle to execute.
         force (bool): Whether to replace an existing deterministic result
             directory.
 
     Returns:
-        Path: Deterministic run directory containing the written artifacts.
+        Path: Deterministic run directory containing the written artefacts.
 
     Raises:
-        FileExistsError: If the deterministic result directory already exists and
-            `force` is false.
+        FileExistsError: If the deterministic result directory already exists
+            and `force` is false.
     """
-    bundle = load_experiment_bundle(config_path)
     result_paths = prepare_result_paths(bundle)
     if result_paths.run_dir.exists():
         if not force:
@@ -89,9 +145,12 @@ def run_experiment(config_path: Path, *, force: bool = False) -> Path:
     result_paths.run_dir.mkdir(parents=True, exist_ok=True)
 
     with _experiment_logger(result_paths.run_log_path) as logger:
-        logger.info("Loaded run config from %s", bundle.run_path)
+        logger.info("Loaded sweep config from %s", bundle.sweep_path)
         logger.info("Using dataset config %s", bundle.dataset_path)
         logger.info("Using model config %s", bundle.model_path)
+        logger.info("Running concrete sweep variant %s", bundle.concrete_name)
+        if bundle.applied_overrides:
+            logger.info("Applied overrides: %s", bundle.applied_overrides)
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
         logger.info("Building dataset %s", bundle.dataset.dataset_name)
         templated = dataset_spec.build()
@@ -167,7 +226,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config",
         required=True,
         type=Path,
-        help="Path to a run config TOML file under experiments/configs/runs.",
+        help="Path to a sweep config TOML file under experiments/configs/sweeps.",
     )
     parser.add_argument(
         "--force",

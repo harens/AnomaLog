@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 import msgspec
 import torch
 
-from anomalog.sequences import TemplateSequence
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,

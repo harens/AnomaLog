@@ -1,6 +1,6 @@
 """Public experiment config API."""
 
-from experiments.config_loader import load_experiment_bundle
+from experiments.config_loader import load_experiment_bundles
 from experiments.config_types import (
     CachePathsConfigModel,
     CSVLabelReaderConfig,
@@ -13,9 +13,10 @@ from experiments.config_types import (
     LocalDirSourceConfig,
     LocalZipSourceConfig,
     RemoteZipSourceConfig,
-    RunConfig,
     SequenceConfig,
     SequenceConfigBase,
+    SweepAxisConfig,
+    SweepConfig,
     TimeSequenceConfig,
     serialise_config,
 )
@@ -32,10 +33,11 @@ __all__ = [
     "LocalDirSourceConfig",
     "LocalZipSourceConfig",
     "RemoteZipSourceConfig",
-    "RunConfig",
     "SequenceConfig",
     "SequenceConfigBase",
+    "SweepAxisConfig",
+    "SweepConfig",
     "TimeSequenceConfig",
-    "load_experiment_bundle",
+    "load_experiment_bundles",
     "serialise_config",
 ]

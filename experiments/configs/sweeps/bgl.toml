@@ -1,0 +1,17 @@
+name = "bgl"
+dataset = "bgl_entity"
+model = "template_frequency_default"
+description = "BGL model matrix across detector choice and train fraction."
+
+[[axes]]
+path = "sweep.model"
+values = [
+  "deepcase_default",
+  "deeplog_default",
+  # "template_frequency_default",
+  # "naive_bayes_default",
+]
+
+[[axes]]
+path = "dataset.sequence.train_fraction"
+values = [0.01, 0.1, 0.2]

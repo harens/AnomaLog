@@ -1,4 +1,0 @@
-name = "bgl_naive_bayes"
-dataset = "bgl_entity_supervised"
-model = "naive_bayes_default"
-description = "Naive Bayes phrase baseline on the built-in BGL preset using a supervised entity split."

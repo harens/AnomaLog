@@ -21,6 +21,7 @@ EXPECTED_TEST_SEQUENCE_COUNT = 2
 EXPECTED_STRUCTURED_ROWS = 8
 FINGERPRINT_HEX_LENGTH = 64
 TEMPLATE_FREQUENCY_SCORE_THRESHOLD = 1.2
+EXPECTED_MULTI_MODEL_RUN_COUNT = 2
 
 
 class _PredictionRecord(TypedDict):
@@ -84,12 +85,12 @@ def _assert_template_frequency_predictions(
 
 
 def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> None:
-    """A run config should materialize dataset, metrics, predictions, and metadata.
+    """A sweep config should materialize dataset, metrics, predictions, and metadata.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
     """
-    run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_run.toml"
+    sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "tiny_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
     )
@@ -98,11 +99,11 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     )
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
-    run_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True)
     dataset_config.parent.mkdir(parents=True)
     model_config.parent.mkdir(parents=True)
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
-    shutil.copy2(FIXTURE_ROOT / "tiny_run.toml", run_config)
+    shutil.copy2(FIXTURE_ROOT / "tiny_run.toml", sweep_config)
     shutil.copy2(FIXTURE_ROOT / "tiny_dataset.toml", dataset_config)
     model_config.write_text(
         'name = "template_frequency"\n'
@@ -111,18 +112,19 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    run_dir = run_experiment(run_config)
-    rerun_dir = run_experiment(run_config, force=True)
+    [run_dir] = run_experiment(sweep_config)
+    [rerun_dir] = run_experiment(sweep_config, force=True)
 
     assert run_dir.exists()
     assert rerun_dir == run_dir
+    assert run_dir.parent.name == "tiny_runner_smoke"
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(
         (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
     )
     environment = json.loads((run_dir / "environment.json").read_text(encoding="utf-8"))
     run_config_payload = json.loads(
-        (run_dir / "run_config.json").read_text(encoding="utf-8"),
+        (run_dir / "experiment_config.json").read_text(encoding="utf-8"),
     )
     run_log = (run_dir / "run.log").read_text(encoding="utf-8")
     predictions = _read_predictions(run_dir)
@@ -158,7 +160,8 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     )
     assert environment["repository"]["root"] == tmp_path.as_posix()
     assert environment["run_fingerprint"] == manifest["run_fingerprint"]
-    assert run_config_payload["run"]["name"] == "tiny_runner_smoke"
+    assert run_config_payload["sweep"]["name"] == "tiny_runner_smoke"
+    assert run_config_payload["concrete"]["name"] == "tiny_runner_smoke"
     assert "Building dataset tiny-bgl-runner" in run_log
     assert f"Wrote experiment artifacts to {shlex.quote(str(run_dir))}" in run_log
     _assert_template_frequency_predictions(
@@ -168,6 +171,66 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     assert metrics == rerun_metrics
     assert manifest == rerun_manifest
     assert predictions == rerun_predictions
+
+
+def test_run_experiment_expands_multi_model_sweep(tmp_path: Path) -> None:
+    """One sweep should be able to run multiple model configs over one dataset.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
+    sweep_config = (
+        tmp_path / "experiments" / "configs" / "sweeps" / "tiny_multi_model.toml"
+    )
+    dataset_config = (
+        tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
+    )
+    models_dir = tmp_path / "experiments" / "configs" / "models"
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True)
+    dataset_config.parent.mkdir(parents=True)
+    models_dir.mkdir(parents=True)
+    shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
+    dataset_config.write_text(
+        (FIXTURE_ROOT / "tiny_dataset.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    sweep_config.write_text(
+        'name = "tiny_multi_model"\n'
+        'dataset = "tiny_dataset"\n'
+        'model = "template_frequency"\n'
+        '\n[[axes]]\npath = "sweep.model"\n'
+        'values = ["template_frequency", "naive_bayes"]\n',
+        encoding="utf-8",
+    )
+    (models_dir / "template_frequency.toml").write_text(
+        'name = "template_frequency"\n'
+        'detector = "template_frequency"\n'
+        f"score_threshold = {TEMPLATE_FREQUENCY_SCORE_THRESHOLD}\n",
+        encoding="utf-8",
+    )
+    (models_dir / "naive_bayes.toml").write_text(
+        'name = "naive_bayes"\n'
+        'detector = "naive_bayes"\n'
+        "smoothing = 1.0\n"
+        "phrase_ngram_min = 1\n"
+        "phrase_ngram_max = 2\n"
+        "top_k_phrases = 3\n"
+        "anomalous_posterior_threshold = 0.4\n",
+        encoding="utf-8",
+    )
+
+    run_dirs = run_experiment(sweep_config)
+
+    assert len(run_dirs) == EXPECTED_MULTI_MODEL_RUN_COUNT
+    model_names = {
+        json.loads((run_dir / "experiment_config.json").read_text(encoding="utf-8"))[
+            "model"
+        ]["name"]
+        for run_dir in run_dirs
+    }
+    assert model_names == {"template_frequency", "naive_bayes"}
 
 
 @pytest.mark.allow_no_new_coverage
@@ -181,7 +244,7 @@ def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
     """
     # This protects experiment-runner behavior outside the configured
     # `anomalog` coverage target.
-    run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_run.toml"
+    sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "tiny_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
     )
@@ -190,11 +253,11 @@ def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
     )
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
-    run_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True)
     dataset_config.parent.mkdir(parents=True)
     model_config.parent.mkdir(parents=True)
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
-    shutil.copy2(FIXTURE_ROOT / "tiny_run.toml", run_config)
+    shutil.copy2(FIXTURE_ROOT / "tiny_run.toml", sweep_config)
     dataset_config.write_text(
         'name = "tiny_dataset"\n'
         'dataset_name = "tiny-bgl-runner"\n'
@@ -215,4 +278,4 @@ def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
         ValueError,
         match="Requested train fraction is impossible",
     ):
-        run_experiment(run_config)
+        run_experiment(sweep_config)

@@ -37,7 +37,8 @@ class ResultPaths:
     Attributes:
         run_fingerprint (str): Stable fingerprint for the resolved run config.
         run_dir (Path): Root directory containing all artifacts for the run.
-        config_path (Path): Serialised normalised run config path.
+        config_path (Path): Serialised normalised concrete experiment config
+            path.
         dataset_manifest_path (Path): Dataset provenance manifest path.
         metrics_path (Path): Detector metrics output path.
         predictions_path (Path): Prediction records output path.
@@ -67,15 +68,15 @@ class ResultPaths:
         combined_config = bundle.normalized_config()
         run_fingerprint = stable_fingerprint(combined_config)
         results_root = (
-            bundle.repo_root / bundle.run.results_root
-            if not bundle.run.results_root.is_absolute()
-            else bundle.run.results_root
+            bundle.repo_root / bundle.sweep.results_root
+            if not bundle.sweep.results_root.is_absolute()
+            else bundle.sweep.results_root
         )
-        run_dir = results_root / bundle.run.name / run_fingerprint[:12]
+        run_dir = results_root / bundle.concrete_name / run_fingerprint[:12]
         return cls(
             run_fingerprint=run_fingerprint,
             run_dir=run_dir,
-            config_path=run_dir / "run_config.json",
+            config_path=run_dir / "experiment_config.json",
             dataset_manifest_path=run_dir / "dataset_manifest.json",
             metrics_path=run_dir / "metrics.json",
             predictions_path=run_dir / "predictions.jsonl",

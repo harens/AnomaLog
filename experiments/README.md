@@ -8,7 +8,7 @@ AnomaLog preprocessing.
 - `configs/datasets/`: dataset variants, usually built from AnomaLog presets like `bgl` and `hdfs_v1`, but also able to define custom sources and parsers.
 - `configs/models/`: detector configurations such as template-frequency,
   handwritten Naive Bayes, `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
-- `configs/runs/`: experiment run definitions that reference one dataset variant and one model config.
+- `configs/sweeps/`: experiment sweep definitions that reference one base dataset variant and one base model config, then optionally override them through fixed overrides and Cartesian-product axes.
 - `runners/`: Python entrypoints for executing experiments.
 - `analysis/`: notebooks and one-off visual analysis only.
 - `results/`: generated run artifacts. These are not source-controlled.
@@ -21,16 +21,25 @@ Preprocessing stays in the dataset config layer. A dataset variant controls:
 - how they are parsed and templated
 - how sequences are generated
 
-Model experimentation stays in the model config layer. A run config binds one
-dataset variant to one detector config and chooses the results root.
+Model experimentation stays in the sweep config layer. A sweep config binds one
+base dataset variant to one base detector config, chooses the results root,
+and can expand into multiple concrete runs through validated override axes.
+Sweep execution defaults `max_workers` to `"auto"`, which uses up to the
+concrete run count and local CPU count.
+Set an explicit positive integer when a sweep needs a stricter cap.
 
-That keeps preprocessing ablations separate from model sweeps while still using the existing `DatasetSpec(...).build()` API as the source of truth.
+That keeps preprocessing ablations separate from experiment matrices while
+still using the existing `DatasetSpec(...).build()` API as the source of
+truth.
 
-The checked-in examples use AnomaLog presets rather than tiny test fixtures:
+The checked-in sweep set is intentionally small:
 
-- `bgl_entity` for unsupervised-style entity splits
-- `bgl_entity_supervised` for supervised detectors on BGL
-- `hdfs_v1_entity_supervised` for supervised detectors that need both labels in train
+- `bgl.toml` sweeps DeepCase, DeepLog, template-frequency, and Naive Bayes
+  across train fractions `0.01`, `0.1`, and `0.2`
+- `hdfs_v1.toml` does the same for HDFS v1
+
+BGL sweeps that need anomalous entities in the training budget now express that
+as a sweep override instead of a second near-duplicate dataset file.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
@@ -50,10 +59,11 @@ From the repository root:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --config experiments/configs/runs/bgl_template_frequency.toml
+  --config experiments/configs/sweeps/bgl.toml
 ```
 
-Add `--force` to replace the deterministic output directory for the same config fingerprint.
+Add `--force` to replace the deterministic output directories for the same
+concrete sweep variants.
 
 ## Caching Strategy
 
@@ -62,9 +72,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Dataset sourcing, structured parsing, template mining, and other
   preprocessing stages reuse the existing AnomaLog and Prefect-backed caches
   when their inputs and upstream assets have not changed.
-- Experiment runs write to a deterministic directory under
-  `experiments/results/<run-name>/<fingerprint>/`, where the fingerprint comes
-  from the fully resolved run, dataset, and model config.
+- Concrete sweep runs write to deterministic directories under
+  `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
+  fingerprint comes from the fully resolved sweep, dataset, and model config.
 - Re-running the exact same config reuses that deterministic output directory.
   Use `--force` when you want to overwrite it.
 - Changing the dataset, sequence settings, or model config produces a new
@@ -87,9 +97,9 @@ environment.
 
 ## Result Artifacts
 
-Each run writes a deterministic directory under `experiments/results/<run-name>/<fingerprint>/` containing:
+Each concrete run writes a deterministic directory under `experiments/results/<concrete-run-name>/<fingerprint>/` containing:
 
-- `run_config.json`: normalised run, dataset, and model config
+- `experiment_config.json`: normalised sweep, concrete override, dataset, and model config
 - `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, cache roots, sequence settings, and dataset statistics
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
@@ -108,7 +118,13 @@ For built-in datasets, prefer `preset = "bgl"` or `preset = "hdfs_v1"`.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Omit `[cache_paths]` to use AnomaLog's default platformdirs-based cache/data locations.
 
-To add a detector sweep, create another file in `configs/models/` and point a run config at it.
+To add or update an experiment matrix, create another file in `configs/sweeps/`.
+Use `[overrides]` for fixed adjustments such as changing
+`dataset.sequence.train_on_normal_entities_only`, and `[[axes]]` when you want
+Cartesian products across fields such as `sweep.model` or
+`dataset.sequence.train_fraction`. Add `max_workers = 2` or another positive
+integer only when the default `"auto"` parallelism is too aggressive for a
+particular backend or machine.
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.
 

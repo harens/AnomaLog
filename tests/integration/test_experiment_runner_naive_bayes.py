@@ -73,29 +73,29 @@ def _model_key_phrases_by_class(
 
 
 def _prepare_run_tree(tmp_path: Path) -> Path:
-    """Copy the checked-in run fixture files into a writable temp tree.
+    """Copy the checked-in sweep fixture files into a writable temp tree.
 
     Args:
         tmp_path (Path): Temporary directory to populate with fixture configs.
 
     Returns:
-        Path: Run config path inside the prepared temp tree.
+        Path: Sweep config path inside the prepared temp tree.
     """
-    run_config = tmp_path / "experiments" / "configs" / "runs" / "tiny_nb_run.toml"
+    sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "tiny_nb_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset_nb.toml"
     )
     model_config = tmp_path / "experiments" / "configs" / "models" / "naive_bayes.toml"
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
-    run_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True)
     dataset_config.parent.mkdir(parents=True)
     model_config.parent.mkdir(parents=True)
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
-    shutil.copy2(FIXTURE_ROOT / "tiny_nb_run.toml", run_config)
+    shutil.copy2(FIXTURE_ROOT / "tiny_nb_run.toml", sweep_config)
     shutil.copy2(FIXTURE_ROOT / "tiny_dataset_nb.toml", dataset_config)
     shutil.copy2(FIXTURE_ROOT / "naive_bayes.toml", model_config)
-    return run_config
+    return sweep_config
 
 
 def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> None:
@@ -104,10 +104,10 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
     Args:
         tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
     """
-    run_config = _prepare_run_tree(tmp_path)
+    sweep_config = _prepare_run_tree(tmp_path)
 
-    run_dir = run_experiment(run_config)
-    rerun_dir = run_experiment(run_config, force=True)
+    [run_dir] = run_experiment(sweep_config)
+    [rerun_dir] = run_experiment(sweep_config, force=True)
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(

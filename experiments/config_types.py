@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 import msgspec
 
@@ -287,6 +287,12 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
         )
 
 
+SweepOverrideValues = Annotated[list[Any], msgspec.Meta(min_length=1)]
+TrainFraction = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+PositiveWorkerCount = Annotated[int, msgspec.Meta(gt=0)]
+WorkerCount = Literal["auto"] | PositiveWorkerCount
+
+
 class SequenceConfigBase(
     msgspec.Struct,
     frozen=True,
@@ -299,21 +305,12 @@ class SequenceConfigBase(
     Attributes:
         step (int | None): Grouping-specific step between windows. `None`
             delegates to the grouping mode's default.
-        train_fraction (float): Requested training fraction for generated sequences.
+        train_fraction (TrainFraction): Requested training fraction for
+            generated sequences.
     """
 
     step: int | None = None
-    train_fraction: float = 0.8
-
-    def __post_init__(self) -> None:
-        """Validate grouping-specific sequence settings.
-
-        Raises:
-            ConfigError: If `train_fraction` is outside `[0.0, 1.0]`.
-        """
-        if not 0.0 <= self.train_fraction <= 1.0:
-            msg = "sequence.train_fraction must be between 0.0 and 1.0."
-            raise ConfigError(msg)
+    train_fraction: TrainFraction = 0.8
 
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured sequence view from a templated dataset.
@@ -533,15 +530,43 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
         return source.manifest_entry(repo_root=repo_root)
 
 
-class RunConfig(msgspec.Struct, frozen=True):
-    """Top-level experiment run configuration.
+class SweepAxisConfig(msgspec.Struct, frozen=True):
+    """One Cartesian-product axis for a sweep.
 
     Attributes:
-        name (str): Human-readable run name.
-        dataset (str): Referenced dataset config name.
-        model (str): Referenced model config name.
+        path (str): Dot-separated override path rooted at `sweep`, `dataset`,
+            or `model`.
+        values (SweepOverrideValues): Concrete values to apply at that path.
+    """
+
+    path: str
+    values: SweepOverrideValues
+
+    def __post_init__(self) -> None:
+        """Validate the override axis shape."""
+        _validate_override_path(self.path)
+
+
+class SweepConfig(msgspec.Struct, frozen=True):
+    """Top-level experiment sweep configuration.
+
+    A sweep is now the authoritative experiment entrypoint. A config with no
+    axes still represents one concrete run; axes expand that base definition
+    into multiple concrete runs that differ only by validated overrides.
+
+    Attributes:
+        name (str): Human-readable sweep name.
+        dataset (str): Referenced base dataset config name.
+        model (str): Referenced base model config name.
         results_root (Path): Root directory for run outputs.
-        description (str | None): Optional free-text run description.
+        description (str | None): Optional free-text sweep description.
+        overrides (dict[str, Any]): Fixed overrides applied to every concrete
+            run generated from the sweep.
+        axes (list[SweepAxisConfig]): Cartesian-product axes for generating
+            multiple concrete runs.
+        max_workers (WorkerCount): Maximum number of concrete runs to execute
+            in parallel. `"auto"` caps parallelism to the concrete run count
+            and the machine CPU count.
     """
 
     name: str
@@ -549,30 +574,61 @@ class RunConfig(msgspec.Struct, frozen=True):
     model: str
     results_root: Path = Path("experiments/results")
     description: str | None = None
+    overrides: dict[str, Any] = msgspec.field(default_factory=dict)
+    axes: list[SweepAxisConfig] = msgspec.field(default_factory=list)
+    max_workers: WorkerCount = "auto"
+
+    def __post_init__(self) -> None:
+        """Validate override and execution settings.
+
+        Raises:
+            ConfigError: If override paths are malformed or execution settings
+                are invalid.
+        """
+        for path in self.overrides:
+            _validate_override_path(path)
+        axis_paths = [axis.path for axis in self.axes]
+        if len(axis_paths) != len(set(axis_paths)):
+            msg = "sweep axes must not repeat the same override path."
+            raise ConfigError(msg)
+        overlapping_paths = set(axis_paths).intersection(self.overrides)
+        if overlapping_paths:
+            joined_paths = ", ".join(sorted(overlapping_paths))
+            msg = (
+                "sweep fixed overrides and axes must not target the same path: "
+                f"{joined_paths}."
+            )
+            raise ConfigError(msg)
 
 
 class ExperimentBundle(msgspec.Struct, frozen=True):
-    """Resolved run, dataset, and model configs for an experiment.
+    """Resolved concrete run config derived from a sweep.
 
     Attributes:
         experiments_root (Path): Root directory containing experiment configs.
         repo_root (Path): Repository root used for path resolution.
-        run_path (Path): Resolved run config path.
+        sweep_path (Path): Resolved sweep config path.
         dataset_path (Path): Resolved dataset config path.
         model_path (Path): Resolved model config path.
-        run (RunConfig): Decoded run config.
+        sweep (SweepConfig): Decoded sweep config.
         dataset (DatasetVariantConfig): Decoded dataset config.
         model (ExperimentModelConfig): Decoded model config.
+        concrete_name (str): Deterministic label for the concrete run within the
+            sweep.
+        applied_overrides (dict[str, Any]): Fixed and axis overrides applied to
+            derive the concrete run.
     """
 
     experiments_root: Path
     repo_root: Path
-    run_path: Path
+    sweep_path: Path
     dataset_path: Path
     model_path: Path
-    run: RunConfig
+    sweep: SweepConfig
     dataset: DatasetVariantConfig
     model: ExperimentModelConfig
+    concrete_name: str
+    applied_overrides: dict[str, Any] = msgspec.field(default_factory=dict)
 
     def normalized_config(self) -> dict[str, object]:
         """Return a JSON-like normalised config payload for manifests.
@@ -585,11 +641,15 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
         """
         payload = msgspec.to_builtins(
             {
-                "run": self.run,
+                "sweep": self.sweep,
                 "dataset": self.dataset,
                 "model": self.model,
+                "concrete": {
+                    "name": self.concrete_name,
+                    "overrides": self.applied_overrides,
+                },
                 "paths": {
-                    "run": self.run_path.relative_to(self.repo_root).as_posix(),
+                    "sweep": self.sweep_path.relative_to(self.repo_root).as_posix(),
                     "dataset": self.dataset_path.relative_to(self.repo_root).as_posix(),
                     "model": self.model_path.relative_to(self.repo_root).as_posix(),
                 },
@@ -644,3 +704,16 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _validate_override_path(path: str) -> None:
+    root, *segments = path.split(".")
+    if root not in {"sweep", "dataset", "model"} or not segments:
+        msg = (
+            "override paths must start with `sweep.`, `dataset.`, or `model.` "
+            f"and target a nested field: {path!r}."
+        )
+        raise ConfigError(msg)
+    if any(not segment for segment in segments):
+        msg = f"override path contains an empty segment: {path!r}."
+        raise ConfigError(msg)

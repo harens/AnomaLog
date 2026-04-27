@@ -33,7 +33,7 @@ KEY_ANOMALY_TEMPLATE = "RAS APP FATAL gamma breaker meltdown shard <:NUM:> panic
 
 
 def _prepare_run_tree(tmp_path: Path) -> Path:
-    run_config = tmp_path / "experiments" / "configs" / "runs" / "deeplog_run.toml"
+    sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "deeplog_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "deeplog_dataset.toml"
     )
@@ -41,15 +41,15 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
     log_path = tmp_path / "logs" / "deeplog_bgl.log"
 
     log_path.parent.mkdir(parents=True)
-    run_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True)
     dataset_config.parent.mkdir(parents=True)
     model_config.parent.mkdir(parents=True)
 
     shutil.copy2(FIXTURE_LOG, log_path)
-    shutil.copy2(FIXTURE_ROOT / "deeplog_run.toml", run_config)
+    shutil.copy2(FIXTURE_ROOT / "deeplog_run.toml", sweep_config)
     shutil.copy2(FIXTURE_ROOT / "deeplog_dataset.toml", dataset_config)
     shutil.copy2(FIXTURE_ROOT / "deeplog.toml", model_config)
-    return run_config
+    return sweep_config
 
 
 def _read_predictions(run_dir: Path) -> list[dict[str, object]]:
@@ -186,9 +186,9 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
     Args:
         tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
     """
-    run_config = _prepare_run_tree(tmp_path)
+    sweep_config = _prepare_run_tree(tmp_path)
 
-    run_dir = run_experiment(run_config)
+    [run_dir] = run_experiment(sweep_config)
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(

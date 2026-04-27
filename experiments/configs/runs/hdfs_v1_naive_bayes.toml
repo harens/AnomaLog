@@ -1,4 +1,0 @@
-name = "hdfs_v1_naive_bayes"
-dataset = "hdfs_v1_entity_supervised"
-model = "naive_bayes_default"
-description = "Naive Bayes phrase baseline on the built-in HDFS_v1 preset."
