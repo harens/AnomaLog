@@ -26,6 +26,10 @@ sequence's label. This keeps the shared `TemplateSequence` interface unchanged
 and avoids adding event-level labels that the rest of the experiment layer does
 not currently use.
 
+DeepCase training reports progress per context-builder epoch before moving on
+to interpreter clustering. That keeps long training runs visibly alive instead
+of appearing to stall once sequence preparation has finished.
+
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCase would receive during manual
 analysis. Predictions are still emitted as sequence records for the common

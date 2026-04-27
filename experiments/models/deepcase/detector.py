@@ -296,25 +296,23 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         events = batch.events.reshape(-1, 1).to(device)
         fit_task = progress.add_task(
             "DeepCase: training context builder",
-            total=2,
+            total=self.config.epochs + 1,
         )
         if logger is not None:
             logger.info("Training DeepCase context builder")
-        model.context_builder.fit(
-            X=contexts,
-            y=events,
-            epochs=self.config.epochs,
-            batch_size=self.config.batch_size,
-            learning_rate=self.config.learning_rate,
-            teach_ratio=self.config.teach_ratio,
-            delta=self.config.label_smoothing_delta,
-            verbose=False,
-        )
-        progress.update(
-            fit_task,
-            advance=1,
-            description="DeepCase: clustering interpreter",
-        )
+        for _ in range(self.config.epochs):
+            model.context_builder.fit(
+                X=contexts,
+                y=events,
+                epochs=1,
+                batch_size=self.config.batch_size,
+                learning_rate=self.config.learning_rate,
+                teach_ratio=self.config.teach_ratio,
+                delta=self.config.label_smoothing_delta,
+                verbose=False,
+            )
+            progress.advance(fit_task)
+        progress.update(fit_task, description="DeepCase: clustering interpreter")
         if logger is not None:
             logger.info("Clustering DeepCase interpreter")
         model.interpreter.fit(
@@ -327,7 +325,8 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             NO_SCORE=self.config.no_score,
             verbose=False,
         )
-        progress.update(fit_task, advance=1, description="DeepCase: fit complete")
+        progress.advance(fit_task)
+        progress.update(fit_task, description="DeepCase: fit complete")
 
         self.model = model
         self.event_id_map = event_id_map

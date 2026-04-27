@@ -128,6 +128,7 @@ def test_deepcase_fit_passes_label_smoothing_delta(
     detector = _deep_case_config(
         name="deepcase",
         label_smoothing_delta=0.25,
+        epochs=1,
     ).build_detector()
     sequence = _sequence(templates=["A", "B"])
 
@@ -135,6 +136,47 @@ def test_deepcase_fit_passes_label_smoothing_delta(
         detector.fit((sequence,), progress=progress)
 
     assert captured_delta == [0.25]
+
+
+def test_deepcase_fit_runs_context_builder_one_epoch_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase should surface per-epoch progress while training context builder.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream DeepCase fit
+            methods so the test can observe how many one-epoch calls are made.
+    """
+    epoch_calls: list[int] = []
+
+    def _fit_context_builder(
+        self: ContextBuilder,
+        *,
+        epochs: int,
+        **kwargs: object,
+    ) -> ContextBuilder:
+        del kwargs
+        epoch_calls.append(epochs)
+        return self
+
+    def _fit_interpreter(self: Interpreter, **kwargs: object) -> Interpreter:
+        del kwargs
+        self.clusters = np.array([0, -1])
+        return self
+
+    monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
+    monkeypatch.setattr(Interpreter, "fit", _fit_interpreter)
+    detector = _deep_case_config(
+        name="deepcase",
+        epochs=3,
+        iterations=0,
+    ).build_detector()
+    sequence = _sequence(templates=["A", "B"])
+
+    with Progress(disable=True) as progress:
+        detector.fit((sequence,), progress=progress)
+
+    assert epoch_calls == [1, 1, 1]
 
 
 def test_deepcase_detector_rejects_repeated_fit() -> None:
