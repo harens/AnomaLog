@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from prefect import flow
 from prefect.logging import get_run_logger
 
+from anomalog.cache.core import dataset_build_lock
 from anomalog.labels import InlineReader
 from anomalog.parsers.structured.contracts import UNTEMPLATED_FIELD, StructuredSink
 from anomalog.parsers.structured.dataset import StructuredDataset
@@ -121,4 +122,8 @@ def build_templated_dataset(request: TemplatedDatasetBuildRequest) -> TemplatedD
     def _build_dataset_flow() -> TemplatedDataset:
         return _build_templated_dataset(request)
 
-    return _build_dataset_flow()
+    with dataset_build_lock(
+        request.dataset_name,
+        cache_paths=request.cache_paths,
+    ):
+        return _build_dataset_flow()

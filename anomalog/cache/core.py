@@ -4,9 +4,11 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
+from filelock import FileLock
 from platformdirs import user_cache_dir, user_data_dir
 from prefect import task as _task
 from prefect.assets import Asset, AssetProperties
@@ -83,6 +85,66 @@ def clear_dataset_cache(
             continue
         if root.exists():
             root.unlink()
+
+
+def dataset_build_lock_path(
+    dataset_name: str,
+    *,
+    cache_paths: CachePathsConfig,
+) -> Path:
+    """Return the coarse dataset-build lock path for one cache namespace.
+
+    The dataset build pipeline writes shared source and derived artifacts under
+    `<data_root>/<dataset_name>` and `<cache_root>/<dataset_name>`. Builds that
+    target that namespace must therefore be serialised even when they differ in
+    parser or templating configuration, because the on-disk outputs would still
+    collide.
+
+    Args:
+        dataset_name (str): Dataset identifier whose build namespace should be
+            locked.
+        cache_paths (CachePathsConfig): Resolved data and cache root locations.
+
+    Returns:
+        Path: Lock file path scoped to the dataset/cache namespace.
+
+    Raises:
+        ValueError: If `dataset_name` is empty.
+    """
+    if not dataset_name:
+        msg = "dataset_build_lock_path() requires a non-empty dataset name."
+        raise ValueError(msg)
+
+    resolved_data_root = cache_paths.data_root.expanduser().resolve()
+    resolved_cache_root = cache_paths.cache_root.expanduser().resolve()
+    namespace = (
+        f"{dataset_name}\n"
+        f"{resolved_data_root.as_posix()}\n"
+        f"{resolved_cache_root.as_posix()}"
+    )
+    lock_digest = sha256(namespace.encode("utf-8")).hexdigest()[:16]
+    safe_dataset_name = _ALLOWED.sub("_", dataset_name).strip("_") or "dataset"
+    lock_dir = resolved_cache_root / "dataset_build_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f"{safe_dataset_name}-{lock_digest}.lock"
+
+
+def dataset_build_lock(
+    dataset_name: str,
+    *,
+    cache_paths: CachePathsConfig,
+) -> FileLock:
+    """Return the coarse cross-process lock for one dataset build namespace.
+
+    Args:
+        dataset_name (str): Dataset identifier whose build namespace should be
+            locked.
+        cache_paths (CachePathsConfig): Resolved data and cache root locations.
+
+    Returns:
+        FileLock: Lock guarding all dataset build work for that namespace.
+    """
+    return FileLock(dataset_build_lock_path(dataset_name, cache_paths=cache_paths))
 
 
 def asset_from_local_path(path: Path) -> Asset:

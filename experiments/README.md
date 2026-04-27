@@ -72,6 +72,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Dataset sourcing, structured parsing, template mining, and other
   preprocessing stages reuse the existing AnomaLog and Prefect-backed caches
   when their inputs and upstream assets have not changed.
+- Cold dataset builds are serialised per dataset namespace
+  (`dataset_name` plus cache roots), so multi-process sweeps do not race while
+  materialising the shared AnomaLog dataset cache for the first time.
 - Concrete sweep runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved sweep, dataset, and model config.

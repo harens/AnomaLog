@@ -10,6 +10,7 @@ license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = [
     "drain3",
+    "filelock>=3.29.0",
     "logparser3>=1.0.4",
     "platformdirs>=4.5.1",
     "prefect>=3.6.15",

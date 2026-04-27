@@ -2,14 +2,18 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from multiprocessing import Process
 from pathlib import Path
+from time import monotonic, sleep
 
 import pytest
+from filelock import Timeout
 from prefect.assets import Asset, AssetProperties
 from prefect.logging import disable_run_logger
 
-from anomalog.cache import asset_from_local_path, materialize
+from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
 from anomalog.cache import files as cache_files
+from anomalog.cache.core import dataset_build_lock, dataset_build_lock_path
 from anomalog.cache.files import AssetDepsFingerprintPolicy
 from tests.unit.helpers import task_run_context
 
@@ -38,6 +42,20 @@ def _skip_materialize(*_args: object, **_kwargs: object) -> MaterializeDecorator
         return _skip
 
     return _decorate
+
+
+def _hold_dataset_build_lock(
+    dataset_name: str,
+    data_root: Path,
+    cache_root: Path,
+    ready_path: Path,
+    release_path: Path,
+) -> None:
+    cache_paths = CachePathsConfig(data_root=data_root, cache_root=cache_root)
+    with dataset_build_lock(dataset_name, cache_paths=cache_paths):
+        ready_path.touch()
+        while not release_path.exists():
+            sleep(0.01)
 
 
 def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
@@ -167,3 +185,69 @@ def test_materialize_reruns_function_when_output_path_is_missing(
     with disable_run_logger():
         assert _build() == "rebuilt"
     assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_dataset_build_lock_path_changes_with_cache_namespace(tmp_path: Path) -> None:
+    """Dataset build locks should be scoped to dataset name and cache roots.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache namespace paths.
+    """
+    first_cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data-a",
+        cache_root=tmp_path / "cache-a",
+    )
+    second_cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data-b",
+        cache_root=tmp_path / "cache-a",
+    )
+
+    first_path = dataset_build_lock_path("demo", cache_paths=first_cache_paths)
+    second_path = dataset_build_lock_path("demo", cache_paths=second_cache_paths)
+
+    assert first_path.parent == first_cache_paths.cache_root / "dataset_build_locks"
+    assert first_path != second_path
+    with pytest.raises(ValueError, match="non-empty dataset name"):
+        dataset_build_lock_path("", cache_paths=first_cache_paths)
+
+
+def test_dataset_build_lock_blocks_other_processes_for_same_namespace(
+    tmp_path: Path,
+) -> None:
+    """Concurrent builds in one dataset namespace should serialize.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache namespace paths.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+    ready_path = tmp_path / "ready"
+    release_path = tmp_path / "release"
+    process = Process(
+        target=_hold_dataset_build_lock,
+        args=(
+            "demo",
+            cache_paths.data_root,
+            cache_paths.cache_root,
+            ready_path,
+            release_path,
+        ),
+    )
+    process.start()
+    deadline = monotonic() + 5
+    while monotonic() < deadline and not ready_path.exists():
+        sleep(0.01)
+
+    try:
+        assert ready_path.exists()
+        lock = dataset_build_lock("demo", cache_paths=cache_paths)
+
+        with pytest.raises(Timeout), lock.acquire(timeout=0.05):
+            pass
+    finally:
+        release_path.touch()
+        process.join(timeout=5)
+
+    assert process.exitcode == 0
