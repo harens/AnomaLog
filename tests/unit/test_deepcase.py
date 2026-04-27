@@ -340,3 +340,44 @@ def test_deepcase_predict_aggregates_event_findings(
     ]
     assert outcome.findings[1].event_id is None
     assert outcome.findings[1].reason is ScoreReason.EVENT_NOT_IN_TRAINING_VOCABULARY
+
+
+def test_deepcase_predict_all_batches_multiple_sequences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase bulk scoring should collapse multiple sequences into one batch.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces batch prediction so the test
+            can verify sequence regrouping around one shared model call.
+    """
+    train_sequence = _sequence(templates=["A", "B", "C"])
+    test_sequences = [
+        _sequence(templates=["A", "B"], split_label=SplitLabel.TEST),
+        _sequence(templates=["C"], split_label=SplitLabel.TEST),
+    ]
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=0),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+    predict_batch_sizes: list[int] = []
+
+    def _fake_predict_batch(batch: DeepCaseSampleBatch) -> list[float]:
+        predict_batch_sizes.append(batch.sample_count)
+        return [0.0, MALICIOUS_SCORE, 0.0]
+
+    monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
+
+    outcomes = list(detector.predict_all(test_sequences))
+
+    assert predict_batch_sizes == [3]
+    assert [len(sequence.events) for sequence, _ in outcomes] == [2, 1]
+    assert [outcome.predicted_label for _, outcome in outcomes] == [1, 0]
+    assert [outcome.score for _, outcome in outcomes] == [MALICIOUS_SCORE, 0.0]
+    assert [
+        [finding.raw_score for finding in outcome.findings] for _, outcome in outcomes
+    ] == [
+        [0.0, MALICIOUS_SCORE],
+        [0.0],
+    ]

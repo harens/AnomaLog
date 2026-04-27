@@ -21,7 +21,7 @@ from experiments import ConfigError
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping
 
     from rich.progress import Progress
 
@@ -506,4 +506,28 @@ class ExperimentDetector(Protocol):
 
         Returns:
             ModelManifest: Serialisable detector manifest for the run.
+        """
+
+
+@runtime_checkable
+class BatchExperimentDetector(Protocol):
+    """Optional detector interface for bulk sequence scoring.
+
+    Detectors that can score more efficiently in bulk than through repeated
+    per-sequence calls may implement this protocol. The experiment runner still
+    preserves sequence order and emits one prediction record per test sequence.
+    """
+
+    def predict_all(
+        self,
+        sequences: Iterable[TemplateSequence],
+    ) -> Iterator[tuple[TemplateSequence, PredictionOutcome]]:
+        """Return predictions for sequences in the same order they were given.
+
+        Args:
+            sequences (Iterable[TemplateSequence]): Test sequences to score.
+
+        Returns:
+            Iterator[tuple[TemplateSequence, PredictionOutcome]]: Scored
+            sequence/output pairs in input order.
         """

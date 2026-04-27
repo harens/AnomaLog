@@ -11,9 +11,11 @@ import msgspec
 from anomalog.io_utils import make_count_progress
 from anomalog.sequences import SplitLabel
 from experiments.models.base import (
+    BatchExperimentDetector,
     ExperimentDetector,
     ExperimentModelConfig,
     ModelRunSummary,
+    PredictionOutcome,
     SequencePrediction,
     SequenceSummary,
 )
@@ -268,12 +270,11 @@ def stream_predictions(
             score_stage_description(detector.detector_name),
             total=None if score_progress_hint is None else score_progress_hint.total,
         )
-        for sequence in sequence_factory():
-            if sequence.split_label is SplitLabel.TRAIN:
-                accumulator.record_train(sequence)
-                continue
-
-            outcome = detector.predict(sequence)
+        for sequence, outcome in _iter_prediction_inputs(
+            detector=detector,
+            sequence_factory=sequence_factory,
+            accumulator=accumulator,
+        ):
             prediction = outcome.to_prediction_record(sequence)
             file_obj.write(msgspec.json.encode(prediction.to_dict()).decode("utf-8"))
             file_obj.write("\n")
@@ -286,3 +287,55 @@ def stream_predictions(
                     detector.detector_name,
                 )
     return accumulator
+
+
+def _iter_prediction_inputs(
+    *,
+    detector: ExperimentDetector,
+    sequence_factory: Callable[[], Iterator[TemplateSequence]],
+    accumulator: RunMetrics,
+) -> Iterator[tuple[TemplateSequence, PredictionOutcome]]:
+    """Yield scored test sequences while accounting for unscored train items.
+
+    Args:
+        detector (ExperimentDetector): Detector being evaluated.
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
+        accumulator (RunMetrics): Metrics accumulator updated for train items.
+
+    Yields:
+        (TemplateSequence, PredictionOutcome): Test sequences and their
+        prediction outcomes, in dataset order.
+    """
+    test_sequences = _iter_test_sequences(
+        sequence_factory=sequence_factory,
+        accumulator=accumulator,
+    )
+    if isinstance(detector, BatchExperimentDetector):
+        yield from detector.predict_all(test_sequences)
+        return
+    for sequence in test_sequences:
+        yield sequence, detector.predict(sequence)
+
+
+def _iter_test_sequences(
+    *,
+    sequence_factory: Callable[[], Iterator[TemplateSequence]],
+    accumulator: RunMetrics,
+) -> Iterator[TemplateSequence]:
+    """Yield test sequences while accounting for train sequences inline.
+
+    Args:
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
+        accumulator (RunMetrics): Metrics accumulator updated for skipped train
+            sequences.
+
+    Yields:
+        TemplateSequence: Test-split sequences in dataset order.
+    """
+    for sequence in sequence_factory():
+        if sequence.split_label is SplitLabel.TRAIN:
+            accumulator.record_train(sequence)
+            continue
+        yield sequence

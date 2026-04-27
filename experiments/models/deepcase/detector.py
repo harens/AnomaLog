@@ -39,7 +39,7 @@ from experiments.models.torch_runtime import (
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
 
     from rich.progress import Progress
 
@@ -249,6 +249,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
     train_sample_count: int = 0
     clustered_sample_count: int = 0
     known_cluster_count: int = 0
+    _prediction_sample_chunk_size: ClassVar[int] = 32_768
 
     def fit(
         self,
@@ -378,6 +379,39 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             findings=findings,
         )
 
+    def predict_all(
+        self,
+        sequences: Iterable[TemplateSequence],
+    ) -> Iterator[tuple[TemplateSequence, DeepCasePredictionOutcome]]:
+        """Yield sequence predictions while batching upstream DeepCASE scoring.
+
+        DeepCASE's interpreter is vectorised over many event samples. Replaying
+        one upstream prediction call per ``TemplateSequence`` makes large test
+        runs spend most of their time on repeated interpreter setup and nearest
+        neighbour queries rather than on the actual batched computation. This
+        method keeps the experiment output stream sequence-oriented while
+        scoring bounded chunks of event samples together.
+
+        Args:
+            sequences (Iterable[TemplateSequence]): Test sequences to score.
+
+        Yields:
+            tuple[TemplateSequence, DeepCasePredictionOutcome]: Scored sequences
+            in input order.
+        """
+        buffered_sequences: list[TemplateSequence] = []
+        buffered_sample_count = 0
+        for sequence in sequences:
+            buffered_sequences.append(sequence)
+            buffered_sample_count += len(sequence.events)
+            if buffered_sample_count < self._prediction_chunk_sample_limit():
+                continue
+            yield from self._predict_sequence_chunk(buffered_sequences)
+            buffered_sequences = []
+            buffered_sample_count = 0
+        if buffered_sequences:
+            yield from self._predict_sequence_chunk(buffered_sequences)
+
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> DeepCaseManifest:
         """Return manifest metadata for the fitted DeepCase workflow.
 
@@ -439,14 +473,86 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         )
         return [float(score) for score in raw_predictions]
 
+    def _predict_sequence_chunk(
+        self,
+        sequences: Sequence[TemplateSequence],
+    ) -> Iterator[tuple[TemplateSequence, DeepCasePredictionOutcome]]:
+        """Score one bounded sequence chunk through a single DeepCASE call.
+
+        Args:
+            sequences (Sequence[TemplateSequence]): Test sequences to score
+                together.
+
+        Yields:
+            (TemplateSequence, DeepCasePredictionOutcome): Sequence-level
+            DeepCASE outcomes in input order.
+
+        Raises:
+            ValueError: If the detector has not been fit.
+        """
+        if self.event_id_map is None:
+            msg = "deepcase must be fit before prediction."
+            raise ValueError(msg)
+        batch = build_sample_batch(
+            sequences,
+            event_id_map=self.event_id_map,
+            context_length=self.config.context_length,
+            timeout_seconds=self.config.timeout_seconds,
+            unknown_event_id=self.event_id_map.no_event_id,
+        )
+        if batch.sample_count == 0:
+            for sequence in sequences:
+                yield (
+                    sequence,
+                    DeepCasePredictionOutcome(
+                        predicted_label=0,
+                        score=0.0,
+                        findings=[],
+                    ),
+                )
+            return
+
+        raw_scores = self._predict_batch(batch)
+        score_offset = 0
+        for sequence in sequences:
+            sample_count = len(sequence.events)
+            sequence_scores = raw_scores[score_offset : score_offset + sample_count]
+            findings = _findings_from_scores(
+                batch=batch,
+                raw_scores=sequence_scores,
+                start_index=score_offset,
+            )
+            predicted_label = int(
+                any(finding.predicted_label == 1 for finding in findings),
+            )
+            yield (
+                sequence,
+                DeepCasePredictionOutcome(
+                    predicted_label=predicted_label,
+                    score=aggregate_sequence_score(sequence_scores),
+                    findings=findings,
+                ),
+            )
+            score_offset += sample_count
+
+    def _prediction_chunk_sample_limit(self) -> int:
+        """Return the bounded event-sample budget for one prediction chunk.
+
+        Returns:
+            int: Maximum number of event-centred samples to score together.
+        """
+        return max(self.config.query_batch_size, self._prediction_sample_chunk_size)
+
 
 def _findings_from_scores(
     *,
     batch: DeepCaseSampleBatch,
     raw_scores: Sequence[float],
+    start_index: int = 0,
 ) -> list[DeepCaseEventFinding]:
     findings: list[DeepCaseEventFinding] = []
-    for index, raw_score in enumerate(raw_scores):
+    for relative_index, raw_score in enumerate(raw_scores):
+        index = start_index + relative_index
         findings.append(
             DeepCaseEventFinding(
                 event_index=batch.event_indexes[index],

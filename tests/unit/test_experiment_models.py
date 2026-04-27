@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import types
-from collections.abc import Callable, Iterable, Sized
+from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from anomalog.sequences import (
 from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import (
+    BatchExperimentDetector,
     ExperimentDetector,
     ModelManifest,
     PredictionOutcome,
@@ -425,6 +426,88 @@ def test_stream_predictions_logs_scored_test_sequence_counts(
         )
 
     assert "Processed 10000 test sequences for recording detector" in caplog.messages
+
+
+def test_stream_predictions_uses_bulk_detector_interface(
+    tmp_path: Path,
+) -> None:
+    """Streaming evaluation should delegate test scoring through bulk detectors.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the prediction stream.
+    """
+
+    @dataclass(slots=True)
+    class _BulkRecordingDetector(ExperimentDetector, BatchExperimentDetector):
+        detector_name: str = "recording"
+        bulk_window_ids: list[int] = field(default_factory=list)
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del train_sequences, progress, logger
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            msg = f"unexpected per-sequence prediction for {sequence.window_id}"
+            raise AssertionError(msg)
+
+        @override
+        def predict_all(
+            self,
+            sequences: Iterable[TemplateSequence],
+        ) -> Iterator[tuple[TemplateSequence, PredictionOutcome]]:
+            for sequence in sequences:
+                self.bulk_window_ids.append(sequence.window_id)
+                yield (
+                    sequence,
+                    PredictionOutcome(
+                        predicted_label=sequence.label,
+                        score=float(sequence.window_id),
+                    ),
+                )
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(3, templates=["test-b"], label=1, split_label=SplitLabel.TEST),
+    ]
+    detector = _BulkRecordingDetector()
+    predictions_path = tmp_path / "predictions.jsonl"
+    logger = logging.getLogger("tests.stream_predictions_bulk")
+
+    summary = stream_predictions(
+        detector=detector,
+        sequence_factory=lambda: iter(sequences),
+        predictions_path=predictions_path,
+        logger=logger,
+    )
+
+    assert detector.bulk_window_ids == [2, 3]
+    assert summary.train_sequence_count == 1
+    predictions = [
+        json.loads(line)
+        for line in predictions_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert summary.test_sequence_count == len(predictions)
+    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
+    assert [prediction["score"] for prediction in predictions] == [2.0, 3.0]
 
 
 @pytest.mark.allow_no_new_coverage
