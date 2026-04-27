@@ -162,6 +162,7 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     assert environment["run_fingerprint"] == manifest["run_fingerprint"]
     assert run_config_payload["sweep"]["name"] == "tiny_runner_smoke"
     assert run_config_payload["concrete"]["name"] == "tiny_runner_smoke"
+    assert "experiments.run.tiny_runner_smoke - Loaded sweep config from" in run_log
     assert "Building dataset tiny-bgl-runner" in run_log
     assert f"Wrote experiment artifacts to {shlex.quote(str(run_dir))}" in run_log
     _assert_template_frequency_predictions(

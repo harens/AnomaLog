@@ -144,7 +144,10 @@ def _run_bundle(bundle: ExperimentBundle, *, force: bool = False) -> Path:
         shutil.rmtree(result_paths.run_dir)
     result_paths.run_dir.mkdir(parents=True, exist_ok=True)
 
-    with _experiment_logger(result_paths.run_log_path) as logger:
+    with _experiment_logger(
+        result_paths.run_log_path,
+        run_name=bundle.concrete_name,
+    ) as logger:
         logger.info("Loaded sweep config from %s", bundle.sweep_path)
         logger.info("Using dataset config %s", bundle.dataset_path)
         logger.info("Using model config %s", bundle.model_path)
@@ -251,9 +254,21 @@ def main() -> int:
     return 0
 
 
+def _experiment_logger_name(run_name: str) -> str:
+    """Return the stable logger name used for one concrete experiment run.
+
+    Args:
+        run_name (str): Human-readable concrete sweep variant name.
+
+    Returns:
+        str: Logger name displayed by the Prefect-style formatter.
+    """
+    return f"experiments.run.{run_name}"
+
+
 @contextmanager
-def _experiment_logger(log_path: Path) -> Iterator[logging.Logger]:
-    logger = logging.getLogger(f"experiments.run.{log_path.parent.name}")
+def _experiment_logger(log_path: Path, *, run_name: str) -> Iterator[logging.Logger]:
+    logger = logging.getLogger(_experiment_logger_name(run_name))
     logger.setLevel(logging.INFO)
     logger.propagate = False
     formatter = build_prefect_standard_formatter()
