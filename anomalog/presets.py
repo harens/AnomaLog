@@ -31,6 +31,8 @@ hdfs_v1 = (
             relative_path=Path("preprocessed/anomaly_label.csv"),
             entity_column="BlockId",
             label_column="Label",
+            anomalous_value="Anomaly",
+            normal_value="Normal",
         ),
     )
 )

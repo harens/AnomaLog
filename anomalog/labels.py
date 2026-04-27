@@ -85,12 +85,16 @@ class CSVReader(AnomalyLabelReader):
             `relative_path` at runtime.
         entity_column (str): CSV column containing the group/entity identifier.
         label_column (str): CSV column containing the integer anomaly label.
+        normal_value (str): CSV value corresponding to the normal class.
+        anomalous_value (str): CSV value corresponding to the anomalous class.
     """
 
     relative_path: Path
     dataset_root: Path | None = None
     entity_column: str = ENTITY_FIELD
     label_column: str = ANOMALOUS_FIELD
+    normal_value: str = "0"
+    anomalous_value: str = "1"
 
     def load(self) -> AnomalyLabelLookup:
         """Load labels from the configured CSV file into lookup callables.
@@ -107,6 +111,10 @@ class CSVReader(AnomalyLabelReader):
 
         path = self.dataset_root / self.relative_path
         group_labels: dict[str, int] = {}
+
+        normal_value = self.normal_value.strip().casefold()
+        anomalous_value = self.anomalous_value.strip().casefold()
+
         with path.open(newline="", encoding="utf-8") as file_obj:
             reader = csv.DictReader(file_obj)
             if not reader.fieldnames or self.entity_column not in reader.fieldnames:
@@ -125,10 +133,19 @@ class CSVReader(AnomalyLabelReader):
                 label_raw = row.get(self.label_column)
                 if entity_raw is None or label_raw is None:
                     continue
-                try:
-                    group_labels[str(entity_raw)] = int(label_raw)
-                except (TypeError, ValueError):
-                    continue
+
+                entity_id = str(entity_raw).strip()
+                label_value = str(label_raw).strip().casefold()
+
+                if label_value == normal_value:
+                    group_labels[entity_id] = 0
+                elif label_value == anomalous_value:
+                    group_labels[entity_id] = 1
+                else:
+                    try:
+                        group_labels[entity_id] = int(label_value)
+                    except (TypeError, ValueError):
+                        continue
 
         def _label_for_group(entity_id: str) -> int | None:
             return group_labels.get(entity_id)

@@ -201,3 +201,39 @@ def test_inline_reader_loads_sparse_labels_from_parquet_sink(tmp_path: Path) -> 
     assert lookup.label_for_line(2) == 1
     assert lookup.label_for_group("node-a") is None
     assert lookup.label_for_group("node-b") == INLINE_CATEGORY_LABEL
+
+
+@pytest.mark.allow_no_new_coverage
+def test_csv_reader_maps_configured_categorical_labels(tmp_path: Path) -> None:
+    """CSVReader maps configured categorical labels onto integer anomaly labels.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for label fixtures.
+    """
+    # This specifically tests HDFS v1 labels, which use "Normal" and "Anomaly"
+    # as categorical labels.
+    labels_file = tmp_path / "labels.csv"
+    labels_file.write_text(
+        (
+            "BlockId,Label\n"
+            "blk_-1608999687919862906,Normal\n"
+            "blk_7503483334202473044,Normal\n"
+            "blk_-3544583377289625738,Anomaly\n"
+        ),
+        encoding="utf-8",
+    )
+
+    lookup = CSVReader(
+        relative_path=Path("labels.csv"),
+        dataset_root=tmp_path,
+        entity_column="BlockId",
+        label_column="Label",
+        normal_value="Normal",
+        anomalous_value="Anomaly",
+    ).load()
+
+    assert lookup.label_for_group("blk_-1608999687919862906") == 0
+    assert lookup.label_for_group("blk_7503483334202473044") == 0
+    assert lookup.label_for_group("blk_-3544583377289625738") == 1
+    assert lookup.label_for_group("missing") is None
+    assert lookup.label_for_line(0) is None
