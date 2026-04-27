@@ -87,6 +87,7 @@ def fit_parameter_models(
         normal_sequences=training_corpus.sequences,
         all_templates=training_corpus.templates,
         include_elapsed_time=config.include_elapsed_time,
+        progress=progress,
     )
     parameter_models: dict[str, ParameterModelState] = {}
     skipped_models: dict[str, str] = {}

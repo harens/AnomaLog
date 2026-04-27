@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec
 import pytest
 import torch
-from rich.progress import Progress
+from rich.progress import Progress, TaskID
 
 from anomalog.sequences import SplitLabel, TemplateSequence
 from experiments import ConfigError
@@ -13,6 +13,7 @@ from experiments.models.base import SequenceSummary, decode_experiment_model_con
 from experiments.models.deeplog.detector import DeepLogDetector, DeepLogModelConfig
 from experiments.models.deeplog.key import (
     KeyScoringContext,
+    fit_key_model,
     iter_key_examples,
     score_key_sequence,
 )
@@ -20,6 +21,7 @@ from experiments.models.deeplog.parameters import (
     build_parameter_datasets,
     build_parameter_schemas,
     fit_gaussian_threshold,
+    fit_parameter_models,
     masked_mse,
     masked_regression_loss,
     raw_parameter_vector_for_event,
@@ -29,6 +31,7 @@ from experiments.models.deeplog.shared import (
     GaussianThreshold,
     KeyLSTM,
     NormalisationStats,
+    NormalTrainingCorpus,
     ParameterFeatureSchema,
     ParameterLSTM,
     ParameterModelState,
@@ -240,6 +243,162 @@ def test_iter_key_examples_skips_sequences_shorter_than_history_window() -> None
     )
 
     assert examples == []
+
+
+def test_fit_key_model_reports_example_preparation_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepLog key training should surface example preparation before epochs.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records progress callbacks during
+            key-model fitting.
+    """
+    added_tasks: list[str] = []
+    advanced_tasks: list[int] = []
+    removed_tasks: list[int] = []
+    original_add_task = Progress.add_task
+    original_advance = Progress.advance
+    original_remove_task = Progress.remove_task
+
+    def _add_task(
+        self: Progress,
+        description: str,
+        *,
+        total: float | None = None,
+    ) -> TaskID:
+        added_tasks.append(description)
+        return original_add_task(self, description, total=total)
+
+    def _advance(self: Progress, task_id: TaskID) -> None:
+        advanced_tasks.append(task_id)
+        return original_advance(self, task_id)
+
+    def _remove_task(self: Progress, task_id: TaskID) -> None:
+        removed_tasks.append(task_id)
+        return original_remove_task(self, task_id)
+
+    monkeypatch.setattr(Progress, "add_task", _add_task)
+    monkeypatch.setattr(Progress, "advance", _advance)
+    monkeypatch.setattr(Progress, "remove_task", _remove_task)
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C"],
+                split_label=SplitLabel.TRAIN,
+            ),
+            _sequence(
+                templates=["B", "C", "A"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C"),
+        event_count=6,
+    )
+
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=1,
+        batch_size=1,
+        hidden_size=4,
+        num_layers=1,
+    )
+    with Progress(disable=True) as progress:
+        fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert added_tasks[0] == "Preparing DeepLog key examples"
+    assert "Training DeepLog key model" in added_tasks
+    expected_preparation_advances = 2
+    assert advanced_tasks.count(0) >= expected_preparation_advances
+    assert removed_tasks[0] == 0
+
+
+def test_fit_parameter_models_reports_schema_preparation_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepLog parameter training should surface schema preparation progress.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records progress callbacks during
+            parameter-model fitting.
+    """
+    added_tasks: list[str] = []
+    advanced_tasks: list[int] = []
+    removed_tasks: list[int] = []
+    original_add_task = Progress.add_task
+    original_advance = Progress.advance
+    original_remove_task = Progress.remove_task
+
+    def _add_task(
+        self: Progress,
+        description: str,
+        *,
+        total: float | None = None,
+    ) -> TaskID:
+        added_tasks.append(description)
+        return original_add_task(self, description, total=total)
+
+    def _advance(self: Progress, task_id: TaskID) -> None:
+        advanced_tasks.append(task_id)
+        return original_advance(self, task_id)
+
+    def _remove_task(self: Progress, task_id: TaskID) -> None:
+        removed_tasks.append(task_id)
+        return original_remove_task(self, task_id)
+
+    monkeypatch.setattr(Progress, "add_task", _add_task)
+    monkeypatch.setattr(Progress, "advance", _advance)
+    monkeypatch.setattr(Progress, "remove_task", _remove_task)
+    monkeypatch.setattr(
+        "experiments.models.deeplog.parameters.training.fit_parameter_model",
+        lambda **_: (None, "skipped"),
+    )
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "A"],
+                params_by_event=[[], [], []],
+                split_label=SplitLabel.TRAIN,
+            ),
+            _sequence(
+                templates=["B", "A", "B"],
+                params_by_event=[[], [], []],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B"),
+        event_count=6,
+    )
+
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=1,
+        batch_size=1,
+        hidden_size=4,
+        num_layers=1,
+    )
+    with Progress(disable=True) as progress:
+        fit_parameter_models(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert added_tasks[0] == "Preparing DeepLog parameter schemas"
+    assert "Training DeepLog parameter models" in added_tasks
+    expected_preparation_advances = 2
+    assert advanced_tasks.count(0) >= expected_preparation_advances
+    assert removed_tasks[0] == 0
 
 
 def test_build_parameter_schemas_uses_strict_numeric_policy() -> None:

@@ -14,6 +14,7 @@ training abstraction.
 
 from __future__ import annotations
 
+from collections.abc import Sized
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -30,7 +31,7 @@ from experiments.models.deeplog.shared import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
-    from rich.progress import Progress
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
     from experiments.models.deeplog.detector import DeepLogModelConfig
@@ -105,13 +106,32 @@ def fit_key_model(
     }
     index_to_template = {idx: template for template, idx in template_to_index.items()}
 
-    examples = list(
-        iter_key_examples(
-            sequences=training_corpus.sequences,
-            template_to_index=template_to_index,
-            history_size=config.history_size,
-        ),
-    )
+    prepare_task: TaskID | None = None
+    if progress is not None:
+        total = (
+            len(training_corpus.sequences)
+            if isinstance(training_corpus.sequences, Sized)
+            else None
+        )
+        prepare_task = progress.add_task(
+            "Preparing DeepLog key examples",
+            total=total,
+        )
+    examples: list[tuple[list[int], int]] = []
+    try:
+        for sequence in training_corpus.sequences:
+            examples.extend(
+                iter_key_examples(
+                    sequences=(sequence,),
+                    template_to_index=template_to_index,
+                    history_size=config.history_size,
+                ),
+            )
+            if progress is not None and prepare_task is not None:
+                progress.advance(prepare_task)
+    finally:
+        if progress is not None and prepare_task is not None:
+            progress.remove_task(prepare_task)
     if not examples:
         msg = "DeepLog key model requires at least one history/next-key example."
         raise ValueError(msg)

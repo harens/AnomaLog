@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Sized
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,8 @@ from experiments.models.deeplog.shared import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
 
@@ -57,6 +60,7 @@ def build_parameter_schemas(
     normal_sequences: Iterable[TemplateSequence],
     include_elapsed_time: bool,
     all_templates: Iterable[str] | None = None,
+    progress: Progress | None = None,
 ) -> dict[str, ParameterFeatureSchema]:
     """Infer stable numeric feature schemas per template.
 
@@ -73,6 +77,8 @@ def build_parameter_schemas(
         normal_sequences (Iterable[TemplateSequence]): Normal training sequences.
         include_elapsed_time (bool): Whether elapsed time may become a feature.
         all_templates (Iterable[str] | None): Optional complete template set.
+        progress (Progress | None): Optional progress reporter for schema
+            preparation.
 
     Returns:
         dict[str, ParameterFeatureSchema]: Stable feature schema per template.
@@ -80,16 +86,24 @@ def build_parameter_schemas(
     numeric_positions_by_template: dict[str, set[int]] = defaultdict(set)
     non_numeric_positions_by_template: dict[str, set[int]] = defaultdict(set)
     saw_elapsed_by_template: dict[str, bool] = defaultdict(bool)
-
-    for sequence in normal_sequences:
-        for template, parameters, dt_prev_ms in sequence.events:
-            if include_elapsed_time and dt_prev_ms is not None:
-                saw_elapsed_by_template[template] = True
-            for position, value in enumerate(parameters):
-                if try_parse_numeric(value) is None:
-                    non_numeric_positions_by_template[template].add(position)
-                    continue
-                numeric_positions_by_template[template].add(position)
+    observations = _ParameterSchemaObservations(
+        numeric_positions_by_template=numeric_positions_by_template,
+        non_numeric_positions_by_template=non_numeric_positions_by_template,
+        saw_elapsed_by_template=saw_elapsed_by_template,
+    )
+    prepare_task = _prepare_parameter_schema_progress(
+        normal_sequences=normal_sequences,
+        progress=progress,
+    )
+    _collect_parameter_schema_observations(
+        normal_sequences=normal_sequences,
+        include_elapsed_time=include_elapsed_time,
+        observations=observations,
+        progress=progress,
+        prepare_task=prepare_task,
+    )
+    if progress is not None and prepare_task is not None:
+        progress.remove_task(prepare_task)
 
     template_names = (
         set(all_templates)
@@ -121,6 +135,79 @@ def build_parameter_schemas(
             ),
         )
     return schemas
+
+
+@dataclass(frozen=True, slots=True)
+class _ParameterSchemaObservations:
+    """Mutable counters gathered while scanning DeepLog parameter schemas.
+
+    Attributes:
+        numeric_positions_by_template (dict[str, set[int]]): Numeric parameter
+            positions observed for each template.
+        non_numeric_positions_by_template (dict[str, set[int]]): Parameter
+            positions rejected because at least one value was non-numeric.
+        saw_elapsed_by_template (dict[str, bool]): Whether each template saw
+            at least one non-null elapsed-time value.
+    """
+
+    numeric_positions_by_template: dict[str, set[int]]
+    non_numeric_positions_by_template: dict[str, set[int]]
+    saw_elapsed_by_template: dict[str, bool]
+
+
+def _prepare_parameter_schema_progress(
+    *,
+    normal_sequences: Iterable[TemplateSequence],
+    progress: Progress | None,
+) -> TaskID | None:
+    """Create a progress task for parameter-schema preparation.
+
+    Args:
+        normal_sequences (Iterable[TemplateSequence]): Normal training sequences.
+        progress (Progress | None): Optional progress reporter.
+
+    Returns:
+        TaskID | None: Task identifier when progress tracking is enabled.
+    """
+    if progress is None:
+        return None
+    total = len(normal_sequences) if isinstance(normal_sequences, Sized) else None
+    return progress.add_task(
+        "Preparing DeepLog parameter schemas",
+        total=total,
+    )
+
+
+def _collect_parameter_schema_observations(
+    *,
+    normal_sequences: Iterable[TemplateSequence],
+    include_elapsed_time: bool,
+    observations: _ParameterSchemaObservations,
+    progress: Progress | None,
+    prepare_task: TaskID | None,
+) -> None:
+    """Scan normal sequences and accumulate schema observations.
+
+    Args:
+        normal_sequences (Iterable[TemplateSequence]): Normal training sequences.
+        include_elapsed_time (bool): Whether elapsed time may become a feature.
+        observations (_ParameterSchemaObservations): Mutable schema counters.
+        progress (Progress | None): Optional progress reporter.
+        prepare_task (TaskID | None): Progress task used for preparation.
+    """
+    for sequence in normal_sequences:
+        for template, parameters, dt_prev_ms in sequence.events:
+            if include_elapsed_time and dt_prev_ms is not None:
+                observations.saw_elapsed_by_template[template] = True
+            for position, value in enumerate(parameters):
+                if try_parse_numeric(value) is None:
+                    observations.non_numeric_positions_by_template[template].add(
+                        position,
+                    )
+                    continue
+                observations.numeric_positions_by_template[template].add(position)
+        if progress is not None and prepare_task is not None:
+            progress.advance(prepare_task)
 
 
 def parameter_model_input_size(*, feature_count: int) -> int:
