@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import coverage
 import pytest
+from prefect.settings import PREFECT_API_URL
 from prefect.testing.utilities import prefect_test_harness
 
 _TEST_REPORTS_KEY = pytest.StashKey[dict[str, pytest.TestReport]]()
@@ -23,6 +25,20 @@ def unit_prefect_harness() -> Generator[None]:
         server_startup_timeout=PREFECT_TEST_SERVER_STARTUP_TIMEOUT_SECONDS,
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def unit_prefect_api_url_env() -> Generator[None]:
+    """Mirror the active Prefect API URL into subprocess environments."""
+    previous_value = os.environ.get("PREFECT_API_URL")
+    os.environ["PREFECT_API_URL"] = PREFECT_API_URL.value()
+    try:
+        yield
+    finally:
+        if previous_value is None:
+            os.environ.pop("PREFECT_API_URL", None)
+        else:
+            os.environ["PREFECT_API_URL"] = previous_value
 
 
 def _coverage_snapshot(cov: coverage.Coverage) -> dict[str, frozenset[int]]:

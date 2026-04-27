@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 from argparse import Namespace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+
+from typing_extensions import Self
 
 from experiments.runners import run_experiment as runner
 
@@ -101,3 +104,56 @@ def test_main_does_not_print_the_run_directory(
     assert exit_code == 0
     assert seen == [(expected_config, True)]
     assert not capsys.readouterr().out
+
+
+def test_run_experiment_submits_plain_worker_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Parallel sweeps should submit plain worker payloads.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading and worker
+            execution so the test can inspect submitted payloads.
+        tmp_path (Path): Temporary path used to fabricate a sweep config path.
+    """
+    bundles = [
+        SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
+        SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
+    ]
+    submitted_payloads: list[tuple[Path, int, bool]] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        def map(
+            self,
+            func: object,
+            payloads: list[tuple[Path, int, bool]],
+        ) -> list[Path]:
+            assert self.max_workers == len(bundles)
+            del func
+            submitted_payloads.extend(payloads)
+            return [tmp_path / f"result-{index}" for index in range(len(payloads))]
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [tmp_path / "result-0", tmp_path / "result-1"]
+    assert submitted_payloads == [
+        (tmp_path / "sweep.toml", 0, True),
+        (tmp_path / "sweep.toml", 1, True),
+    ]
