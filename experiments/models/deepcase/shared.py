@@ -214,7 +214,8 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         batch_size (int): Context-builder training batch size.
         learning_rate (float): Context-builder optimizer learning rate.
         teach_ratio (float): Teacher-forcing ratio.
-        iterations (int): Maximum interpreter query iterations.
+        iterations (int): Maximum interpreter query iterations used while
+            building clusters.
         query_batch_size (int): Batch size used during querying/prediction.
         cluster_score_strategy (str): Cluster score aggregation strategy.
         no_score (int): Special no-score value passed to DeepCASE.

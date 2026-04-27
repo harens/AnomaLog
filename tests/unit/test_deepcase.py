@@ -423,3 +423,35 @@ def test_deepcase_predict_all_batches_multiple_sequences(
         [0.0, MALICIOUS_SCORE],
         [0.0],
     ]
+
+
+def test_deepcase_predict_batch_uses_zero_query_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase scoring should skip the slow attention-refinement loop.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream predict method so
+            the test can verify the forwarded iteration budget.
+    """
+    train_sequence = _sequence(templates=["A", "B"])
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+    captured_iterations: list[int] = []
+
+    def _fake_predict(self: DeepCASE, **kwargs: object) -> np.ndarray:
+        del self
+        iterations = kwargs["iterations"]
+        assert isinstance(iterations, int)
+        captured_iterations.append(iterations)
+        return np.array([0.0, 0.0], dtype=float)
+
+    monkeypatch.setattr(DeepCASE, "predict", _fake_predict)
+
+    outcome = detector.predict(train_sequence)
+
+    assert captured_iterations == [0]
+    assert outcome.score == pytest.approx(0.0)

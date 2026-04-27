@@ -183,7 +183,12 @@ class DeepCaseModelConfig(
 
     iterations: Annotated[
         NonNegativeInt,
-        msgspec.Meta(description="Maximum attention-querying iterations."),
+        msgspec.Meta(
+            description=(
+                "Maximum attention-querying iterations used while building "
+                "DeepCase interpreter clusters."
+            ),
+        ),
     ] = 100
     query_batch_size: Annotated[
         PositiveInt,
@@ -463,10 +468,14 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         if model is None:
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
+        # DeepCase's test-time scoring path becomes extremely expensive with
+        # non-zero attention-query iterations. The upstream predict API uses
+        # zero iterations by default, which is sufficient for experiment
+        # scoring and keeps long runs responsive.
         raw_predictions = model.predict(
             X=batch.contexts.to(self.device),
             y=batch.events.reshape(-1, 1).to(self.device),
-            iterations=self.config.iterations,
+            iterations=0,
             batch_size=self.config.query_batch_size,
             verbose=False,
         )

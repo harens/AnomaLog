@@ -30,6 +30,11 @@ DeepCase training reports progress per context-builder epoch before moving on
 to interpreter clustering. That keeps long training runs visibly alive instead
 of appearing to stall once sequence preparation has finished.
 
+Test-time DeepCase scoring deliberately uses the upstream zero-iteration query
+path. The configured `iterations` value still controls the interpreter's
+clustering step during fit, but the runner does not spend time on the slow
+attention-refinement loop when producing experiment predictions.
+
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCase would receive during manual
 analysis. Predictions are still emitted as sequence records for the common
