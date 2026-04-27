@@ -112,8 +112,12 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    [run_dir] = run_experiment(sweep_config)
-    [rerun_dir] = run_experiment(sweep_config, force=True)
+    [run_dir] = run_experiment(sweep_config, write_predictions=True)
+    [rerun_dir] = run_experiment(
+        sweep_config,
+        force=True,
+        write_predictions=True,
+    )
 
     assert run_dir.exists()
     assert rerun_dir == run_dir
@@ -222,7 +226,7 @@ def test_run_experiment_expands_multi_model_sweep(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    run_dirs = run_experiment(sweep_config)
+    run_dirs = run_experiment(sweep_config, write_predictions=True)
 
     assert len(run_dirs) == EXPECTED_MULTI_MODEL_RUN_COUNT
     model_names = {

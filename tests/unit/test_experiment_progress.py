@@ -16,7 +16,7 @@ from experiments.models.base import (
     PredictionOutcome,
     SequenceSummary,
 )
-from experiments.models.evaluate import stream_predictions
+from experiments.models.evaluate import PredictionOutputConfig, stream_predictions
 from experiments.models.progress import ProgressHint
 
 if TYPE_CHECKING:
@@ -113,7 +113,10 @@ def test_stream_predictions_uses_known_test_total_when_supplied(
     stream_predictions(
         detector=_RecordingDetector(),
         sequence_factory=lambda: iter(sequences),
-        predictions_path=tmp_path / "predictions.jsonl",
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "predictions.jsonl",
+            write_predictions=True,
+        ),
         logger=logging.getLogger("tests.stream_predictions.progress"),
         score_progress_hint=ProgressHint(total=EXPECTED_TEST_SEQUENCE_COUNT),
     )

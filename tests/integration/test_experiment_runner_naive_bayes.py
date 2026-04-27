@@ -106,8 +106,12 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
     """
     sweep_config = _prepare_run_tree(tmp_path)
 
-    [run_dir] = run_experiment(sweep_config)
-    [rerun_dir] = run_experiment(sweep_config, force=True)
+    [run_dir] = run_experiment(sweep_config, write_predictions=True)
+    [rerun_dir] = run_experiment(
+        sweep_config,
+        force=True,
+        write_predictions=True,
+    )
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(

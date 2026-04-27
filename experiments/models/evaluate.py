@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,19 @@ if TYPE_CHECKING:
 
 _PROGRESS_EVERY = 10_000
 TrainProgressHint = ProgressHint
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionOutputConfig:
+    """Settings for writing streamed test predictions.
+
+    Attributes:
+        predictions_path (Path): Output path for streamed JSONL predictions.
+        write_predictions (bool): Whether to persist `predictions.jsonl`.
+    """
+
+    predictions_path: Path
+    write_predictions: bool = False
 
 
 @dataclass(slots=True)
@@ -155,7 +169,7 @@ def run_model(
     *,
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
     config: ExperimentModelConfig,
-    predictions_path: Path,
+    prediction_output: PredictionOutputConfig,
     logger: logging.Logger,
     progress_plan: RunProgressPlan | None = None,
 ) -> ModelRunSummary:
@@ -165,7 +179,7 @@ def run_model(
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
             producing the full sequence stream.
         config (ExperimentModelConfig): Model config used to build the detector.
-        predictions_path (Path): Output path for streamed JSONL predictions.
+        prediction_output (PredictionOutputConfig): Prediction stream settings.
         logger (logging.Logger): Logger for progress messages.
         progress_plan (RunProgressPlan | None): Exact bounded fit/scoring
             metadata when the caller can provide it cheaply.
@@ -183,7 +197,7 @@ def run_model(
     accumulator = stream_predictions(
         detector=detector,
         sequence_factory=sequence_factory,
-        predictions_path=predictions_path,
+        prediction_output=prediction_output,
         logger=logger,
         score_progress_hint=None if progress_plan is None else progress_plan.score,
     )
@@ -241,7 +255,7 @@ def stream_predictions(
     *,
     detector: ExperimentDetector,
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
-    predictions_path: Path,
+    prediction_output: PredictionOutputConfig,
     logger: logging.Logger,
     score_progress_hint: ProgressHint | None = None,
 ) -> RunMetrics:
@@ -251,7 +265,7 @@ def stream_predictions(
         detector (ExperimentDetector): Fitted detector to evaluate.
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
             producing the full sequence stream.
-        predictions_path (Path): Output path for streamed JSONL predictions.
+        prediction_output (PredictionOutputConfig): Prediction stream settings.
         logger (logging.Logger): Logger for progress messages.
         score_progress_hint (ProgressHint | None): Exact bounded test-scoring
             progress metadata when known cheaply by the caller.
@@ -260,8 +274,13 @@ def stream_predictions(
         RunMetrics: Accumulated metrics for the streamed run.
     """
     accumulator = RunMetrics()
+    file_context = (
+        prediction_output.predictions_path.open("w", encoding="utf-8")
+        if prediction_output.write_predictions
+        else nullcontext(None)
+    )
     with (
-        predictions_path.open("w", encoding="utf-8") as file_obj,
+        file_context as file_obj,
         make_count_progress(
             unit=None if score_progress_hint is None else score_progress_hint.unit,
         ) as progress,
@@ -276,8 +295,11 @@ def stream_predictions(
             accumulator=accumulator,
         ):
             prediction = outcome.to_prediction_record(sequence)
-            file_obj.write(msgspec.json.encode(prediction.to_dict()).decode("utf-8"))
-            file_obj.write("\n")
+            if file_obj is not None:
+                file_obj.write(
+                    msgspec.json.encode(prediction.to_dict()).decode("utf-8"),
+                )
+                file_obj.write("\n")
             accumulator.record_test(sequence, prediction)
             progress.advance(score_task)
             if accumulator.test_sequence_count % _PROGRESS_EVERY == 0:

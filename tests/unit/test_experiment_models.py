@@ -35,6 +35,7 @@ from experiments.models.base import (
 )
 from experiments.models.deeplog import DeepLogModelConfig
 from experiments.models.evaluate import (
+    PredictionOutputConfig,
     TrainProgressHint,
     fit_detector,
     stream_predictions,
@@ -295,7 +296,10 @@ def test_stream_predictions_only_scores_test_sequences(
     summary = stream_predictions(
         detector=detector,
         sequence_factory=lambda: iter(sequences),
-        predictions_path=predictions_path,
+        prediction_output=PredictionOutputConfig(
+            predictions_path=predictions_path,
+            write_predictions=True,
+        ),
         logger=logger,
     )
 
@@ -421,7 +425,10 @@ def test_stream_predictions_logs_scored_test_sequence_counts(
         stream_predictions(
             detector=detector,
             sequence_factory=lambda: iter(sequences),
-            predictions_path=predictions_path,
+            prediction_output=PredictionOutputConfig(
+                predictions_path=predictions_path,
+                write_predictions=True,
+            ),
             logger=logger,
         )
 
@@ -495,7 +502,10 @@ def test_stream_predictions_uses_bulk_detector_interface(
     summary = stream_predictions(
         detector=detector,
         sequence_factory=lambda: iter(sequences),
-        predictions_path=predictions_path,
+        prediction_output=PredictionOutputConfig(
+            predictions_path=predictions_path,
+            write_predictions=True,
+        ),
         logger=logger,
     )
 
@@ -508,6 +518,66 @@ def test_stream_predictions_uses_bulk_detector_interface(
     assert summary.test_sequence_count == len(predictions)
     assert [prediction["window_id"] for prediction in predictions] == [2, 3]
     assert [prediction["score"] for prediction in predictions] == [2.0, 3.0]
+
+
+def test_stream_predictions_does_not_write_predictions_by_default(
+    tmp_path: Path,
+) -> None:
+    """Prediction streaming should default to metrics-only evaluation.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the prediction stream.
+    """
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: str = "recording"
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del train_sequences, progress, logger
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            del sequence
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+    ]
+    predictions_path = tmp_path / "predictions.jsonl"
+    logger = logging.getLogger("tests.stream_predictions_default")
+
+    summary = stream_predictions(
+        detector=_RecordingDetector(),
+        sequence_factory=lambda: iter(sequences),
+        prediction_output=PredictionOutputConfig(
+            predictions_path=predictions_path,
+            write_predictions=False,
+        ),
+        logger=logger,
+    )
+
+    assert summary.test_sequence_count == 1
+    assert not predictions_path.exists()
 
 
 @pytest.mark.allow_no_new_coverage

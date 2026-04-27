@@ -72,8 +72,12 @@ def test_run_experiment_with_river_multinomial_nb_writes_predictions(
     shutil.copy2(DATASET_FIXTURE_ROOT / "tiny_dataset_nb.toml", dataset_config)
     shutil.copy2(FIXTURE_ROOT / "river.toml", model_config)
 
-    [run_dir] = run_experiment(sweep_config)
-    [rerun_dir] = run_experiment(sweep_config, force=True)
+    [run_dir] = run_experiment(sweep_config, write_predictions=True)
+    [rerun_dir] = run_experiment(
+        sweep_config,
+        force=True,
+        write_predictions=True,
+    )
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(

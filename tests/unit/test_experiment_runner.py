@@ -80,12 +80,16 @@ def test_main_does_not_print_the_run_directory(
             run directory.
     """
     expected_config = object()
-    seen: list[tuple[object, bool]] = []
+    seen: list[tuple[object, bool, bool]] = []
 
     class _Parser:
         @staticmethod
         def parse_args() -> Namespace:
-            return Namespace(config=expected_config, force=True)
+            return Namespace(
+                config=expected_config,
+                force=True,
+                write_predictions=False,
+            )
 
     def _build_arg_parser() -> _Parser:
         return _Parser()
@@ -94,15 +98,16 @@ def test_main_does_not_print_the_run_directory(
     monkeypatch.setattr(
         runner,
         "run_experiment",
-        lambda config_path, *, force: (
-            seen.append((config_path, force)) or tmp_path / "result-dir"
+        lambda config_path, *, force, write_predictions: (
+            seen.append((config_path, force, write_predictions))
+            or tmp_path / "result-dir"
         ),
     )
 
     exit_code = runner.main()
 
     assert exit_code == 0
-    assert seen == [(expected_config, True)]
+    assert seen == [(expected_config, True, False)]
     assert not capsys.readouterr().out
 
 
@@ -121,7 +126,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
     ]
-    submitted_payloads: list[tuple[Path, int, bool]] = []
+    submitted_payloads: list[tuple[Path, int, bool, bool]] = []
 
     class _FakeExecutor:
         def __init__(self, *, max_workers: int) -> None:
@@ -141,7 +146,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool]],
+            payloads: list[tuple[Path, int, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == len(bundles)
             del func
@@ -154,6 +159,6 @@ def test_run_experiment_submits_plain_worker_payloads(
 
     assert result == [tmp_path / "result-0", tmp_path / "result-1"]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True),
-        (tmp_path / "sweep.toml", 1, True),
+        (tmp_path / "sweep.toml", 0, True, False),
+        (tmp_path / "sweep.toml", 1, True, False),
     ]

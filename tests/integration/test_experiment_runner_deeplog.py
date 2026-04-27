@@ -188,7 +188,7 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
     """
     sweep_config = _prepare_run_tree(tmp_path)
 
-    [run_dir] = run_experiment(sweep_config)
+    [run_dir] = run_experiment(sweep_config, write_predictions=True)
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(

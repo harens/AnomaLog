@@ -24,6 +24,7 @@ from experiments import ConfigError
 from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
+from experiments.models.evaluate import PredictionOutputConfig
 from experiments.results import (
     build_sequence_split_summary,
     prepare_result_paths,
@@ -63,13 +64,20 @@ def build_prefect_standard_formatter() -> PrefectFormatter:
     )
 
 
-def run_experiment(config_path: Path, *, force: bool = False) -> list[Path]:
+def run_experiment(
+    config_path: Path,
+    *,
+    force: bool = False,
+    write_predictions: bool = False,
+) -> list[Path]:
     """Run one sweep config and return all concrete result directories.
 
     Args:
         config_path (Path): Sweep config TOML path to execute.
         force (bool): Whether to replace an existing deterministic result
             directories.
+        write_predictions (bool): Whether to persist `predictions.jsonl` for
+            each concrete run.
 
     Returns:
         list[Path]: Deterministic run directories containing the written
@@ -87,12 +95,22 @@ def run_experiment(config_path: Path, *, force: bool = False) -> list[Path]:
         bundle_count=len(bundles),
     )
     if max_workers == 1 or len(bundles) == 1:
-        return [_run_bundle(bundle, force=force) for bundle in bundles]
+        return [
+            _run_bundle(
+                bundle,
+                force=force,
+                write_predictions=write_predictions,
+            )
+            for bundle in bundles
+        ]
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         return list(
             executor.map(
                 _run_bundle_from_sweep_payload,
-                [(config_path, index, force) for index in range(len(bundles))],
+                [
+                    (config_path, index, force, write_predictions)
+                    for index in range(len(bundles))
+                ],
             ),
         )
 
@@ -111,20 +129,27 @@ def _resolve_max_workers(
 
 
 def _run_bundle_from_sweep_payload(
-    payload: tuple[Path, int, bool],
+    payload: tuple[Path, int, bool, bool],
 ) -> Path:
-    config_path, index, force = payload
+    config_path, index, force, write_predictions = payload
     bundle = load_experiment_bundles(config_path)[index]
-    return _run_bundle(bundle, force=force)
+    return _run_bundle(bundle, force=force, write_predictions=write_predictions)
 
 
-def _run_bundle(bundle: ExperimentBundle, *, force: bool = False) -> Path:
+def _run_bundle(
+    bundle: ExperimentBundle,
+    *,
+    force: bool = False,
+    write_predictions: bool = False,
+) -> Path:
     """Execute one concrete run derived from a sweep.
 
     Args:
         bundle (ExperimentBundle): Concrete run bundle to execute.
         force (bool): Whether to replace an existing deterministic result
             directory.
+        write_predictions (bool): Whether to persist `predictions.jsonl` for
+            the concrete run.
 
     Returns:
         Path: Deterministic run directory containing the written artefacts.
@@ -164,7 +189,10 @@ def _run_bundle(bundle: ExperimentBundle, *, force: bool = False) -> Path:
         model_summary = run_model(
             sequence_factory=lambda: iter(sequences),
             config=bundle.model,
-            predictions_path=result_paths.predictions_path,
+            prediction_output=PredictionOutputConfig(
+                predictions_path=result_paths.predictions_path,
+                write_predictions=write_predictions,
+            ),
             logger=logger,
             progress_plan=RunProgressPlan(
                 train=(
@@ -236,6 +264,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replace an existing deterministic result directory.",
     )
+    parser.add_argument(
+        "--write-predictions",
+        action="store_true",
+        help="Write predictions.jsonl for each run.",
+    )
     return parser
 
 
@@ -248,7 +281,11 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     try:
-        run_experiment(args.config, force=args.force)
+        run_experiment(
+            args.config,
+            force=args.force,
+            write_predictions=args.write_predictions,
+        )
     except (ConfigError, FileExistsError, ValueError) as exc:
         parser.exit(status=2, message=f"{exc}\n")
     return 0

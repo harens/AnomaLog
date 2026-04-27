@@ -64,6 +64,8 @@ uv run python -m experiments.runners.run_experiment \
 
 Add `--force` to replace the deterministic output directories for the same
 concrete sweep variants.
+Add `--write-predictions` if you want each run to persist `predictions.jsonl`
+alongside the other result artefacts.
 
 ## Caching Strategy
 
@@ -107,11 +109,16 @@ Each concrete run writes a deterministic directory under `experiments/results/<c
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
 - `metrics.json`: detector metrics
-- `predictions.jsonl`: test-sequence outputs, including detector scores and any emitted key phrases
+- `predictions.jsonl`: optional test-sequence outputs, including detector
+  scores and any emitted key phrases when `--write-predictions` is supplied
 - `environment.json`: Python, platform, package, and git metadata
 - `run.log`: run-time logging from dataset build through detector evaluation
 
-Predictions are written as a stream to `predictions.jsonl`, and detector evaluation rereads the sequence builder instead of materialising the full sequence list in memory. Train sequences are still consumed for fitting and run summaries, but they are no longer scored or written to the prediction stream.
+Predictions are still scored from a streaming replay of the sequence builder
+instead of materialising the full sequence list in memory. Train sequences are
+still consumed for fitting and run summaries, but they are not scored or
+written to the prediction stream unless you explicitly opt in with
+`--write-predictions`.
 
 ## Adding More Experiments
 
