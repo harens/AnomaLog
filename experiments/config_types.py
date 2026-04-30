@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeVar
 
 import msgspec
 
@@ -20,7 +20,7 @@ from experiments import ConfigError
 if TYPE_CHECKING:
     from anomalog.labels import AnomalyLabelReader
     from anomalog.parsers.template import TemplatedDataset
-    from anomalog.sequences import SequenceBuilder
+    from anomalog.sequences import EntitySequenceBuilder, SequenceBuilder
     from experiments.models import ExperimentModelConfig
 
 
@@ -289,8 +289,10 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
 
 SweepOverrideValues = Annotated[list[Any], msgspec.Meta(min_length=1)]
 TrainFraction = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+TestFraction = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
 PositiveWorkerCount = Annotated[int, msgspec.Meta(gt=0)]
 WorkerCount = Literal["auto"] | PositiveWorkerCount
+TSequenceBuilder = TypeVar("TSequenceBuilder", bound="SequenceBuilder")
 
 
 class SequenceConfigBase(
@@ -305,12 +307,29 @@ class SequenceConfigBase(
     Attributes:
         step (int | None): Grouping-specific step between windows. `None`
             delegates to the grouping mode's default.
-        train_fraction (TrainFraction): Requested training fraction for
-            generated sequences.
+        train_fraction (TrainFraction): Requested training fraction for the
+            grouping-specific eligible train pool.
+        test_fraction (TestFraction): Fixed test suffix fraction.
     """
 
     step: int | None = None
     train_fraction: TrainFraction = 0.8
+    test_fraction: TestFraction = 0.2
+
+    def __post_init__(self) -> None:
+        """Validate cross-field split constraints.
+
+        Raises:
+            ConfigError: If the requested test suffix is invalid or leaves no
+                room for the train prefix.
+        """
+        if self.train_fraction + self.test_fraction > 1.0:
+            msg = (
+                "train_fraction and test_fraction must sum to no more than 1.0, "
+                f"got train_fraction={self.train_fraction} and "
+                f"test_fraction={self.test_fraction}."
+            )
+            raise ConfigError(msg)
 
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured sequence view from a templated dataset.
@@ -342,17 +361,24 @@ class SequenceConfigBase(
         msg = f"{cls_name} must implement _group_sequences()."
         raise NotImplementedError(msg)
 
-    def _apply_split_settings(self, sequences: SequenceBuilder) -> SequenceBuilder:
+    def _apply_split_settings(
+        self,
+        sequences: TSequenceBuilder,
+    ) -> TSequenceBuilder:
         """Build a configured sequence view from a templated dataset.
 
         Args:
-            sequences (SequenceBuilder): Grouped sequence builder to apply shared
-                split settings to.
+            sequences (TSequenceBuilder): Grouped sequence builder to apply
+                shared split settings to.
 
         Returns:
-            SequenceBuilder: Sequence builder with shared split settings applied.
+            TSequenceBuilder: Grouped sequence builder with shared split
+                settings applied.
         """
-        return sequences.with_train_fraction(self.train_fraction)
+        sequences = sequences.with_train_fraction(self.train_fraction)
+        if self.test_fraction is not None:
+            sequences = sequences.with_test_fraction(self.test_fraction)
+        return sequences
 
 
 class EntitySequenceConfig(
@@ -379,19 +405,22 @@ class EntitySequenceConfig(
         Returns:
             SequenceBuilder: Entity-grouped builder with split settings applied.
         """
-        sequences = templated.group_by_entity().with_train_fraction(self.train_fraction)
+        sequences = self._apply_split_settings(self._group_sequences(templated))
         if self.train_on_normal_entities_only:
             return sequences.with_train_on_normal_entities_only()
         return sequences
 
-    def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
+    def _group_sequences(
+        self,
+        templated: TemplatedDataset,
+    ) -> EntitySequenceBuilder:
         """Apply entity grouping.
 
         Args:
             templated (TemplatedDataset): Built templated dataset to group by entity.
 
         Returns:
-            SequenceBuilder: Entity-grouped sequence builder.
+            EntitySequenceBuilder: Entity-grouped sequence builder.
         """
         del self
         return templated.group_by_entity()

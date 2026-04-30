@@ -239,6 +239,7 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
                 "\n[sequence]\n"
                 'grouping = "entity"\n'
                 "train_fraction = 0.2\n"
+                "test_fraction = 0.5\n"
                 "train_on_normal_entities_only = true\n"
             ),
         ),
@@ -268,13 +269,17 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
         "bgl_deeplog_train_fraction_0p4",
     ]
     assert {
-        (bundle.model.name, bundle.dataset.sequence.train_fraction)
+        (
+            bundle.model.name,
+            bundle.dataset.sequence.train_fraction,
+            bundle.dataset.sequence.test_fraction,
+        )
         for bundle in bundles
     } == {
-        ("template_frequency_default", 0.2),
-        ("template_frequency_default", 0.4),
-        ("deeplog_default", 0.2),
-        ("deeplog_default", 0.4),
+        ("template_frequency_default", 0.2, 0.5),
+        ("template_frequency_default", 0.4, 0.5),
+        ("deeplog_default", 0.2, 0.5),
+        ("deeplog_default", 0.4, 0.5),
     }
 
 

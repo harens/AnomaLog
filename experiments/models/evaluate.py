@@ -56,9 +56,12 @@ class RunMetrics:
     """Accumulate split counts and classification metrics while streaming.
 
     Attributes:
-        sequence_count (int): Total scored sequences across all splits.
+        sequence_count (int): Total processed sequences across train, ignored,
+            and test splits.
         train_sequence_count (int): Number of train-split sequences seen.
         test_sequence_count (int): Number of test-split sequences seen.
+        ignored_sequence_count (int): Number of sequences withheld from the
+            current training prefix.
         tp (int): True positives on the test split.
         tn (int): True negatives on the test split.
         fp (int): False positives on the test split.
@@ -66,11 +69,14 @@ class RunMetrics:
         test_score_sum (float): Running sum of test-split anomaly scores.
         train_label_counts (dict[int, int]): Train label histogram.
         test_label_counts (dict[int, int]): Test label histogram.
+        ignored_label_counts (dict[int, int]): Label histogram for withheld
+            sequences.
     """
 
     sequence_count: int = 0
     train_sequence_count: int = 0
     test_sequence_count: int = 0
+    ignored_sequence_count: int = 0
     tp: int = 0
     tn: int = 0
     fp: int = 0
@@ -78,6 +84,7 @@ class RunMetrics:
     test_score_sum: float = 0.0
     train_label_counts: dict[int, int] = field(default_factory=dict)
     test_label_counts: dict[int, int] = field(default_factory=dict)
+    ignored_label_counts: dict[int, int] = field(default_factory=dict)
 
     def record_train(
         self,
@@ -93,6 +100,19 @@ class RunMetrics:
         self.train_sequence_count += 1
         self.train_label_counts[sequence.label] = (
             self.train_label_counts.get(sequence.label, 0) + 1
+        )
+
+    def record_ignored(self, sequence: TemplateSequence) -> None:
+        """Record one ignored sequence that is withheld from both stages.
+
+        Args:
+            sequence (TemplateSequence): Sequence that remains outside the
+                current train prefix and fixed test suffix.
+        """
+        self.sequence_count += 1
+        self.ignored_sequence_count += 1
+        self.ignored_label_counts[sequence.label] = (
+            self.ignored_label_counts.get(sequence.label, 0) + 1
         )
 
     def record_test(
@@ -124,11 +144,12 @@ class RunMetrics:
         else:
             self.fn += 1
 
-    def metrics(self) -> dict[str, int | float]:
+    def metrics(self) -> dict[str, int | float | dict[int, int]]:
         """Return finalised run metrics.
 
         Returns:
-            dict[str, int | float]: Aggregate classification and split metrics.
+            dict[str, int | float | dict[int, int]]: Aggregate classification
+                and split metrics.
         """
         test_count = self.test_sequence_count
         accuracy = (self.tp + self.tn) / test_count if test_count else 0.0
@@ -140,10 +161,12 @@ class RunMetrics:
             else 0.0
         )
         mean_test_score = self.test_score_sum / test_count if test_count else 0.0
-        metrics: dict[str, int | float] = {
+        metrics: dict[str, int | float | dict[int, int]] = {
             "sequence_count": self.sequence_count,
             "train_sequence_count": self.train_sequence_count,
             "test_sequence_count": self.test_sequence_count,
+            "ignored_sequence_count": self.ignored_sequence_count,
+            "ignored_label_counts": dict(self.ignored_label_counts),
             "tp": self.tp,
             "tn": self.tn,
             "fp": self.fp,
@@ -166,8 +189,10 @@ class RunMetrics:
             sequence_count=self.sequence_count,
             train_sequence_count=self.train_sequence_count,
             test_sequence_count=self.test_sequence_count,
+            ignored_sequence_count=self.ignored_sequence_count,
             train_label_counts=dict(self.train_label_counts),
             test_label_counts=dict(self.test_label_counts),
+            ignored_label_counts=dict(self.ignored_label_counts),
         )
 
 
@@ -365,5 +390,8 @@ def _iter_test_sequences(
     for sequence in sequence_factory():
         if sequence.split_label is SplitLabel.TRAIN:
             accumulator.record_train(sequence)
+            continue
+        if sequence.split_label is SplitLabel.IGNORED:
+            accumulator.record_ignored(sequence)
             continue
         yield sequence

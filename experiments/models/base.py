@@ -280,6 +280,11 @@ class SequenceSummary:
         test_sequence_count (int): Number of test-split sequences.
         train_label_counts (dict[int, int]): Train label histogram.
         test_label_counts (dict[int, int]): Test label histogram.
+        ignored_label_counts (dict[int, int]): Label histogram for sequences
+            withheld from the current train prefix.
+        ignored_sequence_count (int): Number of sequences withheld from the
+            current train prefix between the train pool and the fixed test
+            suffix.
     """
 
     sequence_count: int
@@ -287,9 +292,11 @@ class SequenceSummary:
     test_sequence_count: int
     train_label_counts: dict[int, int]
     test_label_counts: dict[int, int]
+    ignored_label_counts: dict[int, int] = field(default_factory=dict)
+    ignored_sequence_count: int = 0
 
 
-class ModelManifest(msgspec.Struct, frozen=True):
+class ModelManifest(msgspec.Struct, frozen=True, kw_only=True):
     """Serialisable manifest for one detector run.
 
     Attributes:
@@ -298,6 +305,8 @@ class ModelManifest(msgspec.Struct, frozen=True):
         test_sequence_count (int): Number of test-split sequences.
         train_label_counts (dict[int, int]): Train label histogram.
         test_label_counts (dict[int, int]): Test label histogram.
+        ignored_sequence_count (int): Number of sequences withheld from the
+            current training prefix.
     """
 
     detector: str
@@ -305,6 +314,7 @@ class ModelManifest(msgspec.Struct, frozen=True):
     test_sequence_count: int
     train_label_counts: dict[int, int]
     test_label_counts: dict[int, int]
+    ignored_sequence_count: int = 0
 
     @classmethod
     def from_sequence_summary(
@@ -330,6 +340,7 @@ class ModelManifest(msgspec.Struct, frozen=True):
             test_sequence_count=sequence_summary.test_sequence_count,
             train_label_counts=sequence_summary.train_label_counts,
             test_label_counts=sequence_summary.test_label_counts,
+            ignored_sequence_count=sequence_summary.ignored_sequence_count,
             **detector_fields,
         )
 
@@ -339,12 +350,13 @@ class ModelRunSummary:
     """Detector outputs and run summaries.
 
     Attributes:
-        metrics (dict[str, int | float]): Aggregate run metrics.
+        metrics (dict[str, int | float | dict[int, int]]): Aggregate run
+            metrics.
         model_manifest (ModelManifest): Detector manifest for the run.
         sequence_summary (SequenceSummary): Split and label counts for the run.
     """
 
-    metrics: dict[str, int | float]
+    metrics: dict[str, int | float | dict[int, int]]
     model_manifest: ModelManifest
     sequence_summary: SequenceSummary
 

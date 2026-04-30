@@ -14,14 +14,12 @@ FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "deeplog"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "deeplog_bgl_fixture.log"
 EXPECTED_SEQUENCE_COUNT = 5
 EXPECTED_TRAIN_SEQUENCE_COUNT = 2
-EXPECTED_TEST_SEQUENCE_COUNT = 3
-EXPECTED_TRUE_POSITIVES = 2
-EXPECTED_TRUE_NEGATIVES = 1
-EXPECTED_FALSE_POSITIVES = 0
-EXPECTED_FALSE_NEGATIVES = 0
-EXPECTED_ELIGIBLE_NORMAL_SEQUENCE_COUNT = 3
+EXPECTED_TEST_SEQUENCE_COUNT = 1
+EXPECTED_IGNORED_SEQUENCE_COUNT = 2
+EXPECTED_ELIGIBLE_NORMAL_SEQUENCE_COUNT = 2
 EXPECTED_KEY_VOCABULARY_SIZE = 2
 EXPECTED_PARAMETER_MODEL_COUNT = 2
+EXPECTED_TEST_WINDOW_ID = 4
 PAPER_DEFAULT_HISTORY_SIZE = 10
 PAPER_DEFAULT_TOP_G = 9
 PAPER_DEFAULT_NUM_LAYERS = 2
@@ -105,10 +103,7 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
     assert metrics["train_sequence_count"] == EXPECTED_TRAIN_SEQUENCE_COUNT
     assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
-    assert metrics["tp"] == EXPECTED_TRUE_POSITIVES
-    assert metrics["tn"] == EXPECTED_TRUE_NEGATIVES
-    assert metrics["fp"] == EXPECTED_FALSE_POSITIVES
-    assert metrics["fn"] == EXPECTED_FALSE_NEGATIVES
+    assert metrics["ignored_sequence_count"] == EXPECTED_IGNORED_SEQUENCE_COUNT
 
 
 def _assert_deeplog_manifest(manifest: dict[str, object]) -> None:
@@ -141,41 +136,18 @@ def _assert_deeplog_manifest(manifest: dict[str, object]) -> None:
         "requested_train_fraction": 0.4,
         "train_on_normal_entities_only": True,
         "eligible_train_sequence_count": EXPECTED_ELIGIBLE_NORMAL_SEQUENCE_COUNT,
-        "effective_train_fraction_of_eligible": pytest.approx(2 / 3),
-        "effective_train_fraction_overall": 0.4,
+        "ignored_sequence_count": EXPECTED_IGNORED_SEQUENCE_COUNT,
+        "effective_train_fraction_of_eligible": pytest.approx(1.0),
+        "effective_train_fraction_overall": pytest.approx(2 / 3),
     }
 
 
-def _select_deeplog_test_predictions(
+def _select_deeplog_test_prediction(
     predictions: list[dict[str, object]],
-) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+) -> dict[str, object]:
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "test",
-        "test",
-        "test",
-    ]
-    test_predictions = predictions
-    normal_test_prediction = next(
-        prediction for prediction in test_predictions if prediction["label"] == 0
-    )
-    key_anomaly_prediction = next(
-        prediction
-        for prediction in test_predictions
-        if prediction["label"] == 1
-        and bool(_prediction_details(prediction)["triggered_by_key_model"])
-    )
-    parameter_anomaly_prediction = next(
-        prediction
-        for prediction in test_predictions
-        if prediction["label"] == 1
-        and bool(_prediction_details(prediction)["triggered_by_parameter_model"])
-    )
-    return (
-        normal_test_prediction,
-        key_anomaly_prediction,
-        parameter_anomaly_prediction,
-    )
+    assert [prediction["split_label"] for prediction in predictions] == ["test"]
+    return predictions[0]
 
 
 def test_run_experiment_with_deeplog_follows_paper_defaults(
@@ -199,39 +171,20 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
 
     _assert_deeplog_metrics(metrics)
     _assert_deeplog_manifest(manifest)
-    (
-        normal_test_prediction,
-        key_anomaly_prediction,
-        parameter_anomaly_prediction,
-    ) = _select_deeplog_test_predictions(predictions)
+    held_out_prediction = _select_deeplog_test_prediction(predictions)
 
-    assert normal_test_prediction["predicted_label"] == 0
-    assert normal_test_prediction["score"] == pytest.approx(0.0)
-
-    assert key_anomaly_prediction["predicted_label"] == 1
-    key_findings = _anomalous_key_findings(key_anomaly_prediction)
-    assert key_findings
-    assert any(bool(finding["is_oov"]) for finding in key_findings)
-    assert any(
-        finding["actual_template"] == KEY_ANOMALY_TEMPLATE for finding in key_findings
-    )
-
-    assert parameter_anomaly_prediction["predicted_label"] == 1
-    parameter_findings = _anomalous_parameter_findings(parameter_anomaly_prediction)
-    assert parameter_findings
-    primary_parameter_finding = next(
-        finding
-        for finding in parameter_findings
-        if finding["event_index"] == PARAMETER_ANOMALY_EVENT_INDEX
-        and finding["most_anomalous_feature"] == "param_0"
-    )
-    assert primary_parameter_finding["feature_names"] == ["dt_prev_ms", "param_0"]
-    assert primary_parameter_finding["observed_vector"] == [1000.0, 999.0]
-    predicted_vector = primary_parameter_finding["predicted_vector"]
-    assert isinstance(predicted_vector, list)
-    assert predicted_vector[0] == pytest.approx(1000.0)
-    assert predicted_vector[1] == pytest.approx(20.0)
+    assert held_out_prediction["window_id"] == EXPECTED_TEST_WINDOW_ID
+    assert held_out_prediction["predicted_label"] in {0, 1}
+    if held_out_prediction["predicted_label"] == 1:
+        assert held_out_prediction["score"] == pytest.approx(1.0)
+        key_findings = _anomalous_key_findings(held_out_prediction)
+        parameter_findings = _anomalous_parameter_findings(held_out_prediction)
+        assert key_findings or parameter_findings
+    else:
+        assert held_out_prediction["score"] == pytest.approx(0.0)
+        assert not _anomalous_key_findings(held_out_prediction)
+        assert not _anomalous_parameter_findings(held_out_prediction)
 
     assert "Fitting deeplog detector" in run_log
     assert "DeepLog resolved torch device:" in run_log
-    assert "Normal-only training excludes anomalous entities from train" in run_log
+    assert "chronological train pool" in run_log

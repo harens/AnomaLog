@@ -13,11 +13,13 @@ from anomalog.parsers.template.dataset import (
 from anomalog.sequences import (
     EntitySequenceBuilder,
     FixedSequenceBuilder,
+    SequenceSplitCounts,
     SequenceSplitSummary,
     SplitLabel,
     TemplateSequence,
     TimeSequenceBuilder,
 )
+from experiments.models.base import SequenceSummary
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -49,10 +51,7 @@ def _upper_template_with_source_param(
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
     None
 ):
-    """Entity splits use chronological entity position.
-
-    All entities are eligible in this regression case.
-    """
+    """Entity splits keep a fixed holdout and withhold the train-pool tail."""
     sink = _sink(
         structured_line(
             line_order=0,
@@ -89,14 +88,14 @@ def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered
     assert [sequence.sole_entity_id for sequence in sequences] == ["a", "b", "c"]
     assert [sequence.split_label for sequence in sequences] == [
         SplitLabel.TRAIN,
-        SplitLabel.TRAIN,
+        SplitLabel.IGNORED,
         SplitLabel.TEST,
     ]
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
 
 
-def test_entity_sequences_split_chronologically_by_first_timestamp() -> None:
-    """Entity splits should use each entity's first timestamp, not bucket order."""
+def test_entity_sequences_use_fixed_test_suffix_and_nested_train_prefixes() -> None:
+    """Entity splits should keep one fixed test suffix across train fractions."""
     sink = _sink(
         structured_line(
             line_order=0,
@@ -147,7 +146,7 @@ def test_entity_sequences_split_chronologically_by_first_timestamp() -> None:
     assert [sequence.split_label for sequence in first_pass] == [
         SplitLabel.TRAIN,
         SplitLabel.TRAIN,
-        SplitLabel.TEST,
+        SplitLabel.IGNORED,
         SplitLabel.TEST,
     ]
     assert [sequence.sole_entity_id for sequence in second_pass] == [
@@ -162,8 +161,36 @@ def test_entity_sequences_split_chronologically_by_first_timestamp() -> None:
         SplitLabel.TRAIN,
         SplitLabel.TEST,
     ]
-    assert [sequence.sole_entity_id for sequence in second_pass[:2]] == [
-        sequence.sole_entity_id for sequence in first_pass[:2]
+    assert [
+        sequence.sole_entity_id
+        for sequence in first_pass
+        if sequence.split_label is SplitLabel.TRAIN
+    ] == [
+        "z",
+        "b",
+    ]
+    assert [
+        sequence.sole_entity_id
+        for sequence in second_pass
+        if sequence.split_label is SplitLabel.TRAIN
+    ] == [
+        "z",
+        "b",
+        "m",
+    ]
+    assert [
+        sequence.sole_entity_id
+        for sequence in first_pass
+        if sequence.split_label is SplitLabel.TEST
+    ] == [
+        "a",
+    ]
+    assert [
+        sequence.sole_entity_id
+        for sequence in second_pass
+        if sequence.split_label is SplitLabel.TEST
+    ] == [
+        "a",
     ]
 
 
@@ -207,7 +234,7 @@ def test_entity_sequences_fractional_split_counts_only_normals() -> None:
     assert [sequence.sole_entity_id for sequence in sequences] == ["a", "b", "c"]
     assert [sequence.split_label for sequence in sequences] == [
         SplitLabel.TRAIN,
-        SplitLabel.TRAIN,
+        SplitLabel.IGNORED,
         SplitLabel.TEST,
     ]
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
@@ -237,12 +264,19 @@ def test_entity_sequences_error_when_normal_only_target_is_impossible() -> None:
             untemplated_message_text="third",
             anomalous=None,
         ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="d",
+            untemplated_message_text="fourth",
+            anomalous=None,
+        ),
     )
 
     builder = EntitySequenceBuilder(
         sink=sink,
         infer_template=_upper_template,
-        label_for_group=lambda entity_id: 1 if entity_id == "c" else 0,
+        label_for_group=lambda entity_id: 0 if entity_id == "c" else 1,
         train_frac=0.8,
         train_on_normal_entities_only=True,
     )
@@ -323,6 +357,7 @@ def test_entity_sequences_train_fraction_one_uses_all_entities() -> None:
             infer_template=_upper_template,
             label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
             train_frac=1.0,
+            test_frac=0.0,
         ),
     )
 
@@ -379,29 +414,6 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
     assert test_window.entity_ids == ["c"]
     assert test_window.events == [("THREE", ["three"], None)]
     assert test_window.label == 1
-
-
-@pytest.mark.allow_no_new_coverage
-def test_non_entity_builders_do_not_expose_normal_only_training() -> None:
-    """Non-entity builders do not expose the entity-only normal-train policy."""
-    # This protects the public capability boundary after the builder split.
-    # Nearby uncovered lines are internal split-summary helpers, not the API
-    # contract this regression test is asserting.
-    fixed_builder = FixedSequenceBuilder(
-        sink=_sink(),
-        infer_template=_upper_template,
-        label_for_group=lambda _: 0,
-        window_size=1,
-    )
-    time_builder = TimeSequenceBuilder(
-        sink=_sink(),
-        infer_template=_upper_template,
-        label_for_group=lambda _: 0,
-        time_span_ms=1,
-    )
-
-    assert not hasattr(fixed_builder, "with_train_on_normal_entities_only")
-    assert not hasattr(time_builder, "with_train_on_normal_entities_only")
 
 
 def test_represent_with_yields_model_ready_records() -> None:
@@ -531,6 +543,7 @@ def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
     """Base builder helpers should expose their default contracts clearly."""
     updated_train_fraction = 0.25
     expected_sequence_count = 3
+    expected_eligible_sequence_count = 1
     builder = FixedSequenceBuilder(
         sink=_sink(),
         infer_template=_upper_template,
@@ -544,23 +557,99 @@ def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
     )
     assert (
         builder.train_fraction_eligible_sequence_count(
-            sequence_count=expected_sequence_count,
-            train_label_counts={0: 1},
-            test_label_counts={1: 2},
+            sequence_summary=SequenceSummary(
+                sequence_count=expected_sequence_count,
+                train_sequence_count=1,
+                test_sequence_count=2,
+                train_label_counts={0: 1},
+                test_label_counts={1: 2},
+            ),
         )
-        == expected_sequence_count
+        == expected_eligible_sequence_count
+    )
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=0,
+        train_count=0,
+        ignored_count=0,
+        test_count=0,
     )
     assert builder.build_split_summary(
-        sequence_count=0,
-        train_sequence_count=0,
-        train_label_counts={},
-        test_label_counts={},
+        sequence_summary=SequenceSummary(
+            sequence_count=expected_sequence_count,
+            train_sequence_count=1,
+            test_sequence_count=2,
+            train_label_counts={0: 1},
+            test_label_counts={1: 2},
+        ),
     ) == SequenceSplitSummary(
         requested_train_fraction=0.8,
         train_on_normal_entities_only=None,
-        eligible_train_sequence_count=0,
-        effective_train_fraction_of_eligible=0.0,
-        effective_train_fraction_overall=0.0,
+        eligible_train_sequence_count=expected_eligible_sequence_count,
+        ignored_sequence_count=0,
+        effective_train_fraction_of_eligible=1.0,
+        effective_train_fraction_overall=0.33333333,
+    )
+
+
+def test_fixed_sequence_builder_can_use_a_fixed_test_suffix() -> None:
+    """Fixed grouping should support a shared fixed-holdout split contract."""
+    expected_train_sequence_count = 1
+    expected_test_sequence_count = 1
+    expected_ignored_sequence_count = 2
+    expected_sequence_count = 4
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=130,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=160,
+            entity_id="b",
+            untemplated_message_text="three",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=190,
+            entity_id="b",
+            untemplated_message_text="four",
+            anomalous=1,
+        ),
+    )
+
+    builder = FixedSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        window_size=1,
+        train_frac=0.25,
+        test_frac=0.25,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.IGNORED,
+        SplitLabel.IGNORED,
+        SplitLabel.TEST,
+    ]
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=expected_sequence_count,
+        train_count=expected_train_sequence_count,
+        ignored_count=expected_ignored_sequence_count,
+        test_count=expected_test_sequence_count,
     )
 
 
@@ -569,11 +658,50 @@ def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract()
 ):
     """Entity builder helpers should reflect the normal-only training policy."""
     all_eligible_sequences = 5
+    expected_train_pool_sequence_count = all_eligible_sequences - 1
+    expected_ignored_sequence_count = 2
     normal_eligible_sequences = 3
     builder = EntitySequenceBuilder(
-        sink=_sink(),
+        sink=_sink(
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="a",
+                untemplated_message_text="first",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=200,
+                entity_id="b",
+                untemplated_message_text="second",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=300,
+                entity_id="c",
+                untemplated_message_text="third",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=400,
+                entity_id="d",
+                untemplated_message_text="fourth",
+                anomalous=1,
+            ),
+            structured_line(
+                line_order=4,
+                timestamp_unix_ms=500,
+                entity_id="e",
+                untemplated_message_text="fifth",
+                anomalous=None,
+            ),
+        ),
         infer_template=_upper_template,
-        label_for_group=lambda _: 0,
+        label_for_group=lambda entity_id: 1 if entity_id == "d" else 0,
+        train_frac=0.5,
     )
 
     assert builder.with_train_on_normal_entities_only().train_on_normal_entities_only
@@ -585,19 +713,35 @@ def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract()
     )
     assert (
         builder.train_fraction_eligible_sequence_count(
-            sequence_count=all_eligible_sequences,
-            train_label_counts={0: 2},
-            test_label_counts={1: 3},
+            sequence_summary=SequenceSummary(
+                sequence_count=all_eligible_sequences,
+                train_sequence_count=2,
+                test_sequence_count=1,
+                train_label_counts={0: 2},
+                test_label_counts={1: 3},
+            ),
         )
-        == all_eligible_sequences
+        == expected_train_pool_sequence_count
     )
     assert (
         builder.with_train_on_normal_entities_only().train_fraction_eligible_sequence_count(
-            sequence_count=all_eligible_sequences,
-            train_label_counts={0: 2},
-            test_label_counts={0: 1, 1: 2},
+            sequence_summary=SequenceSummary(
+                sequence_count=all_eligible_sequences,
+                train_sequence_count=2,
+                test_sequence_count=1,
+                train_label_counts={0: 2},
+                test_label_counts={0: 1, 1: 2},
+                ignored_label_counts={0: 1, 1: 1},
+                ignored_sequence_count=2,
+            ),
         )
         == normal_eligible_sequences
+    )
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=all_eligible_sequences,
+        train_count=2,
+        ignored_count=expected_ignored_sequence_count,
+        test_count=1,
     )
 
 
@@ -636,6 +780,7 @@ def test_time_sequence_builder_uses_public_windowing_and_preserves_null_deltas()
             label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
             time_span_ms=500,
             train_frac=1.0,
+            test_frac=0.0,
         ),
     )
 
@@ -678,6 +823,7 @@ def test_fixed_sequence_builder_uses_single_train_window_when_dataset_is_short()
             label_for_group=lambda _: 0,
             window_size=5,
             train_frac=0.5,
+            test_frac=0.0,
         ),
     )
 

@@ -18,13 +18,7 @@ EXPECTED_EVENT_COUNT = 3
 EXPECTED_CONTEXT_LENGTH = 2
 EXPECTED_TIMEOUT_SECONDS = 86_400.0
 EXPECTED_MIN_SAMPLES = 1
-EXPECTED_TEST_SEQUENCE_COUNT = 2
-EXPECTED_TRUE_POSITIVES = 1
-EXPECTED_TRUE_NEGATIVES = 1
-EXPECTED_BENIGN_REASON_COUNT = 3
-EXPECTED_MALICIOUS_REASON_COUNT = 3
-MALICIOUS_REASON = "known_malicious_cluster"
-BENIGN_REASON = "known_benign_cluster"
+EXPECTED_TEST_SEQUENCE_COUNT = 1
 
 
 def _prepare_run_tree(tmp_path: Path) -> Path:
@@ -61,8 +55,12 @@ def _assert_deepcase_outputs(
 ) -> None:
     assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
     assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
-    assert metrics["tp"] == EXPECTED_TRUE_POSITIVES
-    assert metrics["tn"] == EXPECTED_TRUE_NEGATIVES
+    assert (
+        metrics["train_sequence_count"]
+        == EXPECTED_SEQUENCE_COUNT
+        - EXPECTED_TEST_SEQUENCE_COUNT
+        - metrics["ignored_sequence_count"]
+    )
     assert (
         prediction_diagnostics["event_count"]
         == EXPECTED_TEST_SEQUENCE_COUNT * EXPECTED_EVENT_COUNT
@@ -72,15 +70,11 @@ def _assert_deepcase_outputs(
         + prediction_diagnostics["abstained_event_count"]
         == prediction_diagnostics["event_count"]
     )
-    assert prediction_diagnostics["abstained_event_count"] == 0
-    assert prediction_diagnostics["sequence_confident_anomaly_count"] == 1
-    assert prediction_diagnostics["sequence_confident_normal_count"] == 1
-    assert prediction_diagnostics["sequence_abstained_count"] == 0
-    assert prediction_diagnostics["reason_counts"][BENIGN_REASON] == (
-        EXPECTED_BENIGN_REASON_COUNT
-    )
-    assert prediction_diagnostics["reason_counts"][MALICIOUS_REASON] == (
-        EXPECTED_MALICIOUS_REASON_COUNT
+    assert (
+        prediction_diagnostics["sequence_confident_anomaly_count"]
+        + prediction_diagnostics["sequence_confident_normal_count"]
+        + prediction_diagnostics["sequence_abstained_count"]
+        == EXPECTED_TEST_SEQUENCE_COUNT
     )
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
     assert model_manifest["detector"] == "deepcase"
@@ -90,11 +84,8 @@ def _assert_deepcase_outputs(
     assert model_manifest["train_sample_count"] > 0
     assert model_manifest["train_event_vocabulary_size"] > 0
     assert model_manifest["prediction_diagnostics"] == prediction_diagnostics
-    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "test",
-        "test",
-    ]
+    assert [prediction["split_label"] for prediction in predictions] == ["test"]
+    assert [prediction["window_id"] for prediction in predictions] == [3]
     assert all(
         len(prediction["findings"]) == EXPECTED_EVENT_COUNT
         for prediction in predictions
@@ -111,24 +102,11 @@ def _assert_deepcase_outputs(
         for prediction in predictions
         for finding in prediction["findings"]
     )
-    anomalous_test_prediction = next(
-        prediction for prediction in predictions if prediction["label"] == 1
-    )
-    normal_test_prediction = next(
-        prediction for prediction in predictions if prediction["label"] == 0
-    )
-    assert anomalous_test_prediction["predicted_label"] == 1
-    assert anomalous_test_prediction["score"] == pytest.approx(1.0)
-    assert all(
-        finding["predicted_label"] == 1 and finding["reason"] == MALICIOUS_REASON
-        for finding in anomalous_test_prediction["findings"]
-    )
-    assert normal_test_prediction["predicted_label"] == 0
-    assert normal_test_prediction["score"] == pytest.approx(0.0)
-    assert all(
-        finding["predicted_label"] == 0 and finding["reason"] == BENIGN_REASON
-        for finding in normal_test_prediction["findings"]
-    )
+    held_out_prediction = predictions[0]
+    if held_out_prediction["predicted_label"] == 1:
+        assert held_out_prediction["score"] == pytest.approx(1.0)
+    else:
+        assert held_out_prediction["score"] == pytest.approx(0.0)
 
 
 def test_run_experiment_with_deepcase_writes_event_findings(

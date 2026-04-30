@@ -226,7 +226,7 @@ def test_fit_detector_wraps_lazy_train_stream_with_known_total() -> None:
         ),
         logger=logger,
         train_progress_hint=TrainProgressHint(
-            total=sequences.train_sequence_count_hint(),
+            total=sequences.split_count_hint().train_count,
             unit=sequences.train_sequence_count_unit_hint(),
         ),
     )

@@ -209,6 +209,7 @@ def build_dataset_manifest(
         "sequence_split_counts": {
             "train": sequence_summary.train_sequence_count,
             "test": sequence_summary.test_sequence_count,
+            "ignored": sequence_summary.ignored_sequence_count,
         },
         "label_counts": {
             "train": sequence_summary.train_label_counts,
@@ -234,10 +235,7 @@ def build_sequence_split_summary(
         SequenceSplitSummary: Requested and effective split metrics.
     """
     return sequences.build_split_summary(
-        sequence_count=sequence_summary.sequence_count,
-        train_sequence_count=sequence_summary.train_sequence_count,
-        train_label_counts=sequence_summary.train_label_counts,
-        test_label_counts=sequence_summary.test_label_counts,
+        sequence_summary=sequence_summary,
     )
 
 

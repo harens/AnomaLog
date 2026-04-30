@@ -12,3 +12,4 @@ grouping = "fixed"
 window_size = 3
 step = 2
 train_fraction = 0.34
+test_fraction = 0.25

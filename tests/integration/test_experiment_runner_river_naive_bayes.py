@@ -13,8 +13,8 @@ FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "river"
 DATASET_FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "naive_bayes"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "tiny_bgl_happy_path.log"
 EXPECTED_SEQUENCE_COUNT = 4
-EXPECTED_TRAIN_SEQUENCE_COUNT = 3
-EXPECTED_TEST_SEQUENCE_COUNT = 1
+EXPECTED_TRAIN_SEQUENCE_COUNT = 2
+EXPECTED_TEST_SEQUENCE_COUNT = 2
 POSTERIOR_THRESHOLD = 0.4
 
 
@@ -89,7 +89,7 @@ def test_run_experiment_with_river_multinomial_nb_writes_predictions(
     test_predictions = [
         prediction for prediction in predictions if prediction["split_label"] == "test"
     ]
-    held_out_prediction = test_predictions[0]
+    held_out_prediction = test_predictions[-1]
 
     assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
     assert metrics["train_sequence_count"] == EXPECTED_TRAIN_SEQUENCE_COUNT
@@ -98,8 +98,11 @@ def test_run_experiment_with_river_multinomial_nb_writes_predictions(
     assert manifest["model_manifest"]["backend"] == "river"
     assert manifest["model_manifest"]["river_estimator"] == "naive_bayes.MultinomialNB"
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction["window_id"] for prediction in predictions] == [3]
-    assert [prediction["split_label"] for prediction in predictions] == ["test"]
+    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
+    assert [prediction["split_label"] for prediction in predictions] == [
+        "test",
+        "test",
+    ]
     assert held_out_prediction["label"] == 0
     assert held_out_prediction["predicted_label"] == 0
     assert held_out_prediction["score"] < POSTERIOR_THRESHOLD

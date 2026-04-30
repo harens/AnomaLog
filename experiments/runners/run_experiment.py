@@ -19,7 +19,6 @@ from prefect.logging.configuration import (
 from prefect.logging.formatters import PrefectFormatter
 
 from anomalog.io_utils import get_shared_console
-from anomalog.sequences import EntitySequenceBuilder
 from experiments import ConfigError
 from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
@@ -184,8 +183,13 @@ def _run_bundle(
         templated = dataset_spec.build()
         sequences = bundle.dataset.sequence.apply(templated)
         logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
-        train_sequence_count_hint = sequences.train_sequence_count_hint()
-        sequence_count_hint = sequences.sequence_count_hint()
+        split_counts_hint = sequences.split_count_hint()
+        train_sequence_count_hint = (
+            None if split_counts_hint is None else split_counts_hint.train_count
+        )
+        score_sequence_count_hint = (
+            None if split_counts_hint is None else split_counts_hint.test_count
+        )
         model_summary = run_model(
             sequence_factory=lambda: iter(sequences),
             config=bundle.model,
@@ -205,10 +209,8 @@ def _run_bundle(
                 ),
                 score=(
                     None
-                    if sequence_count_hint is None or train_sequence_count_hint is None
-                    else ProgressHint(
-                        total=sequence_count_hint - train_sequence_count_hint,
-                    )
+                    if score_sequence_count_hint is None
+                    else ProgressHint(total=score_sequence_count_hint)
                 ),
             ),
         )
@@ -216,16 +218,28 @@ def _run_bundle(
             sequences,
             sequence_summary=model_summary.sequence_summary,
         )
-        if isinstance(sequences, EntitySequenceBuilder) and (
-            sequences.train_on_normal_entities_only
-        ):
+        train_on_normal_entities_only = split_summary.train_on_normal_entities_only
+        if train_on_normal_entities_only is not None:
+            total_sequences = model_summary.sequence_summary.sequence_count
+            test_sequences = model_summary.sequence_summary.test_sequence_count
+            train_pool_sequences = total_sequences - test_sequences
+            logger.info(
+                "Fixed entity split: train_pool=%s, train=%s, ignored=%s, test=%s",
+                train_pool_sequences,
+                model_summary.sequence_summary.train_sequence_count,
+                split_summary.ignored_sequence_count,
+                test_sequences,
+            )
+        if train_on_normal_entities_only:
             logger.warning(
-                "Normal-only training excludes anomalous entities from train; "
-                "this run satisfied requested train_fraction=%.4f over the full "
-                "entity population (train=%s, eligible_normals=%s, total=%s)",
+                "Normal-only training excludes anomalous entities from the "
+                "chronological train pool; this run satisfied "
+                "requested train_fraction=%.4f within the eligible normal "
+                "subset (train=%s, eligible_normals=%s, train_pool=%s, total=%s)",
                 split_summary.requested_train_fraction,
                 model_summary.sequence_summary.train_sequence_count,
                 split_summary.eligible_train_sequence_count,
+                train_pool_sequences,
                 model_summary.sequence_summary.sequence_count,
             )
         logger.info(

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         LogTemplate,
         TemplatedDataset,
     )
+    from experiments.models.base import SequenceSummary
 
 
 class SplitLabel(str, Enum):
@@ -40,10 +41,13 @@ class SplitLabel(str, Enum):
     Attributes:
         TRAIN: Sequence belongs to the training split.
         TEST: Sequence belongs to the evaluation/test split.
+        IGNORED: Sequence belongs to the fixed train pool but is not used for
+            the current training prefix.
     """
 
     TRAIN = "train"
     TEST = "test"
+    IGNORED = "ignored"
 
 
 @dataclass(slots=True, frozen=True)
@@ -62,18 +66,23 @@ class SequenceSplitSummary:
             normal entities only. Only applicable to entity grouping; `None` otherwise.
         eligible_train_sequence_count (int): Number of sequences in the
             denominator for the effective train-fraction calculation. In
-            entity-grouped normal-only mode this includes eligible normal
-            sequences that remained in test because the requested train
-            fraction was smaller than the eligible pool.
+            entity-grouped mode this is the fixed chronological train pool, or
+            the normal-only subset of that pool when normal-only training is
+            enabled.
+        ignored_sequence_count (int): Number of sequences in the fixed train
+            pool that were withheld because the requested train prefix was
+            smaller than the pool.
         effective_train_fraction_of_eligible (float): Realised train fraction
             over the eligible set.
         effective_train_fraction_overall (float): Realised train fraction over
-            all generated sequences.
+            the scored subset of sequences, excluding the ignored middle
+            section between the train prefix and the fixed test suffix.
     """
 
     requested_train_fraction: float
     train_on_normal_entities_only: bool | None
     eligible_train_sequence_count: int
+    ignored_sequence_count: int
     effective_train_fraction_of_eligible: float
     effective_train_fraction_overall: float
 
@@ -86,6 +95,7 @@ class SequenceSplitSummary:
         results: dict[str, int | float | bool | str] = {
             "requested_train_fraction": self.requested_train_fraction,
             "eligible_train_sequence_count": self.eligible_train_sequence_count,
+            "ignored_sequence_count": self.ignored_sequence_count,
             "effective_train_fraction_of_eligible": (
                 self.effective_train_fraction_of_eligible
             ),
@@ -98,6 +108,23 @@ class SequenceSplitSummary:
             )
 
         return results
+
+
+@dataclass(slots=True, frozen=True)
+class SequenceSplitCounts:
+    """Exact split counts for a concrete sequence builder.
+
+    Attributes:
+        total_count (int): Total emitted sequence count.
+        train_count (int): Count assigned to the current train prefix.
+        ignored_count (int): Count withheld between train and test.
+        test_count (int): Count assigned to the fixed test suffix.
+    """
+
+    total_count: int
+    train_count: int
+    ignored_count: int
+    test_count: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -159,28 +186,88 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         label_for_group (Callable[[str], int | None]): Group-level anomaly label
             lookup by entity id.
         train_frac (float): Requested training fraction for the builder.
+        test_frac (float | None): Fixed test suffix fraction.
     """
 
     sink: StructuredSink
     infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
     train_frac: float = 0.8
+    test_frac: float | None = 0.2
+
+    def __post_init__(self) -> None:
+        """Validate the requested split fractions.
+
+        Raises:
+            ValueError: If the requested fractions are out of range or do not
+                leave room for the ignored middle band when a fixed test suffix
+                is configured.
+        """
+        if not 0.0 <= self.train_frac <= 1.0:
+            msg = (
+                f"train_frac must be between 0 and 1 inclusive, got {self.train_frac}."
+            )
+            raise ValueError(msg)
+        if self.test_frac is None:
+            return
+        if not 0.0 <= self.test_frac <= 1.0:
+            msg = f"test_frac must be between 0 and 1 inclusive, got {self.test_frac}."
+            raise ValueError(msg)
+        if self.train_frac + self.test_frac > 1.0:
+            msg = (
+                "train_frac and test_frac must sum to no more than 1.0, "
+                f"got train_frac={self.train_frac} and test_frac={self.test_frac}."
+            )
+            raise ValueError(msg)
+
+    def _split_counts(self, total_count: int) -> SequenceSplitCounts:
+        """Return train, ignored, and test counts for one chronological split.
+
+        Args:
+            total_count (int): Total emitted sequence count.
+
+        Returns:
+            SequenceSplitCounts: Exact split counts for the requested split
+                configuration.
+        """
+        if total_count <= 0:
+            return SequenceSplitCounts(
+                total_count=0,
+                train_count=0,
+                ignored_count=0,
+                test_count=0,
+            )
+        if self.test_frac is None:
+            train_count = min(total_count, math.ceil(self.train_frac * total_count))
+            return SequenceSplitCounts(
+                total_count=total_count,
+                train_count=train_count,
+                ignored_count=0,
+                test_count=total_count - train_count,
+            )
+        test_count = min(total_count, math.ceil(self.test_frac * total_count))
+        train_pool_count = total_count - test_count
+        train_count = min(
+            train_pool_count,
+            math.ceil(self.train_frac * train_pool_count),
+        )
+        ignored_count = train_pool_count - train_count
+        return SequenceSplitCounts(
+            total_count=total_count,
+            train_count=train_count,
+            ignored_count=ignored_count,
+            test_count=test_count,
+        )
 
     def train_fraction_eligible_sequence_count(
         self,
         *,
-        sequence_count: int,
-        train_label_counts: dict[int, int],
-        test_label_counts: dict[int, int],
+        sequence_summary: SequenceSummary,
     ) -> int:
         """Return the denominator for effective train-fraction accounting.
 
         Args:
-            sequence_count (int): Total number of generated sequences.
-            train_label_counts (dict[int, int]): Label counts assigned to the
-                train split.
-            test_label_counts (dict[int, int]): Label counts assigned to the
-                test split.
+            sequence_summary (SequenceSummary): Aggregate split and label counts.
 
         Returns:
             int: Count of sequences considered eligible when reporting the
@@ -188,9 +275,19 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 necessarily the number of sequences that were actually assigned
                 to train.
         """
+        if self.test_frac is None:
+            return sequence_summary.sequence_count
+        return sequence_summary.sequence_count - sequence_summary.test_sequence_count
+
+    def split_count_hint(self) -> SequenceSplitCounts | None:
+        """Return a cheap exact split-count summary when the builder knows it.
+
+        Returns:
+            SequenceSplitCounts | None: Exact split counts when cheaply
+                available, otherwise `None`.
+        """
         del self
-        del train_label_counts, test_label_counts
-        return sequence_count
+        return None
 
     def with_train_fraction(
         self,
@@ -199,19 +296,29 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """Return a copy with an updated train/test split fraction.
 
         Args:
-            train_frac (float): Requested fraction of eligible sequences to
-                assign to the train split.
+            train_frac (float): Requested fraction of the eligible train pool
+                to assign to the train prefix.
 
         Returns:
             Self: Copy with updated train/test split fraction.
-
-        Raises:
-            ValueError: If `train_frac` is not between 0 and 1 inclusive.
         """
-        if not 0.0 <= train_frac <= 1.0:
-            msg = f"train_frac must be between 0 and 1 inclusive, got {train_frac}."
-            raise ValueError(msg)
         return replace(self, train_frac=train_frac)
+
+    def with_test_fraction(
+        self,
+        test_frac: float | None,
+    ) -> Self:
+        """Return a copy with an updated fixed test suffix fraction.
+
+        Args:
+            test_frac (float | None): Fraction reserved for the fixed test
+                suffix, or `None` to fall back to the old prefix-only split
+                semantics.
+
+        Returns:
+            Self: Copy with updated fixed test fraction.
+        """
+        return replace(self, test_frac=test_frac)
 
     def represent_with(
         self,
@@ -228,34 +335,6 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 the generated sequences.
         """
         return SequenceRepresentationView(sequences=self, representation=representation)
-
-    def train_sequence_count_hint(self) -> int | None:
-        """Return a cheap exact train-sequence count when the builder knows it.
-
-        This is intended for progress reporting only. Builders that cannot know
-        the train split size without replaying the full sequence stream should
-        return ``None`` rather than an estimate.
-
-        Returns:
-            int | None: Exact train-sequence count when cheaply available,
-                otherwise ``None``.
-        """
-        del self
-        return None
-
-    def sequence_count_hint(self) -> int | None:
-        """Return a cheap exact total sequence count when the builder knows it.
-
-        This is intended for progress reporting only. Builders that cannot know
-        the full emitted sequence count without replaying the stream should
-        return ``None`` rather than an estimate.
-
-        Returns:
-            int | None: Exact total sequence count when cheaply available,
-                otherwise ``None``.
-        """
-        del self
-        return None
 
     def train_sequence_count_unit_hint(self) -> str | None:
         """Return a human-readable unit label for train-count progress.
@@ -294,34 +373,35 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
     def build_split_summary(
         self,
         *,
-        sequence_count: int,
-        train_sequence_count: int,
-        train_label_counts: dict[int, int],
-        test_label_counts: dict[int, int],
+        sequence_summary: SequenceSummary,
     ) -> SequenceSplitSummary:
         """Describe requested versus effective split semantics for one run.
 
         Args:
-            sequence_count (int): Total number of generated sequences.
-            train_sequence_count (int): Number of sequences assigned to train.
-            train_label_counts (dict[int, int]): Label counts in the train split.
-            test_label_counts (dict[int, int]): Label counts in the test split.
+            sequence_summary (SequenceSummary): Aggregate split and label counts.
 
         Returns:
             SequenceSplitSummary: Requested and effective split metrics.
         """
         eligible_train_sequence_count = self.train_fraction_eligible_sequence_count(
-            sequence_count=sequence_count,
-            train_label_counts=train_label_counts,
-            test_label_counts=test_label_counts,
+            sequence_summary=sequence_summary,
         )
         effective_train_fraction_of_eligible = (
-            train_sequence_count / eligible_train_sequence_count
+            sequence_summary.train_sequence_count / eligible_train_sequence_count
             if eligible_train_sequence_count
             else 0.0
         )
         effective_train_fraction_overall = (
-            train_sequence_count / sequence_count if sequence_count else 0.0
+            sequence_summary.train_sequence_count
+            / (
+                sequence_summary.train_sequence_count
+                + sequence_summary.test_sequence_count
+            )
+            if (
+                sequence_summary.train_sequence_count
+                + sequence_summary.test_sequence_count
+            )
+            else 0.0
         )
         return SequenceSplitSummary(
             requested_train_fraction=self.train_frac,
@@ -329,6 +409,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 self.split_summary_train_on_normal_entities_only()
             ),
             eligible_train_sequence_count=eligible_train_sequence_count,
+            ignored_sequence_count=sequence_summary.ignored_sequence_count,
             effective_train_fraction_of_eligible=round(
                 effective_train_fraction_of_eligible,
                 8,
@@ -565,9 +646,12 @@ class EntitySequenceBuilder(SequenceBuilder):
     Attributes:
         train_on_normal_entities_only (bool): Whether anomalous entities are
             excluded from the training split budget.
+        test_frac (float): Fixed chronological holdout fraction reserved for
+            the test suffix.
     """
 
     train_on_normal_entities_only: bool = False
+    test_frac: float = 0.2
 
     @classmethod
     def from_dataset(
@@ -604,57 +688,95 @@ class EntitySequenceBuilder(SequenceBuilder):
         """
         return replace(self, train_on_normal_entities_only=enabled)
 
+    def _entity_split_counts(
+        self,
+        *,
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[SequenceSplitCounts, int]:
+        """Return cached-free split counts for the fixed entity chronology.
+
+        Args:
+            label_for_group (Callable[[str], int | None]): Entity label lookup
+                used to determine whether a group is anomalous.
+
+        Returns:
+            tuple[SequenceSplitCounts, int]: Exact split counts and eligible
+                normal count within the train pool.
+        """
+        entity_counts = self.sink.count_entities_by_label(label_for_group)
+        total_entities = entity_counts.total_entities
+        test_count = math.ceil(self.test_frac * total_entities) if total_entities else 0
+        test_count = min(test_count, total_entities)
+        train_pool_count = total_entities - test_count
+        train_prefix_count = (
+            math.ceil(self.train_frac * train_pool_count) if train_pool_count else 0
+        )
+        train_prefix_count = min(train_prefix_count, train_pool_count)
+        normal_pool_count = train_pool_count
+        if self.train_on_normal_entities_only:
+            normal_pool_count = 0
+            for index, rows in enumerate(self.iter_grouped_rows()):
+                if index >= train_pool_count:
+                    break
+                entity_id = next(
+                    (row.entity_id for row in rows if row.entity_id is not None),
+                    None,
+                )
+                if entity_id is None:
+                    continue
+                if not is_anomalous_label(label_for_group(entity_id)):
+                    normal_pool_count += 1
+        counts = SequenceSplitCounts(
+            total_count=total_entities,
+            train_count=train_prefix_count,
+            ignored_count=train_pool_count - train_prefix_count,
+            test_count=test_count,
+        )
+        return counts, normal_pool_count
+
     @override
     def train_fraction_eligible_sequence_count(
         self,
         *,
-        sequence_count: int,
-        train_label_counts: dict[int, int],
-        test_label_counts: dict[int, int],
+        sequence_summary: SequenceSummary,
     ) -> int:
         """Return the denominator for effective train-fraction accounting.
 
         Args:
-            sequence_count (int): Total number of generated entity sequences.
-            train_label_counts (dict[int, int]): Label counts assigned to the
-                train split.
-            test_label_counts (dict[int, int]): Label counts assigned to the
-                test split.
+            sequence_summary (SequenceSummary): Aggregate split and label counts.
 
         Returns:
             int: Eligible entity-sequence count under the current policy. When
-                normal-only training is enabled, this includes normal entities
-                left in test because the requested train fraction did not
-                consume the full eligible pool.
+                normal-only training is enabled, this counts only normal
+                entities in the fixed train pool before the hold-out suffix.
         """
-        del sequence_count
         if not self.train_on_normal_entities_only:
-            return sum(train_label_counts.values()) + sum(test_label_counts.values())
-        return sum(train_label_counts.get(label, 0) for label in train_label_counts) + (
-            sum(
-                count
-                for label, count in test_label_counts.items()
-                if not is_anomalous_label(label)
+            return (
+                sequence_summary.sequence_count - sequence_summary.test_sequence_count
             )
+        normal_train_count = sum(
+            count
+            for label, count in sequence_summary.train_label_counts.items()
+            if not is_anomalous_label(label)
         )
+        normal_train_count += sum(
+            count
+            for label, count in sequence_summary.ignored_label_counts.items()
+            if not is_anomalous_label(label)
+        )
+        if normal_train_count:
+            return normal_train_count
+        return 0
 
     @override
-    def train_sequence_count_hint(self) -> int:
-        """Return the exact train-sequence count for entity grouping.
+    def split_count_hint(self) -> SequenceSplitCounts:
+        """Return the exact split-count summary for entity grouping.
 
         Returns:
-            int: Number of entity-grouped sequences assigned to train under the
-                current train-fraction policy.
+            SequenceSplitCounts: Exact split counts for the entity builder.
         """
-        entity_counts = self.sink.count_entities_by_label(self.label_for_group)
-        target_in_train = (
-            math.ceil(self.train_frac * entity_counts.total_entities)
-            if entity_counts.total_entities
-            else 0
-        )
-        if not self.train_on_normal_entities_only:
-            return target_in_train
-        return min(target_in_train, entity_counts.normal_entities)
+        counts, _ = self._entity_split_counts(label_for_group=self.label_for_group)
+        return counts
 
     @override
     def train_sequence_count_unit_hint(self) -> str:
@@ -664,16 +786,6 @@ class EntitySequenceBuilder(SequenceBuilder):
             str: Unit label for entity-grouped train progress.
         """
         return "entities"
-
-    @override
-    def sequence_count_hint(self) -> int:
-        """Return the exact total sequence count for entity grouping.
-
-        Returns:
-            int: Total number of entity-grouped sequences.
-        """
-        entity_counts = self.sink.count_entities_by_label(self.label_for_group)
-        return entity_counts.total_entities
 
     @override
     def split_summary_train_on_normal_entities_only(self) -> bool:
@@ -719,47 +831,51 @@ class EntitySequenceBuilder(SequenceBuilder):
             ValueError: If the requested train split is impossible for the
                 configured grouping and constraints.
         """
-        rows_iter = self.iter_grouped_rows()
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
-
-        entity_counts = self.sink.count_entities_by_label(label_for_group)
-        target_in_train = (
-            math.ceil(self.train_frac * entity_counts.total_entities)
-            if entity_counts.total_entities
-            else 0
+        counts, normal_pool_count = self._entity_split_counts(
+            label_for_group=label_for_group,
         )
         if (
             self.train_on_normal_entities_only
-            and target_in_train > entity_counts.normal_entities
+            and counts.train_count > normal_pool_count
         ):
             msg = (
-                "Requested train fraction is impossible with "
-                "train_on_normal_entities_only enabled: "
-                f"target_train_sequences={target_in_train}, "
-                f"eligible_normal_sequences={entity_counts.normal_entities}, "
-                f"total_sequences={entity_counts.total_entities}. "
+                "Requested train fraction is impossible with a fixed test "
+                "suffix and train_on_normal_entities_only enabled: "
+                f"target_train_sequences={counts.train_count}, "
+                f"eligible_normal_sequences={normal_pool_count}, "
+                f"train_pool_sequences={counts.total_count - counts.test_count}, "
+                f"test_sequences={counts.test_count}, "
+                f"total_sequences={counts.total_count}. "
                 "Lower train_fraction or disable normal-only training."
             )
             raise ValueError(msg)
         normals_seen_in_train = 0
+        test_start_index = counts.total_count - counts.test_count
 
-        for window_id, rows in enumerate(rows_iter):
-            if self.train_on_normal_entities_only:
-                entity_is_anomalous = any(
-                    is_anomalous_label(label_for_group(r.entity_id))
-                    for r in rows
-                    if r.entity_id is not None
-                )
+        for window_id, rows in enumerate(self.iter_grouped_rows()):
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            entity_is_anomalous = entity_id is not None and is_anomalous_label(
+                label_for_group(entity_id),
+            )
+            if window_id >= test_start_index:
+                split_label = SplitLabel.TEST
+            elif self.train_on_normal_entities_only:
                 split_label = (
                     SplitLabel.TRAIN
                     if (not entity_is_anomalous)
-                    and (normals_seen_in_train < target_in_train)
-                    else SplitLabel.TEST
+                    and (normals_seen_in_train < counts.train_count)
+                    else SplitLabel.IGNORED
                 )
             else:
                 split_label = (
-                    SplitLabel.TRAIN if window_id < target_in_train else SplitLabel.TEST
+                    SplitLabel.TRAIN
+                    if window_id < counts.train_count
+                    else SplitLabel.IGNORED
                 )
 
             seq = self._build_sequence(
@@ -796,6 +912,15 @@ class NonEntitySequenceBuilder(SequenceBuilder):
         """
         ...
 
+    @override
+    def split_count_hint(self) -> SequenceSplitCounts:
+        """Return the exact split-count summary for non-entity grouping.
+
+        Returns:
+            SequenceSplitCounts: Exact split counts for the grouping strategy.
+        """
+        return self._split_counts(self.count_windows())
+
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping.
 
@@ -807,15 +932,17 @@ class NonEntitySequenceBuilder(SequenceBuilder):
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
-        total_sequences = self.count_windows()
-        target_in_train = (
-            math.ceil(self.train_frac * total_sequences) if total_sequences else 0
-        )
+        split_counts = self.split_count_hint()
+        train_limit = split_counts.train_count
+        test_start = split_counts.total_count - split_counts.test_count
 
         for window_id, rows in enumerate(rows_iter):
-            split_label = (
-                SplitLabel.TRAIN if window_id < target_in_train else SplitLabel.TEST
-            )
+            if window_id >= test_start:
+                split_label = SplitLabel.TEST
+            elif window_id < train_limit:
+                split_label = SplitLabel.TRAIN
+            else:
+                split_label = SplitLabel.IGNORED
             seq = self._build_sequence(
                 window_id,
                 rows,
@@ -866,25 +993,6 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
         )
 
     @override
-    def train_sequence_count_hint(self) -> int:
-        """Return the exact train-sequence count for fixed windows.
-
-        Returns:
-            int: Number of fixed windows assigned to train.
-        """
-        total_sequences = self.count_windows()
-        return math.ceil(self.train_frac * total_sequences) if total_sequences else 0
-
-    @override
-    def sequence_count_hint(self) -> int:
-        """Return the exact total sequence count for fixed windows.
-
-        Returns:
-            int: Total number of fixed windows.
-        """
-        return self.count_windows()
-
-    @override
     def train_sequence_count_unit_hint(self) -> str:
         """Return the unit label for fixed-window train progress.
 
@@ -915,15 +1023,6 @@ class TimeSequenceBuilder(NonEntitySequenceBuilder):
             str: Unit label for time-window train progress.
         """
         return "windows"
-
-    @override
-    def sequence_count_hint(self) -> int:
-        """Return the exact total sequence count for time windows.
-
-        Returns:
-            int: Total number of time windows.
-        """
-        return self.count_windows()
 
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:

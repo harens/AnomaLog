@@ -20,13 +20,16 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     expected_requested_train_fraction = 0.5
     expected_sequence_count = 10
     expected_train_sequence_count = 5
+    expected_test_sequence_count = 3
+    expected_ignored_sequence_count = 2
     expected_eligible_train_sequence_count = 6
     expected_effective_eligible_train_fraction = round(
         expected_train_sequence_count / expected_eligible_train_sequence_count,
         8,
     )
     expected_effective_overall_train_fraction = round(
-        expected_train_sequence_count / expected_sequence_count,
+        expected_train_sequence_count
+        / (expected_train_sequence_count + expected_test_sequence_count),
         8,
     )
     summary = build_sequence_split_summary(
@@ -45,7 +48,9 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
         sequence_summary=SequenceSummary(
             sequence_count=expected_sequence_count,
             train_sequence_count=expected_train_sequence_count,
-            test_sequence_count=5,
+            test_sequence_count=expected_test_sequence_count,
+            ignored_label_counts={0: 1, 1: 1},
+            ignored_sequence_count=expected_ignored_sequence_count,
             train_label_counts={0: expected_train_sequence_count},
             test_label_counts={0: 1, 1: 4},
         ),
@@ -55,6 +60,7 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     assert (
         summary.eligible_train_sequence_count == expected_eligible_train_sequence_count
     )
+    assert summary.ignored_sequence_count == expected_ignored_sequence_count
     assert (
         summary.effective_train_fraction_of_eligible
         == expected_effective_eligible_train_fraction

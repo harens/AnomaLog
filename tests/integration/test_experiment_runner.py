@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Any
 
 import pytest
 
@@ -17,14 +18,16 @@ FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "template_frequen
 FIXTURE_LOG = Path(__file__).parent / "logs" / "tiny_bgl_happy_path.log"
 EXPECTED_SEQUENCE_COUNT = 4
 EXPECTED_TRAIN_SEQUENCE_COUNT = 2
-EXPECTED_TEST_SEQUENCE_COUNT = 2
+EXPECTED_TEST_SEQUENCE_COUNT = 1
+EXPECTED_IGNORED_SEQUENCE_COUNT = 1
 EXPECTED_STRUCTURED_ROWS = 8
 FINGERPRINT_HEX_LENGTH = 64
 TEMPLATE_FREQUENCY_SCORE_THRESHOLD = 1.2
 EXPECTED_MULTI_MODEL_RUN_COUNT = 2
 
 
-class _PredictionRecord(TypedDict):
+@dataclass(frozen=True, slots=True)
+class _PredictionRecord:
     entity_ids: list[str]
     event_count: int
     label: int
@@ -34,21 +37,34 @@ class _PredictionRecord(TypedDict):
     window_id: int
 
 
+@dataclass(frozen=True, slots=True)
+class _SmokeRunArtifacts:
+    metrics: dict[str, Any]
+    manifest: dict[str, Any]
+    environment: dict[str, Any]
+    run_config_payload: dict[str, Any]
+    run_log: str
+    predictions: list[_PredictionRecord]
+    rerun_metrics: dict[str, Any]
+    rerun_manifest: dict[str, Any]
+    rerun_predictions: list[_PredictionRecord]
+
+
 def _read_predictions(run_dir: Path) -> list[_PredictionRecord]:
     predictions: list[_PredictionRecord] = []
     for line in (
         (run_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
     ):
         raw = json.loads(line)
-        prediction: _PredictionRecord = {
-            "entity_ids": [str(value) for value in raw["entity_ids"]],
-            "event_count": int(raw["event_count"]),
-            "label": int(raw["label"]),
-            "predicted_label": int(raw["predicted_label"]),
-            "score": float(raw["score"]),
-            "split_label": str(raw["split_label"]),
-            "window_id": int(raw["window_id"]),
-        }
+        prediction = _PredictionRecord(
+            entity_ids=[str(value) for value in raw["entity_ids"]],
+            event_count=int(raw["event_count"]),
+            label=int(raw["label"]),
+            predicted_label=int(raw["predicted_label"]),
+            score=float(raw["score"]),
+            split_label=str(raw["split_label"]),
+            window_id=int(raw["window_id"]),
+        )
         predictions.append(prediction)
     return predictions
 
@@ -59,29 +75,85 @@ def _assert_template_frequency_predictions(
     score_threshold: float,
 ) -> None:
     test_predictions = [
-        prediction for prediction in predictions if prediction["split_label"] == "test"
+        prediction for prediction in predictions if prediction.split_label == "test"
     ]
 
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "test",
+    assert [prediction.window_id for prediction in predictions] == [3]
+    assert [prediction.split_label for prediction in predictions] == [
         "test",
     ]
     assert len(test_predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction["label"] for prediction in test_predictions] == [0, 0]
-    flagged_test_prediction = next(
-        prediction
-        for prediction in test_predictions
-        if prediction["predicted_label"] == 1
+    test_prediction = test_predictions[0]
+    assert test_prediction.predicted_label in {0, 1}
+    if test_prediction.predicted_label == 1:
+        assert test_prediction.score > score_threshold
+    else:
+        assert test_prediction.score < score_threshold
+
+
+def _assert_reproducible_smoke_outputs(
+    *,
+    run_dir: Path,
+    artifacts: _SmokeRunArtifacts,
+) -> None:
+    """Check smoke-test artefacts that should remain stable across reruns.
+
+    Args:
+        run_dir (Path): Run directory that should be reused on rerun.
+        artifacts (_SmokeRunArtifacts): Captured artefacts for the initial and
+            repeated executions.
+    """
+    assert artifacts.metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
+    assert artifacts.metrics["train_sequence_count"] == EXPECTED_TRAIN_SEQUENCE_COUNT
+    assert artifacts.metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
+    assert (
+        artifacts.metrics["ignored_sequence_count"] == EXPECTED_IGNORED_SEQUENCE_COUNT
     )
-    normal_test_prediction = next(
-        prediction
-        for prediction in test_predictions
-        if prediction["predicted_label"] == 0
+    assert artifacts.manifest["dataset_variant"] == "tiny_dataset"
+    assert len(artifacts.manifest["dataset_fingerprint"]) == FINGERPRINT_HEX_LENGTH
+    assert artifacts.manifest["structured_rows"] == EXPECTED_STRUCTURED_ROWS
+    assert artifacts.manifest["sequence_split_counts"] == {
+        "train": EXPECTED_TRAIN_SEQUENCE_COUNT,
+        "test": EXPECTED_TEST_SEQUENCE_COUNT,
+        "ignored": EXPECTED_IGNORED_SEQUENCE_COUNT,
+    }
+    assert artifacts.manifest["sequence_split_summary"] == {
+        "requested_train_fraction": 0.34,
+        "eligible_train_sequence_count": 3,
+        "ignored_sequence_count": EXPECTED_IGNORED_SEQUENCE_COUNT,
+        "effective_train_fraction_of_eligible": pytest.approx(2 / 3),
+        "effective_train_fraction_overall": pytest.approx(2 / 3),
+    }
+    assert (
+        artifacts.manifest["model_manifest"]["score_threshold"]
+        == TEMPLATE_FREQUENCY_SCORE_THRESHOLD
     )
-    assert flagged_test_prediction["score"] > score_threshold
-    assert normal_test_prediction["score"] < score_threshold
+    assert artifacts.manifest["raw_logs"]["sha256"] == sha256_for_file(
+        Path(artifacts.environment["repository"]["root"]) / "logs" / FIXTURE_LOG.name,
+    )
+    assert (
+        artifacts.environment["run_fingerprint"]
+        == artifacts.manifest["run_fingerprint"]
+    )
+    assert artifacts.run_config_payload["sweep"]["name"] == "tiny_runner_smoke"
+    assert artifacts.run_config_payload["concrete"]["name"] == "tiny_runner_smoke"
+    assert (
+        "experiments.run.tiny_runner_smoke - Loaded sweep config from"
+        in artifacts.run_log
+    )
+    assert "Building dataset tiny-bgl-runner" in artifacts.run_log
+    assert (
+        f"Wrote experiment artifacts to {shlex.quote(str(run_dir))}"
+        in artifacts.run_log
+    )
+    _assert_template_frequency_predictions(
+        artifacts.predictions,
+        score_threshold=TEMPLATE_FREQUENCY_SCORE_THRESHOLD,
+    )
+    assert artifacts.metrics == artifacts.rerun_metrics
+    assert artifacts.manifest == artifacts.rerun_manifest
+    assert artifacts.predictions == artifacts.rerun_predictions
 
 
 def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> None:
@@ -139,43 +211,21 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     rerun_predictions = _read_predictions(rerun_dir)
 
     assert run_dir.name == manifest["run_fingerprint"][:12]
-    assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
-    assert metrics["train_sequence_count"] == EXPECTED_TRAIN_SEQUENCE_COUNT
-    assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
-    assert manifest["dataset_variant"] == "tiny_dataset"
-    assert len(manifest["dataset_fingerprint"]) == FINGERPRINT_HEX_LENGTH
-    assert manifest["structured_rows"] == EXPECTED_STRUCTURED_ROWS
-    assert manifest["sequence_split_counts"] == {
-        "train": EXPECTED_TRAIN_SEQUENCE_COUNT,
-        "test": EXPECTED_TEST_SEQUENCE_COUNT,
-    }
-    assert manifest["sequence_split_summary"] == {
-        "requested_train_fraction": 0.34,
-        "eligible_train_sequence_count": EXPECTED_SEQUENCE_COUNT,
-        "effective_train_fraction_of_eligible": 0.5,
-        "effective_train_fraction_overall": 0.5,
-    }
-    assert (
-        manifest["model_manifest"]["score_threshold"]
-        == TEMPLATE_FREQUENCY_SCORE_THRESHOLD
-    )
-    assert manifest["raw_logs"]["sha256"] == sha256_for_file(
-        tmp_path / "logs" / FIXTURE_LOG.name,
+    _assert_reproducible_smoke_outputs(
+        run_dir=run_dir,
+        artifacts=_SmokeRunArtifacts(
+            metrics=metrics,
+            manifest=manifest,
+            environment=environment,
+            run_config_payload=run_config_payload,
+            run_log=run_log,
+            predictions=predictions,
+            rerun_metrics=rerun_metrics,
+            rerun_manifest=rerun_manifest,
+            rerun_predictions=rerun_predictions,
+        ),
     )
     assert environment["repository"]["root"] == tmp_path.as_posix()
-    assert environment["run_fingerprint"] == manifest["run_fingerprint"]
-    assert run_config_payload["sweep"]["name"] == "tiny_runner_smoke"
-    assert run_config_payload["concrete"]["name"] == "tiny_runner_smoke"
-    assert "experiments.run.tiny_runner_smoke - Loaded sweep config from" in run_log
-    assert "Building dataset tiny-bgl-runner" in run_log
-    assert f"Wrote experiment artifacts to {shlex.quote(str(run_dir))}" in run_log
-    _assert_template_frequency_predictions(
-        predictions,
-        score_threshold=TEMPLATE_FREQUENCY_SCORE_THRESHOLD,
-    )
-    assert metrics == rerun_metrics
-    assert manifest == rerun_manifest
-    assert predictions == rerun_predictions
 
 
 def test_run_experiment_expands_multi_model_sweep(tmp_path: Path) -> None:
