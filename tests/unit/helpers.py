@@ -18,6 +18,7 @@ from anomalog.parsers.structured.contracts import (
     StructuredSink,
     is_anomalous_label,
 )
+from anomalog.parsers.structured.parquet.writer_worker import EntityChronologyKey
 
 
 def structured_line(
@@ -102,6 +103,20 @@ class NullStructuredParser(StructuredParser):
         """
         del raw_line
         return None
+
+
+@dataclass(frozen=True)
+class _EntityGroup:
+    """Test helper pairing an entity's rows with its order key.
+
+    Attributes:
+        order (EntityChronologyKey): Deterministic sort key for the entity.
+        rows (tuple[StructuredLine, ...]): Structured rows belonging to the
+            entity group.
+    """
+
+    order: EntityChronologyKey
+    rows: tuple[StructuredLine, ...]
 
 
 @dataclass(frozen=True)
@@ -224,11 +239,11 @@ class InMemoryStructuredSink(StructuredSink):
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
-        """Group stored rows by entity id.
+        """Group stored rows by entity id in chronological order.
 
         Returns:
             Callable[[], Iterator[Sequence[StructuredLine]]]: Callable yielding
-                entity-grouped rows.
+                entity-grouped rows ordered by each entity's first timestamp.
         """
         groups: dict[str, list[StructuredLine]] = {}
         for row in self.rows:
@@ -236,7 +251,18 @@ class InMemoryStructuredSink(StructuredSink):
                 groups.setdefault(row.entity_id, []).append(row)
 
         def _iter() -> Iterator[Sequence[StructuredLine]]:
-            yield from groups.values()
+            ordered_groups = sorted(
+                (
+                    _EntityGroup(
+                        order=_entity_group_order(entity_id, rows),
+                        rows=tuple(rows),
+                    )
+                    for entity_id, rows in groups.items()
+                ),
+                key=lambda group: group.order,
+            )
+            for group in ordered_groups:
+                yield group.rows
 
         return _iter
 
@@ -287,3 +313,30 @@ class InMemoryStructuredSink(StructuredSink):
                 yield self.rows
 
         return _iter
+
+
+def _entity_group_order(
+    entity_id: str,
+    rows: Sequence[StructuredLine],
+) -> EntityChronologyKey:
+    """Build the deterministic order key used for entity-grouped tests.
+
+    Args:
+        entity_id (str): Entity identifier for the grouped rows.
+        rows (Sequence[StructuredLine]): Structured rows belonging to one
+            entity.
+
+    Returns:
+        EntityChronologyKey: Chronological ordering metadata for one entity.
+    """
+    first_row = rows[0]
+    first_timestamp = next(
+        (row.timestamp_unix_ms for row in rows if row.timestamp_unix_ms is not None),
+        None,
+    )
+    return EntityChronologyKey(
+        first_timestamp_missing=1 if first_timestamp is None else 0,
+        first_timestamp_unix_ms=0 if first_timestamp is None else int(first_timestamp),
+        first_line_order=int(first_row.line_order),
+        entity_id=entity_id,
+    )

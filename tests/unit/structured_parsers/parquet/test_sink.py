@@ -1,6 +1,7 @@
 """Tests for `ParquetStructuredSink`."""
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -22,6 +23,7 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
+    EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
 )
@@ -72,6 +74,21 @@ class _LenientParser(_Parser):
             return super().parse_line(raw_line)
         except ValueError:
             return None
+
+
+@dataclass(frozen=True, order=True)
+class _OrderedEntityGroup:
+    """Minimal helper for exercising chronological bucket merges in tests.
+
+    Attributes:
+        order (tuple[int, int, int, str]): Deterministic sort key for the
+            entity group.
+        rows (tuple[StructuredLine, ...]): Structured rows belonging to the
+            entity group.
+    """
+
+    order: tuple[int, int, int, str]
+    rows: tuple[StructuredLine, ...]
 
 
 def _make_sink(tmp_path: Path) -> ParquetStructuredSink:
@@ -340,12 +357,84 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
         lambda entity_id: 1 if entity_id == "node-a" else 0,
     )
     sequences = list(sink.iter_entity_sequences()())
+    chronology = sink.load_entity_chronology_index()
 
     assert sink.count_rows() == expected_row_count
     assert (normal_entities, total_entities) == (1, 2)
     assert [[row.entity_id for row in rows] for rows in sequences] == [
         ["node-b"],
         ["node-a", "node-a"],
+    ]
+    assert sink.entity_chronology_index_path().exists()
+    assert chronology == {
+        "node-b": EntityChronologyKey(0, 100, 0, "node-b"),
+        "node-a": EntityChronologyKey(0, 120, 1, "node-a"),
+    }
+
+
+def test_sink_entity_grouping_merges_buckets_chronologically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entity grouping should merge bucket streams by first timestamp.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the merge
+            order can be exercised without a real parquet scan.
+    """
+    sink = _make_sink(tmp_path)
+
+    def _iter_buckets(_self: ParquetStructuredSink) -> set[int]:
+        return {0, 1}
+
+    def _iter_entity_groups_in_bucket(
+        _self: ParquetStructuredSink,
+        bucket_id: int,
+        *,
+        chronology_index: dict[str, EntityChronologyKey],
+    ) -> Iterator[_OrderedEntityGroup]:
+        del chronology_index
+        if bucket_id == 0:
+            yield _OrderedEntityGroup(
+                order=(0, 300, 0, "late"),
+                rows=(
+                    structured_line(
+                        line_order=0,
+                        timestamp_unix_ms=300,
+                        entity_id="late",
+                        untemplated_message_text="late-0",
+                        anomalous=0,
+                    ),
+                ),
+            )
+            return
+
+        yield _OrderedEntityGroup(
+            order=(0, 100, 0, "early"),
+            rows=(
+                structured_line(
+                    line_order=1,
+                    timestamp_unix_ms=100,
+                    entity_id="early",
+                    untemplated_message_text="early-0",
+                    anomalous=0,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(ParquetStructuredSink, "_iter_buckets", _iter_buckets)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "_iter_entity_groups_in_bucket",
+        _iter_entity_groups_in_bucket,
+    )
+
+    sequences = list(sink.iter_entity_sequences()())
+
+    assert [[row.entity_id for row in rows] for rows in sequences] == [
+        ["early"],
+        ["late"],
     ]
 
 
@@ -397,8 +486,8 @@ def test_sink_entity_grouping_skips_null_entity_rows(
     sequences = list(sink.iter_entity_sequences()())
 
     assert [[row.entity_id for row in rows] for rows in sequences] == [
-        ["node-a"],
         ["node-c"],
+        ["node-a"],
     ]
 
 

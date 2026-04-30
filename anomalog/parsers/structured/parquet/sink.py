@@ -1,6 +1,7 @@
 """Parquet-backed implementation of StructuredSink."""
 
 import heapq
+import json
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
@@ -30,9 +31,25 @@ from anomalog.parsers.structured.contracts import (
 )
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
+    ENTITY_CHRONOLOGY_INDEX_FILENAME,
+    EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _EntityGroup:
+    """Entity-group rows paired with their chronological order key.
+
+    Attributes:
+        order (EntityChronologyKey): Deterministic sort key for the entity.
+        rows (tuple[StructuredLine, ...]): Structured rows belonging to the
+            entity group.
+    """
+
+    order: EntityChronologyKey
+    rows: tuple[StructuredLine, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +256,7 @@ class ParquetStructuredSink(StructuredSink):
         return ds.dataset(
             self.structured_data_cache(self.dataset_name),
             format="parquet",
+            exclude_invalid_files=True,
             partitioning=ds.partitioning(
                 schema=pa.schema([pa.field(ENTITY_BUCKET_FIELD, pa.int32())]),
                 flavor="hive",
@@ -356,27 +374,158 @@ class ParquetStructuredSink(StructuredSink):
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
-        """Yield sequences grouped by entity bucket preserving input order.
+        """Yield sequences grouped by entity in chronological order.
 
         Returns:
             Callable[[], Iterator[Collection[StructuredLine]]]: Callable producing
-                entity-grouped windows of structured rows.
+                entity-grouped windows ordered by a materialised chronology
+                index, with a row-based fallback for older caches.
         """
 
         def _iter() -> Iterator[Collection[StructuredLine]]:
-            for bucket_id in sorted(self._iter_buckets()):
-                by_entity: dict[str, list[StructuredLine]] = {}
-                for row in self.iter_structured_lines(
-                    filter_expr=(ds.field(ENTITY_BUCKET_FIELD) == bucket_id),
-                )():
-                    if row.entity_id is None:
-                        continue
-                    by_entity.setdefault(row.entity_id, []).append(row)
+            chronology_index = self.load_entity_chronology_index()
+            bucket_iters = [
+                self._iter_entity_groups_in_bucket(
+                    bucket_id,
+                    chronology_index=chronology_index,
+                )
+                for bucket_id in sorted(self._iter_buckets())
+            ]
 
-                for _, rows in sorted(by_entity.items()):
-                    yield rows
+            heap: list[
+                tuple[EntityChronologyKey, int, _EntityGroup, Iterator[_EntityGroup]]
+            ] = []
+            for bucket_index, bucket_iter in enumerate(bucket_iters):
+                try:
+                    first_group = next(bucket_iter)
+                except StopIteration:
+                    continue
+                heap.append((first_group.order, bucket_index, first_group, bucket_iter))
+
+            heapq.heapify(heap)
+
+            while heap:
+                _, bucket_index, group, bucket_iter = heapq.heappop(heap)
+                yield group.rows
+
+                try:
+                    next_group = next(bucket_iter)
+                except StopIteration:
+                    continue
+                heapq.heappush(
+                    heap,
+                    (next_group.order, bucket_index, next_group, bucket_iter),
+                )
 
         return _iter
+
+    def _iter_entity_groups_in_bucket(
+        self,
+        bucket_id: int,
+        *,
+        chronology_index: dict[str, EntityChronologyKey],
+    ) -> Iterator[_EntityGroup]:
+        """Yield entity groups from one bucket ordered by first timestamp.
+
+        Args:
+            bucket_id (int): Parquet bucket identifier to scan.
+            chronology_index (dict[str, EntityChronologyKey]): Materialised
+                chronology metadata keyed by entity id.
+
+        Yields:
+            _EntityGroup: One entity group from the requested bucket.
+        """
+        by_entity: dict[str, list[StructuredLine]] = {}
+        for row in self.iter_structured_lines(
+            filter_expr=(ds.field(ENTITY_BUCKET_FIELD) == bucket_id),
+        )():
+            if row.entity_id is None:
+                continue
+            by_entity.setdefault(row.entity_id, []).append(row)
+
+        yield from sorted(
+            (
+                self._entity_group_for_rows(
+                    entity_id,
+                    rows,
+                    chronology_index=chronology_index,
+                )
+                for entity_id, rows in by_entity.items()
+            ),
+            key=lambda group: group.order,
+        )
+
+    @staticmethod
+    def _entity_group_for_rows(
+        entity_id: str,
+        rows: Collection[StructuredLine],
+        *,
+        chronology_index: dict[str, EntityChronologyKey],
+    ) -> _EntityGroup:
+        """Build chronological metadata for one entity's grouped rows.
+
+        Args:
+            entity_id (str): Entity identifier for the grouped rows.
+            rows (Collection[StructuredLine]): Structured rows belonging to
+                one entity.
+            chronology_index (dict[str, EntityChronologyKey]): Materialised
+                chronology metadata keyed by entity id.
+
+        Returns:
+            _EntityGroup: Entity rows paired with chronological order metadata.
+        """
+        order = chronology_index.get(entity_id)
+        if order is None:
+            first_row = next(iter(rows), None)
+            if first_row is None:
+                order = EntityChronologyKey(1, 0, 0, entity_id)
+            else:
+                first_timestamp = first_row.timestamp_unix_ms
+                order = EntityChronologyKey(
+                    first_timestamp_missing=1 if first_timestamp is None else 0,
+                    first_timestamp_unix_ms=0
+                    if first_timestamp is None
+                    else int(first_timestamp),
+                    first_line_order=int(first_row.line_order),
+                    entity_id=entity_id,
+                )
+        return _EntityGroup(order=order, rows=tuple(rows))
+
+    def entity_chronology_index_path(self) -> Path:
+        """Return the sidecar path storing entity chronology metadata.
+
+        Returns:
+            Path: JSONL sidecar path used for entity chronology ordering.
+        """
+        return (
+            self.structured_data_cache(self.dataset_name)
+            / ENTITY_CHRONOLOGY_INDEX_FILENAME
+        )
+
+    def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
+        """Load the materialised chronology sidecar, if it exists.
+
+        Returns:
+            dict[str, EntityChronologyKey]: Chronology metadata keyed by entity id.
+        """
+        index_path = self.entity_chronology_index_path()
+        if not index_path.exists():
+            return {}
+
+        chronology: dict[str, EntityChronologyKey] = {}
+        with index_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                payload = json.loads(raw)
+                chronology[str(payload["entity_id"])] = EntityChronologyKey(
+                    first_timestamp_missing=int(payload["first_timestamp_missing"]),
+                    first_timestamp_unix_ms=int(payload["first_timestamp_unix_ms"]),
+                    first_line_order=int(payload["first_line_order"]),
+                    entity_id=str(payload["entity_id"]),
+                )
+        return chronology
 
     def _iter_buckets(self) -> set[int]:
         """Enumerate bucket ids present in the parquet dataset.

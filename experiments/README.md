@@ -46,6 +46,10 @@ Custom datasets are still supported through the same config model by setting `so
 `sequence.train_on_normal_entities_only` is only available for entity-grouped
 datasets, matching the core `anomalog` sequence API.
 
+Entity-grouped sequences are ordered chronologically by each entity's first
+timestamp before the split is applied, so train fractions are stable prefixes
+of the same entity ordering across repeated runs.
+
 When `sequence.train_on_normal_entities_only = true`, the requested
 `train_fraction` still applies to the full entity population. Anomalous
 entities are forced into test, so some requested overall train fractions are
@@ -77,6 +81,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Cold dataset builds are serialised per dataset namespace
   (`dataset_name` plus cache roots), so multi-process sweeps do not race while
   materialising the shared AnomaLog dataset cache for the first time.
+- Structured parquet materialisation now writes a tiny entity chronology
+  sidecar alongside the parquet partitions, so entity-grouped readers can
+  reuse first-seen ordering without rescanning all rows.
 - Concrete sweep runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved sweep, dataset, and model config.

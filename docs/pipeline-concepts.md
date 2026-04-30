@@ -190,6 +190,10 @@ R02-M1-N0-C:J12-U11
 ]
 ```
 
+Entity-grouped sequences are ordered by each entity's first timestamp before
+the train/test cutoff is applied, so train fractions are deterministic
+prefixes of the same chronological entity ordering.
+
 Use fixed or time windows when the downstream method expects sliding windows
 rather than one sequence per entity:
 
@@ -231,6 +235,10 @@ In that mode, `train_fraction` still applies to the full entity population.
 Anomalous entities are forced into test, so some requested overall train
 fractions become impossible. In that case AnomaLog raises an error instead of
 quietly changing what the percentage means.
+
+This supervised mode is intentionally a separate constraint from the standard
+chronological entity prefix, which keeps repeated runs comparable across train
+fractions.
 
 That option is intentionally only available for entity grouping. Fixed-window
 and time-window configs do not expose it.

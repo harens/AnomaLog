@@ -49,7 +49,10 @@ def _upper_template_with_source_param(
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
     None
 ):
-    """Entity splits use entity position when all entities are eligible for train."""
+    """Entity splits use chronological entity position.
+
+    All entities are eligible in this regression case.
+    """
     sink = _sink(
         structured_line(
             line_order=0,
@@ -90,6 +93,78 @@ def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered
         SplitLabel.TEST,
     ]
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
+
+
+def test_entity_sequences_split_chronologically_by_first_timestamp() -> None:
+    """Entity splits should use each entity's first timestamp, not bucket order."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=300,
+            entity_id="m",
+            untemplated_message_text="third",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=100,
+            entity_id="z",
+            untemplated_message_text="first",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="fourth",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=200,
+            entity_id="b",
+            untemplated_message_text="second",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        train_frac=0.5,
+    )
+
+    first_pass = list(builder)
+    second_pass = list(builder.with_train_fraction(0.75))
+
+    assert [sequence.sole_entity_id for sequence in first_pass] == [
+        "z",
+        "b",
+        "m",
+        "a",
+    ]
+    assert [sequence.split_label for sequence in first_pass] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.sole_entity_id for sequence in second_pass] == [
+        "z",
+        "b",
+        "m",
+        "a",
+    ]
+    assert [sequence.split_label for sequence in second_pass] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.sole_entity_id for sequence in second_pass[:2]] == [
+        sequence.sole_entity_id for sequence in first_pass[:2]
+    ]
 
 
 @pytest.mark.allow_no_new_coverage

@@ -233,11 +233,12 @@ class StructuredSink(Protocol):
     def iter_entity_sequences(
         self,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
-        """Return a lazy iterator factory for entity-grouped sequences.
+        """Return a lazy iterator factory for chronological entity groups.
 
         Returns:
             Callable[[], Iterator[Collection[StructuredLine]]]: Callable yielding
-                per-entity groups of structured rows.
+                per-entity groups of structured rows ordered by each entity's
+                first timestamp, with deterministic tie-breakers.
         """
 
     def iter_fixed_window_sequences(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import shutil
 from dataclasses import asdict, dataclass
 from hashlib import blake2s
@@ -54,6 +55,27 @@ class WriterConfig:
 
 
 ENTITY_BUCKET_FIELD = "entity_bucket"
+ENTITY_CHRONOLOGY_INDEX_FILENAME = "entity_chronology_index.jsonl"
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class EntityChronologyKey:
+    """Deterministic ordering metadata for one entity during materialisation.
+
+    Attributes:
+        first_timestamp_missing (int): `1` when the entity has no timestamp,
+            otherwise `0`.
+        first_timestamp_unix_ms (int): First timestamp observed for the entity,
+            or `0` when none is present.
+        first_line_order (int): Source-order tie-breaker for the entity.
+        entity_id (str): Entity identifier for the chronology entry.
+    """
+
+    first_timestamp_missing: int
+    first_timestamp_unix_ms: int
+    first_line_order: int
+    entity_id: str
+
 
 STRUCTURED_BATCH_SCHEMA = pa.schema(
     [
@@ -92,6 +114,7 @@ def _iter_record_batches(
     parser: StructuredParser,
     *,
     cfg: WriterConfig,
+    entity_chronology: dict[str, EntityChronologyKey] | None = None,
 ) -> Generator[pa.RecordBatch, None, None]:
     """Stream record batches parsed from the raw log file.
 
@@ -99,6 +122,8 @@ def _iter_record_batches(
         raw_input_path (Path): Input raw log file to parse.
         parser (StructuredParser): Structured parser used for each raw line.
         cfg (WriterConfig): Batch and partitioning configuration for the writer.
+        entity_chronology (dict[str, EntityChronologyKey] | None): Optional
+            sidecar index to populate with each entity's first-seen order.
 
     Yields:
         pa.RecordBatch: Structured rows accumulated into parquet-ready batches.
@@ -116,6 +141,19 @@ def _iter_record_batches(
                 line_order=line_no,
                 base=base_rec,
             )
+            if (
+                entity_chronology is not None
+                and rec.entity_id is not None
+                and rec.entity_id not in entity_chronology
+            ):
+                entity_chronology[rec.entity_id] = EntityChronologyKey(
+                    first_timestamp_missing=1 if rec.timestamp_unix_ms is None else 0,
+                    first_timestamp_unix_ms=0
+                    if rec.timestamp_unix_ms is None
+                    else int(rec.timestamp_unix_ms),
+                    first_line_order=line_no,
+                    entity_id=rec.entity_id,
+                )
             row_dict = asdict(rec)
             if rec.entity_id is not None:
                 row_dict[ENTITY_BUCKET_FIELD] = _stable_bucket(
@@ -156,6 +194,8 @@ def extract_structured_components(
 
     - Hive partitions on entity_id for fast pruning on entity lookups.
     - Order per file follows input order; pick large row groups to keep scans fast.
+    - A tiny JSONL sidecar stores each entity's first-seen chronology key so
+      readers do not need to re-derive entity ordering from the parquet rows.
 
     Args:
         raw_input_path (Path): Raw log file to parse.
@@ -172,6 +212,7 @@ def extract_structured_components(
     """
     logger = get_run_logger()
     cfg = config or WriterConfig()
+    entity_chronology: dict[str, EntityChronologyKey] = {}
 
     raw_input_path = raw_input_path.resolve()
     parquet_out_dir = parquet_out_dir.resolve()
@@ -198,6 +239,7 @@ def extract_structured_components(
         raw_input_path=raw_input_path,
         parser=parser,
         cfg=cfg,
+        entity_chronology=entity_chronology,
     )
 
     try:
@@ -254,6 +296,11 @@ def extract_structured_components(
         max_open_files=cfg.max_open_files,
     )
 
+    _write_entity_chronology_index(
+        parquet_out_dir=parquet_out_dir,
+        chronology=entity_chronology,
+    )
+
     logger.info(
         "Structured extraction complete: file=%s out=%s batches_written=%d",
         raw_input_path,
@@ -262,3 +309,24 @@ def extract_structured_components(
     )
 
     return has_anomaly
+
+
+def _write_entity_chronology_index(
+    *,
+    parquet_out_dir: Path,
+    chronology: dict[str, EntityChronologyKey],
+) -> None:
+    """Persist the entity chronology sidecar alongside the parquet dataset.
+
+    Args:
+        parquet_out_dir (Path): Output directory for the structured parquet
+            dataset.
+        chronology (dict[str, EntityChronologyKey]): First-seen chronology
+            metadata keyed by entity id.
+    """
+    index_path = parquet_out_dir / ENTITY_CHRONOLOGY_INDEX_FILENAME
+    ordered_entries = sorted(chronology.values())
+    with index_path.open("w", encoding="utf-8") as handle:
+        for entry in ordered_entries:
+            handle.write(json.dumps(asdict(entry), separators=(",", ":")))
+            handle.write("\n")
