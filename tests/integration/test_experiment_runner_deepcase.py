@@ -21,6 +21,8 @@ EXPECTED_MIN_SAMPLES = 1
 EXPECTED_TEST_SEQUENCE_COUNT = 2
 EXPECTED_TRUE_POSITIVES = 1
 EXPECTED_TRUE_NEGATIVES = 1
+EXPECTED_BENIGN_REASON_COUNT = 3
+EXPECTED_MALICIOUS_REASON_COUNT = 3
 MALICIOUS_REASON = "known_malicious_cluster"
 BENIGN_REASON = "known_benign_cluster"
 
@@ -50,6 +52,85 @@ def _read_predictions(run_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in lines]
 
 
+def _assert_deepcase_outputs(
+    *,
+    metrics: dict[str, Any],
+    model_manifest: dict[str, Any],
+    prediction_diagnostics: dict[str, Any],
+    predictions: list[dict[str, Any]],
+) -> None:
+    assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
+    assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
+    assert metrics["tp"] == EXPECTED_TRUE_POSITIVES
+    assert metrics["tn"] == EXPECTED_TRUE_NEGATIVES
+    assert (
+        prediction_diagnostics["event_count"]
+        == EXPECTED_TEST_SEQUENCE_COUNT * EXPECTED_EVENT_COUNT
+    )
+    assert (
+        prediction_diagnostics["confident_event_count"]
+        + prediction_diagnostics["abstained_event_count"]
+        == prediction_diagnostics["event_count"]
+    )
+    assert prediction_diagnostics["abstained_event_count"] == 0
+    assert prediction_diagnostics["sequence_confident_anomaly_count"] == 1
+    assert prediction_diagnostics["sequence_confident_normal_count"] == 1
+    assert prediction_diagnostics["sequence_abstained_count"] == 0
+    assert prediction_diagnostics["reason_counts"][BENIGN_REASON] == (
+        EXPECTED_BENIGN_REASON_COUNT
+    )
+    assert prediction_diagnostics["reason_counts"][MALICIOUS_REASON] == (
+        EXPECTED_MALICIOUS_REASON_COUNT
+    )
+    assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
+    assert model_manifest["detector"] == "deepcase"
+    assert model_manifest["context_length"] == EXPECTED_CONTEXT_LENGTH
+    assert model_manifest["timeout_seconds"] == EXPECTED_TIMEOUT_SECONDS
+    assert model_manifest["min_samples"] == EXPECTED_MIN_SAMPLES
+    assert model_manifest["train_sample_count"] > 0
+    assert model_manifest["train_event_vocabulary_size"] > 0
+    assert model_manifest["prediction_diagnostics"] == prediction_diagnostics
+    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
+    assert [prediction["split_label"] for prediction in predictions] == [
+        "test",
+        "test",
+    ]
+    assert all(
+        len(prediction["findings"]) == EXPECTED_EVENT_COUNT
+        for prediction in predictions
+    )
+    assert all("sequence_decision" in prediction for prediction in predictions)
+    assert all("abstained_event_count" in prediction for prediction in predictions)
+    assert all(
+        "raw_score" in finding
+        for prediction in predictions
+        for finding in prediction["findings"]
+    )
+    assert all(
+        "is_abstained" in finding
+        for prediction in predictions
+        for finding in prediction["findings"]
+    )
+    anomalous_test_prediction = next(
+        prediction for prediction in predictions if prediction["label"] == 1
+    )
+    normal_test_prediction = next(
+        prediction for prediction in predictions if prediction["label"] == 0
+    )
+    assert anomalous_test_prediction["predicted_label"] == 1
+    assert anomalous_test_prediction["score"] == pytest.approx(1.0)
+    assert all(
+        finding["predicted_label"] == 1 and finding["reason"] == MALICIOUS_REASON
+        for finding in anomalous_test_prediction["findings"]
+    )
+    assert normal_test_prediction["predicted_label"] == 0
+    assert normal_test_prediction["score"] == pytest.approx(0.0)
+    assert all(
+        finding["predicted_label"] == 0 and finding["reason"] == BENIGN_REASON
+        for finding in normal_test_prediction["findings"]
+    )
+
+
 def test_run_experiment_with_deepcase_writes_event_findings(
     tmp_path: Path,
 ) -> None:
@@ -70,55 +151,17 @@ def test_run_experiment_with_deepcase_writes_event_findings(
     run_log = (run_dir / "run.log").read_text(encoding="utf-8")
 
     model_manifest = manifest["model_manifest"]
-    test_predictions = [
-        prediction for prediction in predictions if prediction["split_label"] == "test"
-    ]
-    anomalous_test_prediction = next(
-        prediction for prediction in test_predictions if prediction["label"] == 1
-    )
-    normal_test_prediction = next(
-        prediction for prediction in test_predictions if prediction["label"] == 0
-    )
+    prediction_diagnostics = model_manifest["prediction_diagnostics"]
 
     assert isinstance(model_manifest, dict)
-    assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
-    assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
-    assert metrics["tp"] == EXPECTED_TRUE_POSITIVES
-    assert metrics["tn"] == EXPECTED_TRUE_NEGATIVES
-    assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert model_manifest["detector"] == "deepcase"
-    assert model_manifest["context_length"] == EXPECTED_CONTEXT_LENGTH
-    assert model_manifest["timeout_seconds"] == EXPECTED_TIMEOUT_SECONDS
-    assert model_manifest["min_samples"] == EXPECTED_MIN_SAMPLES
-    assert model_manifest["train_sample_count"] > 0
-    assert model_manifest["train_event_vocabulary_size"] > 0
+    assert isinstance(prediction_diagnostics, dict)
+    _assert_deepcase_outputs(
+        metrics=metrics,
+        model_manifest=model_manifest,
+        prediction_diagnostics=prediction_diagnostics,
+        predictions=predictions,
+    )
     assert manifest["sequence_config"]["grouping"] == "entity"
-    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "test",
-        "test",
-    ]
-    assert all(
-        len(prediction["findings"]) == EXPECTED_EVENT_COUNT
-        for prediction in predictions
-    )
-    assert all(
-        "raw_score" in finding
-        for prediction in predictions
-        for finding in prediction["findings"]
-    )
-    assert anomalous_test_prediction["predicted_label"] == 1
-    assert anomalous_test_prediction["score"] == pytest.approx(1.0)
-    assert all(
-        finding["predicted_label"] == 1 and finding["reason"] == MALICIOUS_REASON
-        for finding in anomalous_test_prediction["findings"]
-    )
-    assert normal_test_prediction["predicted_label"] == 0
-    assert normal_test_prediction["score"] == pytest.approx(0.0)
-    assert all(
-        finding["predicted_label"] == 0 and finding["reason"] == BENIGN_REASON
-        for finding in normal_test_prediction["findings"]
-    )
     assert "Fitting deepcase detector" in run_log
     assert "DeepCase resolved torch device: cpu" in run_log
     assert "Training DeepCase context builder" in run_log

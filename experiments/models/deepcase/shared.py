@@ -8,8 +8,9 @@ explain event-level outcomes back in AnomaLog terms.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -37,11 +38,13 @@ class ScoreReason(str, Enum):
         KNOWN_BENIGN_CLUSTER: Event matched a known benign cluster.
         KNOWN_MALICIOUS_CLUSTER: Event matched a known malicious cluster.
         NOT_CONFIDENT_ENOUGH: Interpreter confidence was too low to trust the
-            cluster correction.
+            cluster correction, so the sample should be treated as abstained
+            rather than anomalous.
         EVENT_NOT_IN_TRAINING_VOCABULARY: Prediction-time event template was
             unseen during training.
         CLOSEST_CLUSTER_OUTSIDE_EPSILON: Nearest cluster was outside the
-            interpreter epsilon threshold.
+            interpreter epsilon threshold, so the sample should be treated as
+            abstained rather than anomalous.
     """
 
     KNOWN_BENIGN_CLUSTER = "known_benign_cluster"
@@ -49,6 +52,29 @@ class ScoreReason(str, Enum):
     NOT_CONFIDENT_ENOUGH = "not_confident_enough"
     EVENT_NOT_IN_TRAINING_VOCABULARY = "event_not_in_training_vocabulary"
     CLOSEST_CLUSTER_OUTSIDE_EPSILON = "closest_cluster_outside_epsilon"
+
+    @property
+    def is_abstained(self) -> bool:
+        """Return whether this score reason should abstain from automation."""
+        return self not in {
+            ScoreReason.KNOWN_BENIGN_CLUSTER,
+            ScoreReason.KNOWN_MALICIOUS_CLUSTER,
+        }
+
+
+class DeepCaseSequenceDecision(str, Enum):
+    """Stable sequence-level decision categories for DeepCASE.
+
+    Attributes:
+        CONFIDENT_NORMAL: All decisive event findings were normal.
+        ABSTAINED: At least one event required manual review and none were
+            confidently anomalous.
+        CONFIDENT_ANOMALY: At least one event was confidently anomalous.
+    """
+
+    CONFIDENT_NORMAL = "confident_normal"
+    ABSTAINED = "abstained"
+    CONFIDENT_ANOMALY = "confident_anomaly"
 
 
 # Sentinel scores emitted by the DeepCase library for non-cluster outcomes.
@@ -184,7 +210,9 @@ class DeepCaseEventFinding(msgspec.Struct, frozen=True):
         reason (ScoreReason): Stable explanation label derived from
             ``raw_score``.
         predicted_label (int): Conservative AnomaLog binary label derived from
-            ``raw_score``.
+            ``raw_score``. Only confident positive scores count as anomalies.
+        is_abstained (bool): Whether the event should be surfaced for manual
+            review instead of being folded into the automated anomaly label.
     """
 
     event_index: int
@@ -193,6 +221,98 @@ class DeepCaseEventFinding(msgspec.Struct, frozen=True):
     raw_score: float
     reason: ScoreReason
     predicted_label: int
+    is_abstained: bool
+
+
+class DeepCasePredictionDiagnostics(msgspec.Struct, frozen=True):
+    """Serialisable DeepCASE prediction diagnostics for model manifests.
+
+    Attributes:
+        event_count (int): Total number of scored events.
+        confident_event_count (int): Number of events with a decisive label.
+        abstained_event_count (int): Number of events that required review.
+        confident_anomaly_event_count (int): Number of decisive anomalous events.
+        sequence_confident_anomaly_count (int): Number of sequences whose final
+            decision was confident anomaly.
+        sequence_confident_normal_count (int): Number of sequences whose final
+            decision was confident normal.
+        sequence_abstained_count (int): Number of sequences whose final
+            decision was abstained.
+        reason_counts (dict[str, int]): Histogram of event finding reasons.
+    """
+
+    event_count: int
+    confident_event_count: int
+    abstained_event_count: int
+    confident_anomaly_event_count: int
+    sequence_confident_anomaly_count: int
+    sequence_confident_normal_count: int
+    sequence_abstained_count: int
+    reason_counts: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _DeepCasePredictionSummary:
+    predicted_label: int
+    score: float
+    sequence_decision: DeepCaseSequenceDecision
+    confident_event_count: int
+    abstained_event_count: int
+    confident_anomaly_event_count: int
+
+
+@dataclass(slots=True)
+class _DeepCasePredictionDiagnosticsState:
+    event_count: int = 0
+    confident_event_count: int = 0
+    abstained_event_count: int = 0
+    confident_anomaly_event_count: int = 0
+    sequence_confident_anomaly_count: int = 0
+    sequence_confident_normal_count: int = 0
+    sequence_abstained_count: int = 0
+    reason_counts: Counter[str] = field(default_factory=Counter)
+
+    def record(
+        self,
+        *,
+        summary: _DeepCasePredictionSummary,
+        findings: Sequence[DeepCaseEventFinding],
+    ) -> None:
+        self.event_count += len(findings)
+        self.confident_event_count += summary.confident_event_count
+        self.abstained_event_count += summary.abstained_event_count
+        self.confident_anomaly_event_count += summary.confident_anomaly_event_count
+        if summary.sequence_decision is DeepCaseSequenceDecision.CONFIDENT_ANOMALY:
+            self.sequence_confident_anomaly_count += 1
+        elif summary.sequence_decision is DeepCaseSequenceDecision.CONFIDENT_NORMAL:
+            self.sequence_confident_normal_count += 1
+        else:
+            self.sequence_abstained_count += 1
+        self.reason_counts.update(finding.reason.value for finding in findings)
+
+    def reset(self) -> None:
+        self.event_count = 0
+        self.confident_event_count = 0
+        self.abstained_event_count = 0
+        self.confident_anomaly_event_count = 0
+        self.sequence_confident_anomaly_count = 0
+        self.sequence_confident_normal_count = 0
+        self.sequence_abstained_count = 0
+        self.reason_counts = Counter()
+
+    def snapshot(self) -> DeepCasePredictionDiagnostics | None:
+        if self.event_count == 0:
+            return None
+        return DeepCasePredictionDiagnostics(
+            event_count=self.event_count,
+            confident_event_count=self.confident_event_count,
+            abstained_event_count=self.abstained_event_count,
+            confident_anomaly_event_count=self.confident_anomaly_event_count,
+            sequence_confident_anomaly_count=self.sequence_confident_anomaly_count,
+            sequence_confident_normal_count=self.sequence_confident_normal_count,
+            sequence_abstained_count=self.sequence_abstained_count,
+            reason_counts=dict(self.reason_counts),
+        )
 
 
 class DeepCaseManifest(ModelManifest, frozen=True):
@@ -227,6 +347,9 @@ class DeepCaseManifest(ModelManifest, frozen=True):
             non-noise cluster.
         known_cluster_count (int): Number of non-noise clusters learned during
             training.
+        prediction_diagnostics (DeepCasePredictionDiagnostics | None): Optional
+            prediction-time diagnostics aggregated from the latest DeepCASE
+            scoring run.
         online_updates_status (str): Status of online model updates.
         persistent_cluster_database_status (str): Status of persistent cluster
             storage support.
@@ -254,6 +377,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     train_sample_count: int
     clustered_sample_count: int
     known_cluster_count: int
+    prediction_diagnostics: DeepCasePredictionDiagnostics | None
     online_updates_status: str
     persistent_cluster_database_status: str
 
@@ -420,23 +544,23 @@ def finding_reason_for_score(raw_score: float) -> ScoreReason:
     return ScoreReason.KNOWN_BENIGN_CLUSTER
 
 
-def label_for_score(raw_score: float) -> int:
-    """Map a raw DeepCase score/code into AnomaLog's binary label space.
+def decision_label_for_score(raw_score: float) -> int:
+    """Map a raw DeepCase score/code into AnomaLog's binary anomaly label.
 
     Args:
         raw_score (float): Raw DeepCase score.
 
     Returns:
-        int: `0` for known benign, `1` for malicious/manual-review outcomes.
+        int: `1` only for confident malicious scores, otherwise `0`.
 
     Examples:
-        >>> from experiments.models.deepcase.shared import label_for_score
-        >>> label_for_score(0.0)
+        >>> from experiments.models.deepcase.shared import decision_label_for_score
+        >>> decision_label_for_score(0.0)
         0
-        >>> label_for_score(-1.0)
-        1
+        >>> decision_label_for_score(-1.0)
+        0
     """
-    return int(not math.isclose(raw_score, 0.0))
+    return int(raw_score > 0)
 
 
 def aggregate_sequence_score(raw_scores: Sequence[float]) -> float:
@@ -448,18 +572,7 @@ def aggregate_sequence_score(raw_scores: Sequence[float]) -> float:
     Returns:
         float: Sequence-level score for the experiment metrics contract.
     """
-    highest_positive_score = 0.0
-    saw_negative_score = False
-    for score in raw_scores:
-        if score > highest_positive_score:
-            highest_positive_score = score
-        elif score < 0:
-            saw_negative_score = True
-    if highest_positive_score > 0:
-        return highest_positive_score
-    if saw_negative_score:
-        return 1.0
-    return 0.0
+    return max((score for score in raw_scores if score > 0), default=0.0)
 
 
 def _event_id_for_template(

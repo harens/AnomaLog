@@ -25,11 +25,14 @@ from experiments.models.deepcase.shared import (
     DeepCaseEventFinding,
     DeepCaseEventIdMap,
     DeepCaseManifest,
+    DeepCaseSequenceDecision,
+    _DeepCasePredictionDiagnosticsState,
+    _DeepCasePredictionSummary,
     aggregate_sequence_score,
     build_sample_batch,
     build_training_batch,
+    decision_label_for_score,
     finding_reason_for_score,
-    label_for_score,
 )
 from experiments.models.torch_runtime import (
     TorchDeviceName,
@@ -58,9 +61,20 @@ class DeepCasePredictionOutcome(PredictionOutcome):
     Attributes:
         findings (list[DeepCaseEventFinding]): Event-level DeepCase findings
             for each scored event in the sequence.
+        sequence_decision (DeepCaseSequenceDecision): Sequence-level decision
+            category derived from the event findings.
+        confident_event_count (int): Number of events with a confident label.
+        abstained_event_count (int): Number of events that should be reviewed
+            manually instead of being treated as automatic anomalies.
+        confident_anomaly_event_count (int): Number of confidently anomalous
+            events within the sequence.
     """
 
     findings: list[DeepCaseEventFinding]
+    sequence_decision: DeepCaseSequenceDecision
+    confident_event_count: int
+    abstained_event_count: int
+    confident_anomaly_event_count: int
 
 
 class DeepCaseModelConfig(
@@ -254,6 +268,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
     train_sample_count: int = 0
     clustered_sample_count: int = 0
     known_cluster_count: int = 0
+    _prediction_diagnostics_state: _DeepCasePredictionDiagnosticsState = field(
+        default_factory=_DeepCasePredictionDiagnosticsState,
+        repr=False,
+    )
     _prediction_sample_chunk_size: ClassVar[int] = 32_768
 
     def fit(
@@ -343,6 +361,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.known_cluster_count = len(
             {cluster for cluster in model.interpreter.clusters if cluster != -1},
         )
+        self._reset_prediction_diagnostics()
         self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> DeepCasePredictionOutcome:
@@ -360,6 +379,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         if self.model is None or self.event_id_map is None:
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
+        self._reset_prediction_diagnostics()
         batch = build_sample_batch(
             (sequence,),
             event_id_map=self.event_id_map,
@@ -372,15 +392,27 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                 predicted_label=0,
                 score=0.0,
                 findings=[],
+                sequence_decision=DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+                confident_event_count=0,
+                abstained_event_count=0,
+                confident_anomaly_event_count=0,
             )
 
         raw_scores = self._predict_batch(batch)
         findings = _findings_from_scores(batch=batch, raw_scores=raw_scores)
-        predicted_label = int(any(finding.predicted_label == 1 for finding in findings))
-        return DeepCasePredictionOutcome(
-            predicted_label=predicted_label,
-            score=aggregate_sequence_score(raw_scores),
+        summary = _summarise_findings(findings=findings, raw_scores=raw_scores)
+        self._prediction_diagnostics_state.record(
+            summary=summary,
             findings=findings,
+        )
+        return DeepCasePredictionOutcome(
+            predicted_label=summary.predicted_label,
+            score=summary.score,
+            findings=findings,
+            sequence_decision=summary.sequence_decision,
+            confident_event_count=summary.confident_event_count,
+            abstained_event_count=summary.abstained_event_count,
+            confident_anomaly_event_count=summary.confident_anomaly_event_count,
         )
 
     def predict_all(
@@ -403,6 +435,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             tuple[TemplateSequence, DeepCasePredictionOutcome]: Scored sequences
             in input order.
         """
+        self._reset_prediction_diagnostics()
         buffered_sequences: list[TemplateSequence] = []
         buffered_sample_count = 0
         for sequence in sequences:
@@ -459,6 +492,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             train_sample_count=self.train_sample_count,
             clustered_sample_count=self.clustered_sample_count,
             known_cluster_count=self.known_cluster_count,
+            prediction_diagnostics=self._prediction_diagnostics_state.snapshot(),
             online_updates_status="not implemented",
             persistent_cluster_database_status="not implemented",
         )
@@ -516,6 +550,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                         predicted_label=0,
                         score=0.0,
                         findings=[],
+                        sequence_decision=DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+                        confident_event_count=0,
+                        abstained_event_count=0,
+                        confident_anomaly_event_count=0,
                     ),
                 )
             return
@@ -530,15 +568,24 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                 raw_scores=sequence_scores,
                 start_index=score_offset,
             )
-            predicted_label = int(
-                any(finding.predicted_label == 1 for finding in findings),
+            summary = _summarise_findings(
+                findings=findings,
+                raw_scores=sequence_scores,
+            )
+            self._prediction_diagnostics_state.record(
+                summary=summary,
+                findings=findings,
             )
             yield (
                 sequence,
                 DeepCasePredictionOutcome(
-                    predicted_label=predicted_label,
-                    score=aggregate_sequence_score(sequence_scores),
+                    predicted_label=summary.predicted_label,
+                    score=summary.score,
                     findings=findings,
+                    sequence_decision=summary.sequence_decision,
+                    confident_event_count=summary.confident_event_count,
+                    abstained_event_count=summary.abstained_event_count,
+                    confident_anomaly_event_count=summary.confident_anomaly_event_count,
                 ),
             )
             score_offset += sample_count
@@ -551,6 +598,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         """
         return max(self.config.query_batch_size, self._prediction_sample_chunk_size)
 
+    def _reset_prediction_diagnostics(self) -> None:
+        """Reset accumulated prediction diagnostics before a new scoring run."""
+        self._prediction_diagnostics_state.reset()
+
 
 def _findings_from_scores(
     *,
@@ -561,14 +612,64 @@ def _findings_from_scores(
     findings: list[DeepCaseEventFinding] = []
     for relative_index, raw_score in enumerate(raw_scores):
         index = start_index + relative_index
+        reason = finding_reason_for_score(raw_score)
         findings.append(
             DeepCaseEventFinding(
                 event_index=batch.event_indexes[index],
                 template=batch.templates[index],
                 event_id=batch.original_event_ids[index],
                 raw_score=raw_score,
-                reason=finding_reason_for_score(raw_score),
-                predicted_label=label_for_score(raw_score),
+                reason=reason,
+                predicted_label=decision_label_for_score(raw_score),
+                is_abstained=reason.is_abstained,
             ),
         )
     return findings
+
+
+def _summarise_findings(
+    *,
+    findings: Sequence[DeepCaseEventFinding],
+    raw_scores: Sequence[float],
+) -> _DeepCasePredictionSummary:
+    """Summarise event findings into one sequence-level DeepCase decision.
+
+    This mirrors the paper's semi-automatic flow: confident positive scores
+    are treated as anomaly candidates, while low-confidence or out-of-vocabulary
+    cases are preserved as abstentions for manual inspection.
+
+    Args:
+        findings (Sequence[DeepCaseEventFinding]): Event-level findings for
+            one scored sequence.
+        raw_scores (Sequence[float]): Raw DeepCASE event scores for the same
+            sequence.
+
+    Returns:
+        _DeepCasePredictionSummary: Sequence-level binary decision together
+        with DeepCASE abstain and confidence counts.
+    """
+    abstained_event_count = 0
+    confident_anomaly_event_count = 0
+    for finding in findings:
+        if finding.is_abstained:
+            abstained_event_count += 1
+        elif finding.predicted_label == 1:
+            confident_anomaly_event_count += 1
+    confident_event_count = len(findings) - abstained_event_count
+    if confident_anomaly_event_count > 0:
+        sequence_decision = DeepCaseSequenceDecision.CONFIDENT_ANOMALY
+        predicted_label = 1
+    elif abstained_event_count > 0:
+        sequence_decision = DeepCaseSequenceDecision.ABSTAINED
+        predicted_label = 0
+    else:
+        sequence_decision = DeepCaseSequenceDecision.CONFIDENT_NORMAL
+        predicted_label = 0
+    return _DeepCasePredictionSummary(
+        predicted_label=predicted_label,
+        score=aggregate_sequence_score(raw_scores),
+        sequence_decision=sequence_decision,
+        confident_event_count=confident_event_count,
+        abstained_event_count=abstained_event_count,
+        confident_anomaly_event_count=confident_anomaly_event_count,
+    )

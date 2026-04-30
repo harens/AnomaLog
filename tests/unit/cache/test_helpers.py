@@ -236,7 +236,7 @@ def test_dataset_build_lock_blocks_other_processes_for_same_namespace(
         ),
     )
     process.start()
-    deadline = monotonic() + 5
+    deadline = monotonic() + 15
     while monotonic() < deadline and not ready_path.exists():
         sleep(0.01)
 

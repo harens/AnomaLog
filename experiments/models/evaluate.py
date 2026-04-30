@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from anomalog.io_utils import make_count_progress
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from anomalog.sequences import SplitLabel
 from experiments.models.base import (
     BatchExperimentDetector,
@@ -64,8 +64,8 @@ class RunMetrics:
         fp (int): False positives on the test split.
         fn (int): False negatives on the test split.
         test_score_sum (float): Running sum of test-split anomaly scores.
-        train_label_counts (Counter[int]): Train label histogram.
-        test_label_counts (Counter[int]): Test label histogram.
+        train_label_counts (dict[int, int]): Train label histogram.
+        test_label_counts (dict[int, int]): Test label histogram.
     """
 
     sequence_count: int = 0
@@ -76,8 +76,8 @@ class RunMetrics:
     fp: int = 0
     fn: int = 0
     test_score_sum: float = 0.0
-    train_label_counts: Counter[int] = field(default_factory=Counter)
-    test_label_counts: Counter[int] = field(default_factory=Counter)
+    train_label_counts: dict[int, int] = field(default_factory=dict)
+    test_label_counts: dict[int, int] = field(default_factory=dict)
 
     def record_train(
         self,
@@ -91,7 +91,9 @@ class RunMetrics:
         """
         self.sequence_count += 1
         self.train_sequence_count += 1
-        self.train_label_counts[sequence.label] += 1
+        self.train_label_counts[sequence.label] = (
+            self.train_label_counts.get(sequence.label, 0) + 1
+        )
 
     def record_test(
         self,
@@ -108,13 +110,16 @@ class RunMetrics:
         """
         self.sequence_count += 1
         self.test_sequence_count += 1
-        self.test_label_counts[sequence.label] += 1
+        self.test_label_counts[sequence.label] = (
+            self.test_label_counts.get(sequence.label, 0) + 1
+        )
         self.test_score_sum += prediction.score
-        if prediction.label == 1 and prediction.predicted_label == 1:
+        label_is_anomalous = is_anomalous_label(prediction.label)
+        if label_is_anomalous and prediction.predicted_label == 1:
             self.tp += 1
-        elif prediction.label == 0 and prediction.predicted_label == 0:
+        elif not label_is_anomalous and prediction.predicted_label == 0:
             self.tn += 1
-        elif prediction.label == 0 and prediction.predicted_label == 1:
+        elif not label_is_anomalous and prediction.predicted_label == 1:
             self.fp += 1
         else:
             self.fn += 1
@@ -135,7 +140,7 @@ class RunMetrics:
             else 0.0
         )
         mean_test_score = self.test_score_sum / test_count if test_count else 0.0
-        return {
+        metrics: dict[str, int | float] = {
             "sequence_count": self.sequence_count,
             "train_sequence_count": self.train_sequence_count,
             "test_sequence_count": self.test_sequence_count,
@@ -149,6 +154,7 @@ class RunMetrics:
             "f1": round(f1, 8),
             "mean_test_score": round(mean_test_score, 8),
         }
+        return metrics
 
     def summary(self) -> SequenceSummary:
         """Return finalised sequence summary.

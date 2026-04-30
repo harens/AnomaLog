@@ -19,16 +19,16 @@ from experiments.models.deepcase.detector import DeepCaseDetector
 from experiments.models.deepcase.shared import (
     DeepCaseEventIdMap,
     DeepCaseSampleBatch,
+    DeepCaseSequenceDecision,
     ScoreReason,
     aggregate_sequence_score,
     build_sample_batch,
     build_training_batch,
+    decision_label_for_score,
     finding_reason_for_score,
-    label_for_score,
 )
 
 MALICIOUS_SCORE = 3.0
-MANUAL_REVIEW_SCORE = 1.0
 UNKNOWN_EVENT_SCORE = -2.0
 ConfigValue = str | int | float | bool | None
 
@@ -333,16 +333,19 @@ def test_deepcase_rejects_multi_entity_sequences() -> None:
 
 def test_deepcase_score_mapping_is_conservative() -> None:
     """DeepCase special codes and positive scores should map to alerts."""
-    assert finding_reason_for_score(0.0) == "known_benign_cluster"
-    assert finding_reason_for_score(2.0) == "known_malicious_cluster"
-    assert finding_reason_for_score(-1.0) == "not_confident_enough"
-    assert finding_reason_for_score(-2.0) == "event_not_in_training_vocabulary"
-    assert finding_reason_for_score(-3.0) == "closest_cluster_outside_epsilon"
-    assert label_for_score(0.0) == 0
-    assert label_for_score(1.0) == 1
-    assert label_for_score(-1.0) == 1
+    assert finding_reason_for_score(0.0) is ScoreReason.KNOWN_BENIGN_CLUSTER
+    assert finding_reason_for_score(2.0) is ScoreReason.KNOWN_MALICIOUS_CLUSTER
+    assert finding_reason_for_score(-1.0) is ScoreReason.NOT_CONFIDENT_ENOUGH
+    assert (
+        finding_reason_for_score(-2.0) is ScoreReason.EVENT_NOT_IN_TRAINING_VOCABULARY
+    )
+    assert finding_reason_for_score(-3.0) is ScoreReason.CLOSEST_CLUSTER_OUTSIDE_EPSILON
+    assert decision_label_for_score(0.0) == 0
+    assert decision_label_for_score(1.0) == 1
+    assert decision_label_for_score(-1.0) == 0
+    assert finding_reason_for_score(-1.0).is_abstained
     assert aggregate_sequence_score([0.0, MALICIOUS_SCORE, -1.0]) == MALICIOUS_SCORE
-    assert aggregate_sequence_score([0.0, -1.0]) == MANUAL_REVIEW_SCORE
+    assert aggregate_sequence_score([0.0, -1.0]) == pytest.approx(0.0)
     assert not aggregate_sequence_score([0.0, 0.0])
 
 
@@ -374,14 +377,20 @@ def test_deepcase_predict_aggregates_event_findings(
 
     outcome = detector.predict(test_sequence)
 
-    assert outcome.predicted_label == 1
-    assert outcome.score == MANUAL_REVIEW_SCORE
+    assert outcome.predicted_label == 0
+    assert outcome.score == pytest.approx(0.0)
+    assert outcome.sequence_decision is DeepCaseSequenceDecision.ABSTAINED
+    assert outcome.confident_event_count == 1
+    assert outcome.abstained_event_count == 1
+    assert outcome.confident_anomaly_event_count == 0
     assert [finding.raw_score for finding in outcome.findings] == [
         0.0,
         UNKNOWN_EVENT_SCORE,
     ]
     assert outcome.findings[1].event_id is None
     assert outcome.findings[1].reason is ScoreReason.EVENT_NOT_IN_TRAINING_VOCABULARY
+    assert not outcome.findings[1].predicted_label
+    assert outcome.findings[1].is_abstained
 
 
 def test_deepcase_predict_all_batches_multiple_sequences(
@@ -416,6 +425,10 @@ def test_deepcase_predict_all_batches_multiple_sequences(
     assert predict_batch_sizes == [3]
     assert [len(sequence.events) for sequence, _ in outcomes] == [2, 1]
     assert [outcome.predicted_label for _, outcome in outcomes] == [1, 0]
+    assert [outcome.sequence_decision for _, outcome in outcomes] == [
+        DeepCaseSequenceDecision.CONFIDENT_ANOMALY,
+        DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+    ]
     assert [outcome.score for _, outcome in outcomes] == [MALICIOUS_SCORE, 0.0]
     assert [
         [finding.raw_score for finding in outcome.findings] for _, outcome in outcomes
@@ -423,6 +436,7 @@ def test_deepcase_predict_all_batches_multiple_sequences(
         [0.0, MALICIOUS_SCORE],
         [0.0],
     ]
+    assert [outcome.abstained_event_count for _, outcome in outcomes] == [0, 0]
 
 
 def test_deepcase_predict_batch_uses_zero_query_iterations(

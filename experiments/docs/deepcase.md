@@ -16,7 +16,8 @@ AnomaLog's sequence-oriented experiment runner.
   DBSCAN clustering, manual-mode cluster scoring, and semi-automatic prediction
   are delegated to the installed `deepcase` library.
 - DeepCase special prediction codes are preserved in event findings:
-  `-1` for low confidence, `-2` for unknown event, and `-3` for outside epsilon.
+  `-1` for low confidence, `-2` for unknown event, and `-3` for outside
+  epsilon.
 
 ## AnomaLog Adaptations
 
@@ -36,10 +37,24 @@ clustering step during fit, but the runner does not spend time on the slow
 attention-refinement loop when producing experiment predictions.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
-for the operator-provided labels that DeepCase would receive during manual
+for the operator-provided labels that DeepCASE would receive during manual
 analysis. Predictions are still emitted as sequence records for the common
-metrics contract, with detector-owned event findings preserving DeepCase's
+metrics contract, with detector-owned event findings preserving DeepCASE's
 event-level decisions.
+
+DeepCASE abstentions are not treated as anomalies. Event findings now distinguish
+between:
+
+- confident benign
+- confident malicious
+- abstained/manual-review
+
+The sequence-level prediction remains binary for the shared experiment contract,
+but the persisted prediction record carries `sequence_decision`,
+`confident_event_count`, and `abstained_event_count` so you can see how much of
+the sequence was actually decisive. Run metrics additionally aggregate the
+DeepCASE reason histogram and confidence/abstain coverage so the evaluation does
+not collapse uncertainty into anomaly.
 
 The model should be run with entity grouping:
 
@@ -56,3 +71,4 @@ multiple entity ids.
 - No interactive operator labeling workflow.
 - No persistent cluster database shared across experiment runs.
 - No online update loop for newly inspected clusters or outliers.
+- No separate threshold sweep for alternative abstain / confidence settings.
