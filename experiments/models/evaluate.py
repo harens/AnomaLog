@@ -12,12 +12,12 @@ from anomalog.io_utils import make_count_progress
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from anomalog.sequences import SplitLabel
 from experiments.models.base import (
+    AbstainAwarePredictionOutcome,
     BatchExperimentDetector,
     ExperimentDetector,
     ExperimentModelConfig,
     ModelRunSummary,
     PredictionOutcome,
-    SequencePrediction,
     SequenceSummary,
 )
 from experiments.models.progress import (
@@ -118,15 +118,18 @@ class RunMetrics:
     def record_test(
         self,
         sequence: TemplateSequence,
-        prediction: SequencePrediction,
+        prediction: PredictionOutcome,
+        *,
+        abstained: bool = False,
     ) -> None:
         """Update metrics from one test-split prediction.
 
         Args:
             sequence (TemplateSequence): Test-split sequence that produced
                 the prediction.
-            prediction (SequencePrediction): Serialised prediction record for
-                the sequence.
+            prediction (PredictionOutcome): Detector output for the sequence.
+            abstained (bool): Whether the detector deferred the sequence for
+                manual review.
         """
         self.sequence_count += 1
         self.test_sequence_count += 1
@@ -134,7 +137,12 @@ class RunMetrics:
             self.test_label_counts.get(sequence.label, 0) + 1
         )
         self.test_score_sum += prediction.score
-        label_is_anomalous = is_anomalous_label(prediction.label)
+        if abstained:
+            # Abstained predictions still count towards test coverage and mean
+            # score, but they must not affect the automatic confusion matrix.
+            return
+
+        label_is_anomalous = is_anomalous_label(sequence.label)
         if label_is_anomalous and prediction.predicted_label == 1:
             self.tp += 1
         elif not label_is_anomalous and prediction.predicted_label == 0:
@@ -151,8 +159,9 @@ class RunMetrics:
             dict[str, int | float | dict[int, int]]: Aggregate classification
                 and split metrics.
         """
+        decision_count = self.tp + self.tn + self.fp + self.fn
         test_count = self.test_sequence_count
-        accuracy = (self.tp + self.tn) / test_count if test_count else 0.0
+        accuracy = (self.tp + self.tn) / decision_count if decision_count else 0.0
         precision = self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 0.0
         recall = self.tp / (self.tp + self.fn) if (self.tp + self.fn) else 0.0
         f1 = (
@@ -233,8 +242,12 @@ def run_model(
         score_progress_hint=None if progress_plan is None else progress_plan.score,
     )
     sequence_summary = accumulator.summary()
+    metrics = accumulator.metrics()
+    extra_metrics = detector.run_metrics(run_metrics=metrics)
+    if extra_metrics is not None:
+        metrics = {**metrics, **msgspec.to_builtins(extra_metrics)}
     return ModelRunSummary(
-        metrics=accumulator.metrics(),
+        metrics=metrics,
         model_manifest=detector.model_manifest(sequence_summary=sequence_summary),
         sequence_summary=sequence_summary,
     )
@@ -326,12 +339,13 @@ def stream_predictions(
             accumulator=accumulator,
         ):
             prediction = outcome.to_prediction_record(sequence)
+            abstained = _prediction_is_abstained(outcome)
             if file_obj is not None:
                 file_obj.write(
                     msgspec.json.encode(prediction.to_dict()).decode("utf-8"),
                 )
                 file_obj.write("\n")
-            accumulator.record_test(sequence, prediction)
+            accumulator.record_test(sequence, outcome, abstained=abstained)
             progress.advance(score_task)
             if accumulator.test_sequence_count % _PROGRESS_EVERY == 0:
                 logger.info(
@@ -395,3 +409,18 @@ def _iter_test_sequences(
             accumulator.record_ignored(sequence)
             continue
         yield sequence
+
+
+def _prediction_is_abstained(prediction: PredictionOutcome) -> bool:
+    """Return whether a detector-specific prediction outcome abstains.
+
+    Args:
+        prediction (PredictionOutcome): Detector output being inspected.
+
+    Returns:
+        bool: True when the prediction outcome exposes an abstain hook and it
+            reports manual review.
+    """
+    return isinstance(prediction, AbstainAwarePredictionOutcome) and (
+        prediction.is_abstained
+    )

@@ -37,8 +37,8 @@ extensions:
 - Manifest reporting for parameter-model coverage and per-template feature
   counts.
 - Detector-owned next-event diagnostics derived from the key model's ranked
-  predictions. These diagnostics are separate from anomaly scoring and remain
-  available in the model manifest for the latest scoring run.
+  predictions. These diagnostics are separate from anomaly scoring and are
+  exposed in run metrics for the latest scoring run.
 
 ## Remaining Gaps Vs The Paper
 

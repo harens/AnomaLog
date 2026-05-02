@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, ClassVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import msgspec
 import torch
@@ -81,6 +81,17 @@ class DeepLogPredictionOutcome(PredictionOutcome):
     triggered_by_key_model: bool
     triggered_by_parameter_model: bool
     findings: list[DeepLogEventFinding]
+
+
+class DeepLogRunMetrics(msgspec.Struct, frozen=True):
+    """DeepLog-specific run metrics for a single evaluation.
+
+    Attributes:
+        next_event_prediction (NextEventPredictionDiagnostics | None): Latest
+            key-model next-event diagnostics.
+    """
+
+    next_event_prediction: NextEventPredictionDiagnostics | None
 
 
 class DeepLogModelConfig(
@@ -293,10 +304,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self.skipped_parameter_models = skipped_parameter_models
         self.train_event_count = train_event_count
         self.train_parameter_covered_event_count = train_parameter_covered_event_count
-        self._next_event_prediction_state = NextEventPredictionState.create(
-            k_values=_next_event_k_values(self.config.top_g),
-            vocabulary_policy=self.config.vocabulary_policy,
-        )
+        self._reset_next_event_prediction_state()
         self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> DeepLogPredictionOutcome:
@@ -315,6 +323,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             msg = "deeplog must be fit before prediction."
             raise ValueError(msg)
         require_entity_local_sequences((sequence,), detector_name="DeepLog")
+        self._reset_next_event_prediction_state()
 
         findings: list[DeepLogEventFinding] = []
         key_triggered = False
@@ -463,8 +472,22 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 SkippedParameterModelEntry(template=template, reason=reason)
                 for template, reason in sorted(self.skipped_parameter_models.items())
             ],
-            next_event_prediction=self._consume_next_event_prediction_state(),
         )
+
+    def run_metrics(self, *, run_metrics: dict[str, Any]) -> DeepLogRunMetrics:
+        """Return DeepLog-specific run metrics for the latest evaluation.
+
+        Args:
+            run_metrics (dict[str, Any]): Generic run metrics accumulated by
+                the shared evaluator.
+
+        Returns:
+            DeepLogRunMetrics: DeepLog-owned metrics for the latest scoring
+            run.
+        """
+        del run_metrics
+        next_event_prediction = self._next_event_prediction_state_snapshot()
+        return DeepLogRunMetrics(next_event_prediction=next_event_prediction)
 
     def _record_next_event_predictions(
         self,
@@ -504,21 +527,26 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             self._next_event_prediction_state = state
         return state
 
-    def _consume_next_event_prediction_state(
+    def _reset_next_event_prediction_state(self) -> None:
+        """Reset next-event diagnostics before a fresh scoring run."""
+        self._next_event_prediction_state = NextEventPredictionState.create(
+            k_values=_next_event_k_values(self.config.top_g),
+            vocabulary_policy=self.config.vocabulary_policy,
+        )
+
+    def _next_event_prediction_state_snapshot(
         self,
     ) -> NextEventPredictionDiagnostics | None:
-        """Return and clear next-event diagnostics for the latest scoring run.
+        """Return next-event diagnostics for the latest scoring run.
 
         Returns:
-            NextEventPredictionDiagnostics | None: Diagnostics for the latest
-                scoring run, or `None` if no next-event pass has been recorded.
+            NextEventPredictionDiagnostics | None: Latest next-event
+            diagnostics, or `None` when no eligible events were observed.
         """
         state = self._next_event_prediction_state
         if state is None:
             return None
-        snapshot = state.snapshot()
-        self._next_event_prediction_state = None
-        return snapshot
+        return state.snapshot()
 
 
 def _fraction(numerator: int, denominator: int) -> float:

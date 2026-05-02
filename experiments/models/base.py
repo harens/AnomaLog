@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
 from typing import (
@@ -91,6 +92,20 @@ class PredictionOutcome:
             for item in fields(self)
             if item.name not in prediction_outcome_fields
         }
+
+
+class AbstainAwarePredictionOutcome(PredictionOutcome, ABC):
+    """Optional contract for detectors that can abstain from automation."""
+
+    @property
+    @abstractmethod
+    def is_abstained(self) -> bool:
+        """Return whether the prediction deferred to manual review.
+
+        Returns:
+            bool: True when the detector deferred the sequence for manual
+            review.
+        """
 
 
 @dataclass(slots=True)
@@ -350,13 +365,12 @@ class ModelRunSummary:
     """Detector outputs and run summaries.
 
     Attributes:
-        metrics (dict[str, int | float | dict[int, int]]): Aggregate run
-            metrics.
+        metrics (dict[str, Any]): Aggregate run metrics.
         model_manifest (ModelManifest): Detector manifest for the run.
         sequence_summary (SequenceSummary): Split and label counts for the run.
     """
 
-    metrics: dict[str, int | float | dict[int, int]]
+    metrics: dict[str, Any]
     model_manifest: ModelManifest
     sequence_summary: SequenceSummary
 
@@ -518,6 +532,22 @@ class ExperimentDetector(Protocol):
 
         Returns:
             ModelManifest: Serialisable detector manifest for the run.
+        """
+
+    def run_metrics(
+        self,
+        *,
+        run_metrics: dict[str, int | float | dict[int, int]],
+    ) -> object | None:
+        """Return optional detector-specific run metrics.
+
+        Args:
+            run_metrics (dict[str, int | float | dict[int, int]]): Generic run
+                metrics accumulated by the shared evaluator.
+
+        Returns:
+            object | None: Optional detector-owned metrics to merge into the
+            final run summary.
         """
 
 

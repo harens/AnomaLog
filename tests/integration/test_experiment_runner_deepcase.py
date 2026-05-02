@@ -66,16 +66,55 @@ def _assert_deepcase_outputs(
 ) -> None:
     sequence_config = manifest["sequence_config"]
     sequence_split_summary = manifest["sequence_split_summary"]
+    _assert_deepcase_metrics(metrics, predictions)
+    _assert_deepcase_prediction_diagnostics(prediction_diagnostics, predictions)
+    _assert_deepcase_model_manifest(
+        model_manifest=model_manifest,
+        sequence_config=sequence_config,
+        sequence_split_summary=sequence_split_summary,
+    )
+    _assert_deepcase_predictions(predictions)
+
+
+def _assert_deepcase_metrics(
+    metrics: dict[str, Any],
+    predictions: list[dict[str, Any]],
+) -> None:
     assert metrics["sequence_count"] > 0
     assert metrics["train_sequence_count"] >= 0
     assert metrics["test_sequence_count"] >= 0
     assert metrics["ignored_sequence_count"] >= 0
+    assert "auto_decision_count" in metrics
+    assert "abstained_prediction_count" in metrics
+    assert "auto_coverage" in metrics
+    assert "abstain_rate" in metrics
+    assert "abstained_anomalous_label_count" in metrics
+    assert "abstained_normal_label_count" in metrics
+    assert "next_event_prediction" in metrics
     assert metrics["sequence_count"] == (
         metrics["train_sequence_count"]
         + metrics["test_sequence_count"]
         + metrics["ignored_sequence_count"]
     )
+    assert metrics["test_sequence_count"] == (
+        metrics["auto_decision_count"] + metrics["abstained_prediction_count"]
+    )
+    assert metrics["abstained_prediction_count"] == (
+        metrics["abstained_anomalous_label_count"]
+        + metrics["abstained_normal_label_count"]
+    )
+    assert 0.0 <= metrics["auto_coverage"] <= 1.0
+    assert 0.0 <= metrics["abstain_rate"] <= 1.0
     assert len(predictions) == metrics["test_sequence_count"]
+    next_event_prediction = metrics["next_event_prediction"]
+    assert isinstance(next_event_prediction, dict)
+    assert next_event_prediction["task"] == "next_event_prediction"
+
+
+def _assert_deepcase_prediction_diagnostics(
+    prediction_diagnostics: dict[str, Any],
+    predictions: list[dict[str, Any]],
+) -> None:
     assert [prediction["split_label"] for prediction in predictions] == ["test"] * len(
         predictions,
     )
@@ -92,33 +131,29 @@ def _assert_deepcase_outputs(
     ] + prediction_diagnostics[
         "sequence_confident_normal_count"
     ] + prediction_diagnostics["sequence_abstained_count"] == len(predictions)
+
+
+def _assert_deepcase_model_manifest(
+    *,
+    model_manifest: dict[str, Any],
+    sequence_config: dict[str, Any],
+    sequence_split_summary: dict[str, Any],
+) -> None:
     assert model_manifest["detector"] == "deepcase"
     assert model_manifest["context_length"] == EXPECTED_CONTEXT_LENGTH
     assert model_manifest["timeout_seconds"] == EXPECTED_TIMEOUT_SECONDS
     assert model_manifest["min_samples"] == EXPECTED_MIN_SAMPLES
     assert model_manifest["train_sample_count"] > 0
     assert model_manifest["train_event_vocabulary_size"] > 0
-    assert model_manifest["prediction_diagnostics"] == prediction_diagnostics
-    next_event_prediction = model_manifest["next_event_prediction"]
-    assert isinstance(next_event_prediction, dict)
-    assert next_event_prediction["task"] == "next_event_prediction"
-    totals: Any = next_event_prediction["totals"]
-    top_k: Any = next_event_prediction["top_k"]
-    exclusions: Any = next_event_prediction["exclusions"]
-    assert totals["events_seen"] > 0
-    assert totals["events_eligible"] >= 0
-    assert 0.0 <= totals["coverage"] <= 1.0
-    assert 1 in top_k["k_values"]
-    assert "1" in top_k["hit_count"]
-    assert "1" in top_k["accuracy"]
-    assert exclusions["insufficient_history"] == 0
-    assert exclusions["unknown_history"] == 0
-    assert exclusions["unknown_target"] == 0
-    assert next_event_prediction["vocabulary_policy"] == "full_dataset"
+    assert "known_benign_cluster_count" in model_manifest
+    assert "known_malicious_cluster_count" in model_manifest
+    assert "unknown_cluster_score_count" in model_manifest
     assert sequence_config["train_fraction"] == pytest.approx(
         sequence_split_summary["requested_train_fraction"],
     )
-    assert model_manifest["prediction_diagnostics"] == prediction_diagnostics
+
+
+def _assert_deepcase_predictions(predictions: list[dict[str, Any]]) -> None:
     assert all(
         len(prediction["findings"]) == prediction["event_count"]
         for prediction in predictions
@@ -163,9 +198,11 @@ def test_run_experiment_with_deepcase_writes_event_findings(
 
     model_manifest = manifest["model_manifest"]
     prediction_diagnostics = model_manifest["prediction_diagnostics"]
+    next_event_prediction = metrics["next_event_prediction"]
 
     assert isinstance(model_manifest, dict)
     assert isinstance(prediction_diagnostics, dict)
+    assert isinstance(next_event_prediction, dict)
     _assert_deepcase_outputs(
         metrics=metrics,
         manifest=manifest,

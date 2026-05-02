@@ -31,10 +31,10 @@ DeepCase training reports progress per context-builder epoch before moving on
 to interpreter clustering. That keeps long training runs visibly alive instead
 of appearing to stall once sequence preparation has finished.
 
-Test-time DeepCase scoring deliberately uses the upstream zero-iteration query
-path. The configured `iterations` value still controls the interpreter's
-clustering step during fit, but the runner does not spend time on the slow
-attention-refinement loop when producing experiment predictions.
+Test-time DeepCase scoring now uses the configured attention-query iteration
+budget. The `iterations` value still controls interpreter clustering during
+fit, and it also governs the prediction-time attention query path so the
+runner stays faithful to the paper's semi-automatic inference loop.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCASE would receive during manual
@@ -56,12 +56,28 @@ the sequence was actually decisive. Run metrics additionally aggregate the
 DeepCASE reason histogram and confidence/abstain coverage so the evaluation does
 not collapse uncertainty into anomaly.
 
-The manifest also carries detector-owned next-event diagnostics from the
-Context Builder. This is a separate, deterministic diagnostic pass that uses
-the padded context windows produced by DeepCASE. The diagnostic vocabulary
-policy is configurable on `DeepCaseModelConfig` and defaults to
-`full_dataset`, with `train_only` still available for closed-world
-comparisons. The anomaly detector itself remains unchanged.
+### Metric Interpretation
+
+Automated precision, recall, F1, and accuracy are computed over confident
+auto-decisions only. Abstained sequences are reported separately as
+manual-review workload and coverage signals:
+
+- `auto_decision_count`: number of confident auto-decisions
+- `abstained_prediction_count`: number of deferred sequences
+- `auto_coverage`: fraction of test sequences decided automatically
+- `abstain_rate`: fraction of test sequences deferred for review
+- `abstained_normal_label_count`: deferred normal sequences
+- `abstained_anomalous_label_count`: deferred anomalous sequences
+
+`mean_test_score` still averages all test sequences, so the score trend remains
+comparable even when the abstain rate changes.
+
+Run metrics also carry detector-owned next-event diagnostics from the Context
+Builder. This is a separate, deterministic diagnostic pass that uses the
+padded context windows produced by DeepCASE. The diagnostic vocabulary policy
+is configurable on `DeepCaseModelConfig` and defaults to `full_dataset`, with
+`train_only` still available for closed-world comparisons. The anomaly
+detector itself remains unchanged.
 
 The model should be run with entity grouping:
 

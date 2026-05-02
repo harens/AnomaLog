@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, ClassVar, Literal
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
 
 import msgspec
 import numpy as np
 import torch
 from deepcase import DeepCASE
+from typing_extensions import override
 
 from experiments.models.base import (
+    AbstainAwarePredictionOutcome,
     ExperimentDetector,
     ExperimentModelConfig,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
-    PredictionOutcome,
     Probability,
     SequenceSummary,
     SingleFitMixin,
@@ -25,6 +26,7 @@ from experiments.models.deepcase.shared import (
     DeepCaseEventFinding,
     DeepCaseEventIdMap,
     DeepCaseManifest,
+    DeepCasePredictionDiagnostics,
     DeepCaseSequenceDecision,
     _DeepCasePredictionDiagnosticsState,
     _DeepCasePredictionSummary,
@@ -60,7 +62,9 @@ for how event scores are aggregated within a cluster."""
 
 
 @dataclass(frozen=True, slots=True)
-class DeepCasePredictionOutcome(PredictionOutcome):
+class DeepCasePredictionOutcome(
+    AbstainAwarePredictionOutcome,
+):
     """DeepCase runtime prediction plus event-level findings.
 
     Attributes:
@@ -80,6 +84,44 @@ class DeepCasePredictionOutcome(PredictionOutcome):
     confident_event_count: int
     abstained_event_count: int
     confident_anomaly_event_count: int
+
+    @override
+    def is_abstained(self) -> bool:
+        """Return whether the sequence decision deferred to manual review.
+
+        Returns:
+            bool: True when the sequence should be reviewed manually instead
+                of being treated as an automatic decision.
+        """
+        return self.sequence_decision is DeepCaseSequenceDecision.ABSTAINED
+
+
+class DeepCaseRunMetrics(msgspec.Struct, frozen=True):
+    """DeepCASE-specific run metrics for a single evaluation.
+
+    Attributes:
+        auto_decision_count (int): Number of confident automatic decisions.
+        abstained_prediction_count (int): Number of deferred test sequences.
+        abstained_anomalous_label_count (int): Deferred anomalous sequences.
+        abstained_normal_label_count (int): Deferred normal sequences.
+        auto_coverage (float): Fraction of test sequences handled
+            automatically.
+        abstain_rate (float): Fraction of test sequences deferred for
+            review.
+        prediction_diagnostics (DeepCasePredictionDiagnostics | None): Event
+            and sequence diagnostics for the latest DeepCASE scoring run.
+        next_event_prediction (NextEventPredictionDiagnostics | None): Latest
+            Context Builder next-event diagnostics.
+    """
+
+    auto_decision_count: int
+    abstained_prediction_count: int
+    abstained_anomalous_label_count: int
+    abstained_normal_label_count: int
+    auto_coverage: float
+    abstain_rate: float
+    prediction_diagnostics: DeepCasePredictionDiagnostics | None
+    next_event_prediction: NextEventPredictionDiagnostics | None = None
 
 
 class DeepCaseModelConfig(
@@ -205,7 +247,8 @@ class DeepCaseModelConfig(
         msgspec.Meta(
             description=(
                 "Maximum attention-querying iterations used while building "
-                "DeepCase interpreter clusters."
+                "DeepCase interpreter clusters and during prediction-time "
+                "attention queries."
             ),
         ),
     ] = 100
@@ -274,6 +317,12 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             non-noise cluster.
         known_cluster_count (int): Number of non-noise clusters learned during
             training.
+        known_benign_cluster_count (int): Number of training samples whose
+            cluster score was benign.
+        known_malicious_cluster_count (int): Number of training samples whose
+            cluster score was malicious.
+        unknown_cluster_score_count (int): Number of training samples that
+            remained unclustered or otherwise unscored.
     """
 
     detector_name: ClassVar[str] = "deepcase"
@@ -284,6 +333,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
     train_sample_count: int = 0
     clustered_sample_count: int = 0
     known_cluster_count: int = 0
+    known_benign_cluster_count: int = 0
+    known_malicious_cluster_count: int = 0
+    unknown_cluster_score_count: int = 0
     _next_event_prediction_state: NextEventPredictionState | None = field(
         default=None,
         repr=False,
@@ -381,6 +433,20 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.known_cluster_count = len(
             {cluster for cluster in model.interpreter.clusters if cluster != -1},
         )
+        scored_clusters = model.interpreter.score_clusters(
+            scores=batch.scores,
+            strategy=self.config.cluster_score_strategy,
+            NO_SCORE=self.config.no_score,
+        )
+        self.known_benign_cluster_count = int(
+            np.count_nonzero(scored_clusters == 0),
+        )
+        self.known_malicious_cluster_count = int(
+            np.count_nonzero(scored_clusters > 0),
+        )
+        self.unknown_cluster_score_count = int(
+            np.count_nonzero(scored_clusters == self.config.no_score),
+        )
         self._reset_next_event_prediction_state()
         self._reset_prediction_diagnostics()
         self._mark_fit_complete()
@@ -401,6 +467,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
         self._reset_prediction_diagnostics()
+        self._reset_next_event_prediction_state()
         batch = build_sample_batch(
             (sequence,),
             event_id_map=self.event_id_map,
@@ -429,6 +496,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self._prediction_diagnostics_state.record(
             summary=summary,
             findings=findings,
+            sequence_label=sequence.label,
         )
         return DeepCasePredictionOutcome(
             predicted_label=summary.predicted_label,
@@ -518,10 +586,66 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             train_sample_count=self.train_sample_count,
             clustered_sample_count=self.clustered_sample_count,
             known_cluster_count=self.known_cluster_count,
+            known_benign_cluster_count=self.known_benign_cluster_count,
+            known_malicious_cluster_count=self.known_malicious_cluster_count,
+            unknown_cluster_score_count=self.unknown_cluster_score_count,
             prediction_diagnostics=self._prediction_diagnostics_state.snapshot(),
             online_updates_status="not implemented",
             persistent_cluster_database_status="not implemented",
-            next_event_prediction=self._consume_next_event_prediction_state(),
+        )
+
+    def run_metrics(self, *, run_metrics: dict[str, Any]) -> DeepCaseRunMetrics:
+        """Return DeepCASE-specific run metrics for the latest evaluation.
+
+        Args:
+            run_metrics (dict[str, Any]): Generic run metrics accumulated by
+                the shared evaluator.
+
+        Returns:
+            DeepCaseRunMetrics: DeepCASE-owned metrics for the latest scoring
+            run.
+        """
+        test_sequence_count = int(run_metrics["test_sequence_count"])
+        prediction_diagnostics = self._prediction_diagnostics_state.snapshot()
+        next_event_prediction = self._next_event_prediction_state_snapshot()
+        auto_decision_count = (
+            0
+            if prediction_diagnostics is None
+            else (
+                prediction_diagnostics.sequence_confident_anomaly_count
+                + prediction_diagnostics.sequence_confident_normal_count
+            )
+        )
+        abstained_prediction_count = (
+            0
+            if prediction_diagnostics is None
+            else prediction_diagnostics.sequence_abstained_count
+        )
+        auto_coverage = (
+            auto_decision_count / test_sequence_count if test_sequence_count else 0.0
+        )
+        abstain_rate = (
+            abstained_prediction_count / test_sequence_count
+            if test_sequence_count
+            else 0.0
+        )
+        return DeepCaseRunMetrics(
+            auto_decision_count=auto_decision_count,
+            abstained_prediction_count=abstained_prediction_count,
+            abstained_anomalous_label_count=(
+                0
+                if prediction_diagnostics is None
+                else prediction_diagnostics.abstained_anomalous_label_count
+            ),
+            abstained_normal_label_count=(
+                0
+                if prediction_diagnostics is None
+                else prediction_diagnostics.abstained_normal_label_count
+            ),
+            auto_coverage=round(auto_coverage, 8),
+            abstain_rate=round(abstain_rate, 8),
+            prediction_diagnostics=prediction_diagnostics,
+            next_event_prediction=next_event_prediction,
         )
 
     def _predict_batch(self, batch: DeepCaseSampleBatch) -> list[float]:
@@ -529,14 +653,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         if model is None:
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
-        # DeepCase's test-time scoring path becomes extremely expensive with
-        # non-zero attention-query iterations. The upstream predict API uses
-        # zero iterations by default, which is sufficient for experiment
-        # scoring and keeps long runs responsive.
         raw_predictions = model.predict(
             X=batch.contexts.to(self.device),
             y=batch.events.reshape(-1, 1).to(self.device),
-            iterations=0,
+            iterations=self.config.iterations,
             batch_size=self.config.query_batch_size,
             verbose=False,
         )
@@ -606,6 +726,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             self._prediction_diagnostics_state.record(
                 summary=summary,
                 findings=findings,
+                sequence_label=sequence.label,
             )
             yield (
                 sequence,
@@ -640,21 +761,19 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             vocabulary_policy=self.config.vocabulary_policy,
         )
 
-    def _consume_next_event_prediction_state(
+    def _next_event_prediction_state_snapshot(
         self,
     ) -> NextEventPredictionDiagnostics | None:
-        """Return and clear next-event diagnostics for the latest scoring run.
+        """Return the current next-event diagnostics without clearing them.
 
         Returns:
-            NextEventPredictionDiagnostics | None: Diagnostics for the latest
-                scoring run, or `None` if no next-event pass has been recorded.
+            NextEventPredictionDiagnostics | None: Latest next-event
+            diagnostics, or `None` when no eligible events were observed.
         """
         state = self._next_event_prediction_state
         if state is None:
             return None
-        snapshot = state.snapshot()
-        self._next_event_prediction_state = None
-        return snapshot
+        return state.snapshot()
 
     def _record_next_event_predictions(
         self,
@@ -797,7 +916,9 @@ def _summarise_findings(
             confident_anomaly_event_count += 1
     confident_event_count = len(findings) - abstained_event_count
     if confident_anomaly_event_count > 0:
-        sequence_decision = DeepCaseSequenceDecision.CONFIDENT_ANOMALY
+        sequence_decision: Literal[DeepCaseSequenceDecision.CONFIDENT_ANOMALY] = (
+            DeepCaseSequenceDecision.CONFIDENT_ANOMALY
+        )
         predicted_label = 1
     elif abstained_event_count > 0:
         sequence_decision = DeepCaseSequenceDecision.ABSTAINED

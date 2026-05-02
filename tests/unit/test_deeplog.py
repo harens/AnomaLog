@@ -592,33 +592,27 @@ def test_predict_flags_key_model_anomalies() -> None:
     assert outcome.score > 0.0
     assert outcome.findings[0].key_model_finding is not None
 
-    manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
-    next_event_prediction = manifest.next_event_prediction
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    next_event_prediction = metrics.next_event_prediction
     expected_events_seen = len(outcome.findings) + 2
     expected_events_eligible = 1
     expected_insufficient_history = 2
     assert next_event_prediction is not None
     assert next_event_prediction.task == "next_event_prediction"
-    assert next_event_prediction.totals.events_seen == expected_events_seen
-    assert next_event_prediction.totals.events_eligible == expected_events_eligible
-    assert next_event_prediction.totals.coverage == pytest.approx(1 / 3)
-    assert next_event_prediction.top_k.k_values == [1]
-    assert next_event_prediction.top_k.hit_count == {"1": 0}
-    assert next_event_prediction.top_k.accuracy == {"1": 0.0}
-    assert next_event_prediction.exclusions.insufficient_history == (
-        expected_insufficient_history
-    )
-    assert next_event_prediction.exclusions.unknown_history == 0
-    assert next_event_prediction.exclusions.unknown_target == 0
+    totals = next_event_prediction.totals
+    top_k = next_event_prediction.top_k
+    exclusions = next_event_prediction.exclusions
+    assert totals.events_seen == expected_events_seen
+    assert totals.events_eligible == expected_events_eligible
+    assert totals.coverage == pytest.approx(1 / 3)
+    assert top_k.k_values == [1]
+    assert top_k.hit_count == {"1": 0}
+    assert top_k.accuracy == {"1": 0.0}
+    assert exclusions.insufficient_history == expected_insufficient_history
+    assert exclusions.unknown_history == 0
+    assert exclusions.unknown_target == 0
     assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+    assert metrics.next_event_prediction is not None
 
 
 def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() -> None:
@@ -732,7 +726,7 @@ def test_next_event_prediction_state_applies_vocabulary_policy() -> None:
     assert full_dataset_snapshot.top_k.hit_count == {"1": 1}
 
 
-def test_deeplog_next_event_predictions_reset_after_manifest() -> None:
+def test_deeplog_next_event_predictions_reset_after_run_metrics() -> None:
     """DeepLog next-event diagnostics should reflect the latest scoring run only."""
     detector = DeepLogDetector(
         config=_deep_log_config(
@@ -761,32 +755,16 @@ def test_deeplog_next_event_predictions_reset_after_manifest() -> None:
     second_sequence = _sequence(templates=["A", "B", "D", "C"])
 
     detector.predict(first_sequence)
-    first_manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
+    first_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
     detector.predict(second_sequence)
-    second_manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
+    second_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
 
-    assert first_manifest.next_event_prediction is not None
-    assert first_manifest.next_event_prediction.totals.events_seen == len(
+    assert first_metrics.next_event_prediction is not None
+    assert first_metrics.next_event_prediction.totals.events_seen == len(
         first_sequence.events,
     )
-    assert second_manifest.next_event_prediction is not None
-    assert second_manifest.next_event_prediction.totals.events_seen == len(
+    assert second_metrics.next_event_prediction is not None
+    assert second_metrics.next_event_prediction.totals.events_seen == len(
         second_sequence.events,
     )
 

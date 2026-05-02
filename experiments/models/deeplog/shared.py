@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from rich.progress import Progress
 
     from anomalog.sequences import TemplateSequence
-    from experiments.models.next_event_metrics import NextEventPredictionDiagnostics
 
 DT_FEATURE_NAME = "dt_prev_ms"
 EPSILON = 1e-8
@@ -290,8 +289,6 @@ class DeepLogManifest(ModelManifest, frozen=True):
             trained parameter models.
         skipped_parameter_models (list[SkippedParameterModelEntry]): Reasons for
             skipped parameter models.
-        next_event_prediction (NextEventPredictionDiagnostics | None): Optional
-            next-event prediction diagnostics for the latest scoring run.
     """
 
     implementation_scope: str
@@ -316,7 +313,6 @@ class DeepLogManifest(ModelManifest, frozen=True):
     scored_parameter_event_fraction: float
     parameter_models: list[ParameterModelManifestEntry]
     skipped_parameter_models: list[SkippedParameterModelEntry]
-    next_event_prediction: NextEventPredictionDiagnostics | None = None
 
 
 @dataclass(frozen=True, slots=True)

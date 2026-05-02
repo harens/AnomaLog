@@ -18,6 +18,7 @@ import msgspec
 import numpy as np
 import torch
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import ModelManifest, require_entity_local_sequences
 
 if TYPE_CHECKING:
@@ -26,8 +27,6 @@ if TYPE_CHECKING:
     from rich.progress import Progress
 
     from anomalog.sequences import TemplateSequence
-    from experiments.models.next_event_metrics import NextEventPredictionDiagnostics
-
 DEEPCASE_NO_EVENT = -1337
 """Upstream DeepCASE sentinel for missing or timed-out context events."""
 
@@ -236,11 +235,16 @@ class DeepCasePredictionDiagnostics(msgspec.Struct, frozen=True):
         event_count (int): Total number of scored events.
         confident_event_count (int): Number of events with a decisive label.
         abstained_event_count (int): Number of events that required review.
-        confident_anomaly_event_count (int): Number of decisive anomalous events.
-        sequence_confident_anomaly_count (int): Number of sequences whose final
-            decision was confident anomaly.
-        sequence_confident_normal_count (int): Number of sequences whose final
-            decision was confident normal.
+        abstained_anomalous_label_count (int): Number of abstained
+            predictions with anomalous ground-truth labels.
+        abstained_normal_label_count (int): Number of abstained predictions
+            with normal ground-truth labels.
+        confident_anomaly_event_count (int): Number of decisive anomalous
+            events.
+        sequence_confident_anomaly_count (int): Number of sequences whose
+            final decision was confident anomaly.
+        sequence_confident_normal_count (int): Number of sequences whose
+            final decision was confident normal.
         sequence_abstained_count (int): Number of sequences whose final
             decision was abstained.
         reason_counts (dict[str, int]): Histogram of event finding reasons.
@@ -249,6 +253,8 @@ class DeepCasePredictionDiagnostics(msgspec.Struct, frozen=True):
     event_count: int
     confident_event_count: int
     abstained_event_count: int
+    abstained_anomalous_label_count: int
+    abstained_normal_label_count: int
     confident_anomaly_event_count: int
     sequence_confident_anomaly_count: int
     sequence_confident_normal_count: int
@@ -271,6 +277,8 @@ class _DeepCasePredictionDiagnosticsState:
     event_count: int = 0
     confident_event_count: int = 0
     abstained_event_count: int = 0
+    abstained_anomalous_label_count: int = 0
+    abstained_normal_label_count: int = 0
     confident_anomaly_event_count: int = 0
     sequence_confident_anomaly_count: int = 0
     sequence_confident_normal_count: int = 0
@@ -282,10 +290,16 @@ class _DeepCasePredictionDiagnosticsState:
         *,
         summary: _DeepCasePredictionSummary,
         findings: Sequence[DeepCaseEventFinding],
+        sequence_label: int,
     ) -> None:
         self.event_count += len(findings)
         self.confident_event_count += summary.confident_event_count
         self.abstained_event_count += summary.abstained_event_count
+        if summary.sequence_decision is DeepCaseSequenceDecision.ABSTAINED:
+            if is_anomalous_label(sequence_label):
+                self.abstained_anomalous_label_count += 1
+            else:
+                self.abstained_normal_label_count += 1
         self.confident_anomaly_event_count += summary.confident_anomaly_event_count
         if summary.sequence_decision is DeepCaseSequenceDecision.CONFIDENT_ANOMALY:
             self.sequence_confident_anomaly_count += 1
@@ -299,6 +313,8 @@ class _DeepCasePredictionDiagnosticsState:
         self.event_count = 0
         self.confident_event_count = 0
         self.abstained_event_count = 0
+        self.abstained_anomalous_label_count = 0
+        self.abstained_normal_label_count = 0
         self.confident_anomaly_event_count = 0
         self.sequence_confident_anomaly_count = 0
         self.sequence_confident_normal_count = 0
@@ -312,6 +328,8 @@ class _DeepCasePredictionDiagnosticsState:
             event_count=self.event_count,
             confident_event_count=self.confident_event_count,
             abstained_event_count=self.abstained_event_count,
+            abstained_anomalous_label_count=self.abstained_anomalous_label_count,
+            abstained_normal_label_count=self.abstained_normal_label_count,
             confident_anomaly_event_count=self.confident_anomaly_event_count,
             sequence_confident_anomaly_count=self.sequence_confident_anomaly_count,
             sequence_confident_normal_count=self.sequence_confident_normal_count,
@@ -340,7 +358,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         learning_rate (float): Context-builder optimizer learning rate.
         teach_ratio (float): Teacher-forcing ratio.
         iterations (int): Maximum interpreter query iterations used while
-            building clusters.
+            building clusters and during prediction-time attention queries.
         query_batch_size (int): Batch size used during querying/prediction.
         cluster_score_strategy (str): Cluster score aggregation strategy.
         no_score (int): Special no-score value passed to DeepCASE.
@@ -352,14 +370,18 @@ class DeepCaseManifest(ModelManifest, frozen=True):
             non-noise cluster.
         known_cluster_count (int): Number of non-noise clusters learned during
             training.
+        known_benign_cluster_count (int): Number of training samples whose
+            cluster score was benign.
+        known_malicious_cluster_count (int): Number of training samples whose
+            cluster score was malicious.
+        unknown_cluster_score_count (int): Number of training samples that
+            remained unclustered or otherwise unscored.
         prediction_diagnostics (DeepCasePredictionDiagnostics | None): Optional
             prediction-time diagnostics aggregated from the latest DeepCASE
             scoring run.
         online_updates_status (str): Status of online model updates.
         persistent_cluster_database_status (str): Status of persistent cluster
             storage support.
-        next_event_prediction (NextEventPredictionDiagnostics | None): Optional
-            next-event prediction diagnostics for the latest scoring run.
     """
 
     implementation_scope: str
@@ -384,10 +406,12 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     train_sample_count: int
     clustered_sample_count: int
     known_cluster_count: int
+    known_benign_cluster_count: int
+    known_malicious_cluster_count: int
+    unknown_cluster_score_count: int
     prediction_diagnostics: DeepCasePredictionDiagnostics | None
     online_updates_status: str
     persistent_cluster_database_status: str
-    next_event_prediction: NextEventPredictionDiagnostics | None = None
 
 
 def build_sample_batch(

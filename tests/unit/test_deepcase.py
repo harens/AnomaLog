@@ -185,7 +185,7 @@ def test_deepcase_fit_runs_context_builder_one_epoch_at_a_time(
     detector = _deep_case_config(
         name="deepcase",
         epochs=3,
-        iterations=0,
+        iterations=100,
     ).build_detector()
     sequence = _sequence(templates=["A", "B"])
 
@@ -200,7 +200,7 @@ def test_deepcase_detector_rejects_repeated_fit() -> None:
     detector = _deep_case_config(
         name="deepcase",
         epochs=1,
-        iterations=0,
+        iterations=100,
     ).build_detector()
     sequence = _sequence(templates=["A", "B"])
 
@@ -342,7 +342,7 @@ def test_deepcase_rejects_multi_entity_sequences() -> None:
     detector = _deep_case_config(
         name="deepcase",
         epochs=1,
-        iterations=0,
+        iterations=100,
     ).build_detector()
     sequence = _sequence(templates=["A"], entity_ids=["one", "two"])
 
@@ -389,7 +389,7 @@ def test_deepcase_predict_aggregates_event_findings(
         split_label=SplitLabel.TEST,
     )
     detector = DeepCaseDetector(
-        config=_deep_case_config(name="deepcase", epochs=1, iterations=0),
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
     detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
@@ -418,10 +418,47 @@ def test_deepcase_predict_aggregates_event_findings(
     assert outcome.findings[1].is_abstained
 
 
-def test_deepcase_manifest_reports_next_event_prediction_diagnostics(
+def test_deepcase_predict_marks_all_abstained_sequence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepCase manifests should expose Context Builder next-event diagnostics.
+    """DeepCase should mark sequences with only abstained findings as abstained.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces batch prediction so the test
+            can isolate the sequence-level abstain decision.
+    """
+    train_sequence = _sequence(templates=["A", "B"])
+    test_sequence = _sequence(
+        templates=["A", "UNSEEN"],
+        split_label=SplitLabel.TEST,
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+
+    def _fake_predict_batch(_batch: DeepCaseSampleBatch) -> list[float]:
+        del _batch
+        return [-1.0, -2.0]
+
+    monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
+
+    outcome = detector.predict(test_sequence)
+
+    expected_abstained_event_count = len(test_sequence.events)
+    assert outcome.is_abstained()
+    assert outcome.sequence_decision is DeepCaseSequenceDecision.ABSTAINED
+    assert outcome.predicted_label == 0
+    assert outcome.confident_event_count == 0
+    assert outcome.abstained_event_count == expected_abstained_event_count
+    assert outcome.confident_anomaly_event_count == 0
+
+
+def test_deepcase_run_metrics_reports_next_event_prediction_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase run metrics should expose Context Builder next-event diagnostics.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Replaces the upstream prediction
@@ -437,7 +474,7 @@ def test_deepcase_manifest_reports_next_event_prediction_diagnostics(
             name="deepcase",
             context_length=2,
             epochs=1,
-            iterations=0,
+            iterations=100,
         ),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
@@ -470,66 +507,110 @@ def test_deepcase_manifest_reports_next_event_prediction_diagnostics(
     monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
 
     detector.predict(test_sequence)
-    manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
-
-    next_event_prediction = manifest.next_event_prediction
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    next_event_prediction = metrics.next_event_prediction
     expected_events_seen = len(test_sequence.events)
     expected_eligible_events = 3
     assert next_event_prediction is not None
     assert next_event_prediction.task == "next_event_prediction"
-    assert next_event_prediction.totals.events_seen == expected_events_seen
-    assert next_event_prediction.totals.events_eligible == expected_eligible_events
-    assert next_event_prediction.totals.coverage == pytest.approx(1.0)
-    assert next_event_prediction.top_k.k_values == [1, 2, 3, 5]
-    assert next_event_prediction.top_k.hit_count == {
+    totals = next_event_prediction.totals
+    top_k = next_event_prediction.top_k
+    exclusions = next_event_prediction.exclusions
+    macro = next_event_prediction.classification_top1_macro
+    weighted = next_event_prediction.classification_top1_weighted
+    assert totals.events_seen == expected_events_seen
+    assert totals.events_eligible == expected_eligible_events
+    assert totals.coverage == pytest.approx(1.0)
+    assert top_k.k_values == [1, 2, 3, 5]
+    assert top_k.hit_count == {
         "1": 2,
         "2": 2,
         "3": 2,
         "5": 2,
     }
-    assert next_event_prediction.top_k.accuracy == {
+    assert top_k.accuracy == {
         "1": pytest.approx(2 / 3),
         "2": pytest.approx(2 / 3),
         "3": pytest.approx(2 / 3),
         "5": pytest.approx(2 / 3),
     }
-    assert next_event_prediction.classification_top1_macro.precision == pytest.approx(
-        2 / 3,
-    )
-    assert next_event_prediction.classification_top1_macro.recall == pytest.approx(
-        2 / 3,
-    )
-    assert next_event_prediction.classification_top1_macro.f1 == pytest.approx(2 / 3)
-    assert next_event_prediction.classification_top1_macro.accuracy == pytest.approx(
-        2 / 3,
-    )
-    assert (
-        next_event_prediction.classification_top1_weighted.precision
-        == pytest.approx(
-            2 / 3,
-        )
-    )
-    assert next_event_prediction.classification_top1_weighted.recall == pytest.approx(
-        2 / 3,
-    )
-    assert next_event_prediction.classification_top1_weighted.f1 == pytest.approx(
-        2 / 3,
-    )
-    assert next_event_prediction.classification_top1_weighted.accuracy == pytest.approx(
-        2 / 3,
-    )
-    assert next_event_prediction.exclusions.insufficient_history == 0
-    assert next_event_prediction.exclusions.unknown_history == 0
-    assert next_event_prediction.exclusions.unknown_target == 0
+    assert macro.precision == pytest.approx(2 / 3)
+    assert macro.recall == pytest.approx(2 / 3)
+    assert macro.f1 == pytest.approx(2 / 3)
+    assert macro.accuracy == pytest.approx(2 / 3)
+    assert weighted.precision == pytest.approx(2 / 3)
+    assert weighted.recall == pytest.approx(2 / 3)
+    assert weighted.f1 == pytest.approx(2 / 3)
+    assert weighted.accuracy == pytest.approx(2 / 3)
+    assert exclusions.insufficient_history == 0
+    assert exclusions.unknown_history == 0
+    assert exclusions.unknown_target == 0
     assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+    assert metrics.auto_decision_count == 1
+    assert metrics.abstained_prediction_count == 0
+    assert metrics.auto_coverage == pytest.approx(1.0)
+    assert metrics.abstain_rate == pytest.approx(0.0)
+
+
+def test_deepcase_manifest_reports_cluster_score_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase manifests should expose fitted cluster score diagnostics.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream fit stage so
+            the test can control the fitted cluster score assignments.
+    """
+    train_sequences = (
+        _sequence(templates=["A"], label=0),
+        _sequence(templates=["B"], label=1),
+        _sequence(templates=["C"], label=0),
+        _sequence(templates=["D"], label=1),
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(
+            name="deepcase",
+            epochs=1,
+            iterations=100,
+        ),
+    )
+
+    def _fit_context_builder(self: ContextBuilder, **kwargs: object) -> ContextBuilder:
+        del kwargs
+        return self
+
+    def _fit_interpreter(self: Interpreter, **kwargs: object) -> Interpreter:
+        del kwargs
+        self.clusters = np.array([0, -1, 1, 2])
+        self.labels = {
+            0: {0: 0.0},
+            1: {0: 1.0},
+            2: {0: 0.0},
+        }
+        return self
+
+    monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
+    monkeypatch.setattr(Interpreter, "fit", _fit_interpreter)
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=4,
+            train_sequence_count=4,
+            test_sequence_count=0,
+            train_label_counts={0: 2, 1: 2},
+            test_label_counts={},
+        ),
+    )
+
+    expected_benign_cluster_count = 2
+    expected_malicious_cluster_count = 1
+    expected_unknown_cluster_score_count = 1
+    assert manifest.known_benign_cluster_count == expected_benign_cluster_count
+    assert manifest.known_malicious_cluster_count == expected_malicious_cluster_count
+    assert manifest.unknown_cluster_score_count == expected_unknown_cluster_score_count
 
 
 def test_deepcase_predict_all_batches_multiple_sequences(
@@ -547,7 +628,7 @@ def test_deepcase_predict_all_batches_multiple_sequences(
         _sequence(templates=["C"], split_label=SplitLabel.TEST),
     ]
     detector = DeepCaseDetector(
-        config=_deep_case_config(name="deepcase", epochs=1, iterations=0),
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
     detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
@@ -593,7 +674,7 @@ def test_deepcase_next_event_predictions_reset_between_bulk_runs(
             name="deepcase",
             context_length=2,
             epochs=1,
-            iterations=0,
+            iterations=100,
         ),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
@@ -632,40 +713,24 @@ def test_deepcase_next_event_predictions_reset_between_bulk_runs(
     )
 
     list(detector.predict_all((first_sequence,)))
-    first_manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
+    first_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
     list(detector.predict_all((second_sequence,)))
-    second_manifest = detector.model_manifest(
-        sequence_summary=SequenceSummary(
-            sequence_count=1,
-            train_sequence_count=0,
-            test_sequence_count=1,
-            train_label_counts={0: 0},
-            test_label_counts={0: 1},
-        ),
-    )
+    second_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
 
-    assert first_manifest.next_event_prediction is not None
-    assert first_manifest.next_event_prediction.totals.events_seen == len(
+    assert first_metrics.next_event_prediction is not None
+    assert first_metrics.next_event_prediction.totals.events_seen == len(
         first_sequence.events,
     )
-    assert second_manifest.next_event_prediction is not None
-    assert second_manifest.next_event_prediction.totals.events_seen == len(
+    assert second_metrics.next_event_prediction is not None
+    assert second_metrics.next_event_prediction.totals.events_seen == len(
         second_sequence.events,
     )
 
 
-def test_deepcase_predict_batch_uses_zero_query_iterations(
+def test_deepcase_predict_batch_uses_config_iterations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepCase scoring should skip the slow attention-refinement loop.
+    """DeepCase scoring should forward the configured query iteration budget.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Replaces the upstream predict method so
@@ -673,7 +738,7 @@ def test_deepcase_predict_batch_uses_zero_query_iterations(
     """
     train_sequence = _sequence(templates=["A", "B"])
     detector = DeepCaseDetector(
-        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=7),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
     detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
@@ -690,5 +755,5 @@ def test_deepcase_predict_batch_uses_zero_query_iterations(
 
     outcome = detector.predict(train_sequence)
 
-    assert captured_iterations == [0]
+    assert captured_iterations == [7]
     assert outcome.score == pytest.approx(0.0)

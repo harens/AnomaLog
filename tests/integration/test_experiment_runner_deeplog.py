@@ -119,6 +119,25 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert sequence_count == (
         train_sequence_count + test_sequence_count + ignored_sequence_count
     )
+    next_event_prediction_raw = metrics["next_event_prediction"]
+    assert isinstance(next_event_prediction_raw, dict)
+    next_event_prediction = {
+        str(key): value for key, value in next_event_prediction_raw.items()
+    }
+    assert next_event_prediction["task"] == "next_event_prediction"
+    totals = _object_dict(next_event_prediction["totals"])
+    top_k = _object_dict(next_event_prediction["top_k"])
+    exclusions = _object_dict(next_event_prediction["exclusions"])
+    assert _int_value(totals, "events_seen") > 0
+    assert _int_value(totals, "events_eligible") >= 0
+    assert 0.0 <= _float_value(totals, "coverage") <= 1.0
+    assert 1 in _list_value(top_k, "k_values")
+    assert "1" in _object_dict(top_k["hit_count"])
+    assert "1" in _object_dict(top_k["accuracy"])
+    assert _int_value(exclusions, "insufficient_history") >= 0
+    assert _int_value(exclusions, "unknown_history") >= 0
+    assert _int_value(exclusions, "unknown_target") >= 0
+    assert next_event_prediction["vocabulary_policy"] == "full_dataset"
 
 
 def _assert_deeplog_manifest(
@@ -148,25 +167,6 @@ def _assert_deeplog_manifest(
         EXPECTED_PARAMETER_MODEL_COUNT
     )
     assert model_manifest["include_elapsed_time"] is True
-    next_event_prediction_raw = model_manifest["next_event_prediction"]
-    assert isinstance(next_event_prediction_raw, dict)
-    next_event_prediction = {
-        str(key): value for key, value in next_event_prediction_raw.items()
-    }
-    assert next_event_prediction["task"] == "next_event_prediction"
-    totals = _object_dict(next_event_prediction["totals"])
-    top_k = _object_dict(next_event_prediction["top_k"])
-    exclusions = _object_dict(next_event_prediction["exclusions"])
-    assert _int_value(totals, "events_seen") > 0
-    assert _int_value(totals, "events_eligible") >= 0
-    assert 0.0 <= _float_value(totals, "coverage") <= 1.0
-    assert 1 in _list_value(top_k, "k_values")
-    assert "1" in _object_dict(top_k["hit_count"])
-    assert "1" in _object_dict(top_k["accuracy"])
-    assert _int_value(exclusions, "insufficient_history") >= 0
-    assert _int_value(exclusions, "unknown_history") >= 0
-    assert _int_value(exclusions, "unknown_target") >= 0
-    assert next_event_prediction["vocabulary_policy"] == "full_dataset"
     assert parameter_models[0]["feature_names"] == [
         "dt_prev_ms",
         "param_0",
