@@ -1,0 +1,8 @@
+name = "hdfs_v1_deeplog"
+dataset = "hdfs_v1_entity_supervised"
+model = "deeplog_default"
+description = "HDFS v1 DeepLog sweep over the fixed chronological train fraction."
+
+[[axes]]
+path = "dataset.sequence.train_fraction"
+values = [0.01, 0.1, 0.2]

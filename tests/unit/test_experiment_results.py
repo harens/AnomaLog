@@ -18,18 +18,20 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     # This protects experiment-layer manifest metadata outside the configured
     # `anomalog` coverage target.
     expected_requested_train_fraction = 0.5
+    expected_requested_test_fraction = 0.5
     expected_sequence_count = 10
     expected_train_sequence_count = 5
     expected_test_sequence_count = 3
     expected_ignored_sequence_count = 2
+    expected_train_pool_sequence_count = 7
+    expected_ineligible_train_pool_count = 1
     expected_eligible_train_sequence_count = 6
     expected_effective_eligible_train_fraction = round(
         expected_train_sequence_count / expected_eligible_train_sequence_count,
         8,
     )
     expected_effective_overall_train_fraction = round(
-        expected_train_sequence_count
-        / (expected_train_sequence_count + expected_test_sequence_count),
+        expected_train_sequence_count / expected_sequence_count,
         8,
     )
     summary = build_sequence_split_summary(
@@ -58,6 +60,12 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     )
 
     assert summary.requested_train_fraction == expected_requested_train_fraction
+    assert summary.requested_test_fraction == pytest.approx(
+        expected_requested_test_fraction,
+    )
+    assert summary.train_pool_sequence_count == expected_train_pool_sequence_count
+    assert summary.ineligible_train_pool_count == expected_ineligible_train_pool_count
+    assert summary.realised_train_sequence_count == expected_train_sequence_count
     assert (
         summary.eligible_train_sequence_count == expected_eligible_train_sequence_count
     )

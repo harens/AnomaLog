@@ -176,10 +176,24 @@ def _assert_deeplog_manifest(
     assert sequence_split_summary["requested_train_fraction"] == pytest.approx(
         sequence_config["train_fraction"],
     )
+    assert sequence_split_summary["requested_test_fraction"] == pytest.approx(
+        sequence_config["test_fraction"],
+    )
     ignored_sequence_count = _int_value(metrics, "ignored_sequence_count")
     train_sequence_count = _int_value(metrics, "train_sequence_count")
     test_sequence_count = _int_value(metrics, "test_sequence_count")
     assert sequence_split_summary["ignored_sequence_count"] == ignored_sequence_count
+    assert sequence_split_summary["train_pool_sequence_count"] == (
+        train_sequence_count + ignored_sequence_count
+    )
+    assert sequence_split_summary["realised_train_sequence_count"] == (
+        train_sequence_count
+    )
+    assert sequence_split_summary["excluded_from_train_count"] == (
+        _int_value(sequence_split_summary, "train_pool_sequence_count")
+        - train_sequence_count
+    )
+    assert _int_value(sequence_split_summary, "ineligible_train_pool_count") >= 0
     eligible_train_sequence_count = _int_value(
         sequence_split_summary,
         "eligible_train_sequence_count",
@@ -191,7 +205,7 @@ def _assert_deeplog_manifest(
     scored_sequence_count = train_sequence_count + test_sequence_count
     if scored_sequence_count > 0:
         assert sequence_split_summary["effective_train_fraction_overall"] == (
-            pytest.approx(train_sequence_count / scored_sequence_count)
+            pytest.approx(train_sequence_count / _int_value(metrics, "sequence_count"))
         )
 
 

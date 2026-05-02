@@ -11,3 +11,4 @@ raw_logs_relpath = "logs/deepcase_fixture.log"
 grouping = "entity"
 train_fraction = 0.2
 test_fraction = 0.8
+train_on_normal_entities_only = false

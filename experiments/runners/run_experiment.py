@@ -222,25 +222,26 @@ def _run_bundle(
         if train_on_normal_entities_only is not None:
             total_sequences = model_summary.sequence_summary.sequence_count
             test_sequences = model_summary.sequence_summary.test_sequence_count
-            train_pool_sequences = total_sequences - test_sequences
+            train_pool_sequences = split_summary.train_pool_sequence_count
             logger.info(
-                "Fixed entity split: train_pool=%s, train=%s, ignored=%s, test=%s",
+                ("Fixed entity split: train_pool=%s, train=%s, ignored=%s, test=%s"),
                 train_pool_sequences,
-                model_summary.sequence_summary.train_sequence_count,
+                split_summary.realised_train_sequence_count,
                 split_summary.ignored_sequence_count,
                 test_sequences,
             )
         if train_on_normal_entities_only:
             logger.warning(
-                "Normal-only training excludes anomalous entities from the "
-                "chronological train pool; this run satisfied "
-                "requested train_fraction=%.4f within the eligible normal "
-                "subset (train=%s, eligible_normals=%s, train_pool=%s, total=%s)",
+                "Normal-only training uses the chronological train pool and "
+                "excludes ineligible entities from training; requested "
+                "train_fraction=%.4f, realised_train=%s, eligible_normals=%s, "
+                "train_pool=%s, ineligible_prefix=%s, total=%s",
                 split_summary.requested_train_fraction,
-                model_summary.sequence_summary.train_sequence_count,
+                split_summary.realised_train_sequence_count,
                 split_summary.eligible_train_sequence_count,
-                train_pool_sequences,
-                model_summary.sequence_summary.sequence_count,
+                split_summary.train_pool_sequence_count,
+                split_summary.ineligible_train_pool_count,
+                total_sequences,
             )
         logger.info(
             "Model run complete with %s sequences",

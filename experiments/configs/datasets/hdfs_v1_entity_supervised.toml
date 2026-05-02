@@ -2,9 +2,13 @@ name = "hdfs_v1_entity_supervised"
 dataset_name = "HDFS_V1"
 preset = "hdfs_v1"
 template_parser = "drain3"
-description = "Built-in HDFS_v1 preset grouped by entity with supervised train/test splits for labeled detectors."
+description = "Built-in HDFS_v1 preset grouped by entity with DeepLog-style normal-only training."
 
 [sequence]
 grouping = "entity"
 train_fraction = 0.2
-train_on_normal_entities_only = false
+train_on_normal_entities_only = true
+
+[cache_paths]
+data_root = "data/hdfs_entity"
+cache_root = ".cache/hdfs_entity"

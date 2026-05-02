@@ -120,10 +120,15 @@ def _assert_reproducible_smoke_outputs(
     }
     assert artifacts.manifest["sequence_split_summary"] == {
         "requested_train_fraction": 0.34,
+        "requested_test_fraction": 0.25,
+        "train_pool_sequence_count": 3,
+        "ineligible_train_pool_count": 0,
+        "realised_train_sequence_count": 2,
+        "excluded_from_train_count": 1,
         "eligible_train_sequence_count": 3,
         "ignored_sequence_count": EXPECTED_IGNORED_SEQUENCE_COUNT,
         "effective_train_fraction_of_eligible": pytest.approx(2 / 3),
-        "effective_train_fraction_overall": pytest.approx(2 / 3),
+        "effective_train_fraction_overall": pytest.approx(0.5),
     }
     assert (
         artifacts.manifest["model_manifest"]["score_threshold"]
@@ -289,16 +294,14 @@ def test_run_experiment_expands_multi_model_sweep(tmp_path: Path) -> None:
 
 
 @pytest.mark.allow_no_new_coverage
-def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
+def test_run_experiment_uses_normal_only_prefix_when_requested_train_fraction_is_high(
     tmp_path: Path,
 ) -> None:
-    """Normal-only entity splits should fail when the overall target is impossible.
+    """Normal-only entity splits should use the eligible prefix instead of failing.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
     """
-    # This protects experiment-runner behavior outside the configured
-    # `anomalog` coverage target.
     sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "tiny_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
@@ -330,8 +333,28 @@ def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
     )
     shutil.copy2(FIXTURE_ROOT / "template_frequency.toml", model_config)
 
-    with pytest.raises(
-        ValueError,
-        match="Requested train fraction is impossible",
-    ):
-        run_experiment(sweep_config)
+    [run_dir] = run_experiment(sweep_config)
+
+    manifest = json.loads(
+        (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+    )
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    sequence_split_summary = manifest["sequence_split_summary"]
+
+    assert sequence_split_summary["train_on_normal_entities_only"] is True
+    assert sequence_split_summary["requested_train_fraction"] == pytest.approx(0.8)
+    assert sequence_split_summary["requested_test_fraction"] == pytest.approx(0.2)
+    assert sequence_split_summary["train_pool_sequence_count"] == (
+        metrics["train_sequence_count"] + metrics["ignored_sequence_count"]
+    )
+    assert (
+        sequence_split_summary["realised_train_sequence_count"]
+        == metrics["train_sequence_count"]
+    )
+    assert sequence_split_summary["excluded_from_train_count"] == (
+        sequence_split_summary["train_pool_sequence_count"]
+        - metrics["train_sequence_count"]
+    )
+    assert sequence_split_summary["effective_train_fraction_overall"] == pytest.approx(
+        metrics["train_sequence_count"] / metrics["sequence_count"],
+    )

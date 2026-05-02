@@ -44,7 +44,8 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
         "\n[sequence]\n"
         'grouping = "entity"\n'
         "train_fraction = 0.5\n"
-        "test_fraction = 0.5\n",
+        "test_fraction = 0.5\n"
+        "train_on_normal_entities_only = false\n",
         encoding="utf-8",
     )
     shutil.copy2(FIXTURE_ROOT / "deepcase.toml", model_config)
@@ -148,8 +149,21 @@ def _assert_deepcase_model_manifest(
     assert "known_benign_cluster_count" in model_manifest
     assert "known_malicious_cluster_count" in model_manifest
     assert "unknown_cluster_score_count" in model_manifest
+    assert sequence_split_summary["train_on_normal_entities_only"] is False
     assert sequence_config["train_fraction"] == pytest.approx(
         sequence_split_summary["requested_train_fraction"],
+    )
+    assert sequence_config["test_fraction"] == pytest.approx(
+        sequence_split_summary["requested_test_fraction"],
+    )
+    assert sequence_split_summary["train_pool_sequence_count"] == (
+        sequence_split_summary["realised_train_sequence_count"]
+        + sequence_split_summary["ignored_sequence_count"]
+    )
+    assert (
+        sequence_split_summary["realised_train_sequence_count"]
+        == sequence_split_summary["train_pool_sequence_count"]
+        - sequence_split_summary["excluded_from_train_count"]
     )
 
 

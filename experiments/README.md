@@ -32,19 +32,28 @@ That keeps preprocessing ablations separate from experiment matrices while
 still using the existing `DatasetSpec(...).build()` API as the source of
 truth.
 
-The checked-in sweep set is intentionally small:
+The checked-in sweep set is split by detector family:
 
-- `bgl.toml` sweeps DeepCase, DeepLog, template-frequency, and Naive Bayes
-  across train fractions `0.01`, `0.1`, and `0.2`
-- `hdfs_v1.toml` does the same for HDFS v1
+- `bgl.toml` and `hdfs_v1.toml` sweep the chronological baseline models
+  (`template_frequency_default` and `naive_bayes_default`) across train
+  fractions `0.01`, `0.1`, and `0.2`
+- `bgl_deeplog.toml` and `hdfs_v1_deeplog.toml` sweep the DeepLog model on the
+  normal-only dataset variants
+- `bgl_deepcase.toml` and `hdfs_v1_deepcase.toml` sweep the DeepCASE model on
+  the chronological dataset variants
 
-BGL sweeps that need anomalous entities in the training budget now express that
-as a sweep override instead of a second near-duplicate dataset file.
+That keeps detector-specific training policy explicit. DeepLog-style runs use
+`train_on_normal_entities_only` for the training prefix, whereas DeepCASE-style
+runs leave it disabled and only use the chronological prefix/suffix split. If
+those detectors are both benchmarked on the same dataset family, use separate
+sweep variants or fixed overrides rather than letting a shared dataset preset
+imply the wrong training contract.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
 `sequence.train_on_normal_entities_only` is only available for entity-grouped
-datasets, matching the core `anomalog` sequence API.
+datasets, matching the core `anomalog` sequence API. It is a detector policy,
+not part of the shared chronological split contract.
 
 Entity-grouped sequences are ordered chronologically by each entity's first
 timestamp before the split is applied. A fixed chronological holdout suffix
@@ -52,7 +61,9 @@ defines the test set, and the requested train fraction is applied to the total
 population before rounding and capping against the remaining middle band. The
 middle portion between the train prefix and fixed test suffix is withheld from
 the current run, so performance changes reflect model behaviour rather than a
-moving test set.
+moving test set. When normal-only training is enabled, the run trains on the
+normal subset of that chronological prefix and records the realised train size
+separately from the requested fraction.
 
 The same fixed-holdout contract is available for fixed-window and time-window
 sequence configs through the `sequence.train_fraction` and
@@ -62,9 +73,11 @@ so omitted values still preserve the same fixed suffix behaviour.
 When `sequence.train_on_normal_entities_only = true`, the requested
 `train_fraction` still applies to the full entity population. Anomalous
 entities are forced into test, so some requested overall train fractions are
-impossible under that constraint. Those runs fail fast instead of silently
-reinterpreting the percentage. Result manifests still record the eligible
-normal-entity count so the constraint remains visible.
+not realised in full under that constraint. The run no longer fails when the
+normal subset is smaller than the requested prefix quota. Result manifests
+record the requested fractions, train pool size, realised train size, excluded
+prefix count, and eligible normal-entity count so the constraint remains
+visible.
 
 ## Running
 
@@ -104,8 +117,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   reusable stages. If you change an experiment config, the model is retrained
   and the test split is rescored for that new fingerprint.
 - Entity-grouped experiments record the fixed train-pool, train-prefix,
-  ignored, and test counts in `sequence_split_counts`, plus the requested train
-  fraction and realised fractions in `sequence_split_summary`.
+  ignored, and test counts in `sequence_split_counts`, plus the requested
+  fractions, train pool size, realised train size, excluded prefix count, and
+  realised fractions in `sequence_split_summary`.
 
 To run `river`-backed or DeepLog/DeepCASE experiments, install the matching
 optional extras first:

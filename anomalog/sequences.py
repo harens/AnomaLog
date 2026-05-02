@@ -63,25 +63,41 @@ class SequenceSplitSummary:
     Attributes:
         requested_train_fraction (float): Requested fraction provided by the
             caller.
+        requested_test_fraction (float): Requested test suffix fraction
+            provided by the caller.
         train_on_normal_entities_only (bool | None): Whether training was restricted to
             normal entities only. Only applicable to entity grouping; `None` otherwise.
+        train_pool_sequence_count (int): Number of sequences in the
+            chronological train candidate window before detector-specific
+            filtering is applied.
+        ineligible_train_pool_count (int): Number of sequences in the train
+            pool that were ineligible for training under the current policy.
+        realised_train_sequence_count (int): Number of sequences actually used
+            for training after any detector-specific filtering.
+        excluded_from_train_count (int): Number of sequences withheld from the
+            train pool before scoring, including the ignored middle band and
+            any detector-ineligible prefix items.
         eligible_train_sequence_count (int): Number of sequences in the
             denominator for the effective train-fraction calculation. In
             entity-grouped mode this is the fixed chronological train pool, or
             the normal-only subset of that pool when normal-only training is
             enabled.
-        ignored_sequence_count (int): Number of sequences in the fixed train
-            pool that were withheld because the requested train prefix was
-            smaller than the pool.
+        ignored_sequence_count (int): Number of sequences withheld from the
+            train pool because they fell outside the requested train prefix or
+            were ineligible under the current filtering policy.
         effective_train_fraction_of_eligible (float): Realised train fraction
             over the eligible set.
         effective_train_fraction_overall (float): Realised train fraction over
-            the scored subset of sequences, excluding the ignored middle
-            section between the train prefix and the fixed test suffix.
+            the full generated sequence population.
     """
 
     requested_train_fraction: float
+    requested_test_fraction: float
     train_on_normal_entities_only: bool | None
+    train_pool_sequence_count: int
+    ineligible_train_pool_count: int
+    realised_train_sequence_count: int
+    excluded_from_train_count: int
     eligible_train_sequence_count: int
     ignored_sequence_count: int
     effective_train_fraction_of_eligible: float
@@ -95,6 +111,11 @@ class SequenceSplitSummary:
         """
         results: dict[str, int | float | bool | str] = {
             "requested_train_fraction": self.requested_train_fraction,
+            "requested_test_fraction": self.requested_test_fraction,
+            "train_pool_sequence_count": self.train_pool_sequence_count,
+            "ineligible_train_pool_count": self.ineligible_train_pool_count,
+            "realised_train_sequence_count": self.realised_train_sequence_count,
+            "excluded_from_train_count": self.excluded_from_train_count,
             "eligible_train_sequence_count": self.eligible_train_sequence_count,
             "ignored_sequence_count": self.ignored_sequence_count,
             "effective_train_fraction_of_eligible": (
@@ -347,28 +368,42 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         eligible_train_sequence_count = self.train_fraction_eligible_sequence_count(
             sequence_summary=sequence_summary,
         )
+        realised_train_sequence_count = sequence_summary.train_sequence_count
+        train_pool_sequence_count = (
+            realised_train_sequence_count + sequence_summary.ignored_sequence_count
+        )
+        ineligible_train_pool_count = (
+            sum(
+                count
+                for label, count in sequence_summary.ignored_label_counts.items()
+                if is_anomalous_label(label)
+            )
+            if self.split_summary_train_on_normal_entities_only()
+            else 0
+        )
+        excluded_from_train_count = (
+            train_pool_sequence_count - realised_train_sequence_count
+        )
         effective_train_fraction_of_eligible = (
-            sequence_summary.train_sequence_count / eligible_train_sequence_count
+            realised_train_sequence_count / eligible_train_sequence_count
             if eligible_train_sequence_count
             else 0.0
         )
         effective_train_fraction_overall = (
-            sequence_summary.train_sequence_count
-            / (
-                sequence_summary.train_sequence_count
-                + sequence_summary.test_sequence_count
-            )
-            if (
-                sequence_summary.train_sequence_count
-                + sequence_summary.test_sequence_count
-            )
+            realised_train_sequence_count / sequence_summary.sequence_count
+            if sequence_summary.sequence_count
             else 0.0
         )
         return SequenceSplitSummary(
             requested_train_fraction=self.train_frac,
+            requested_test_fraction=self.test_frac,
             train_on_normal_entities_only=(
                 self.split_summary_train_on_normal_entities_only()
             ),
+            train_pool_sequence_count=train_pool_sequence_count,
+            ineligible_train_pool_count=ineligible_train_pool_count,
+            realised_train_sequence_count=realised_train_sequence_count,
+            excluded_from_train_count=excluded_from_train_count,
             eligible_train_sequence_count=eligible_train_sequence_count,
             ignored_sequence_count=sequence_summary.ignored_sequence_count,
             effective_train_fraction_of_eligible=round(
@@ -773,31 +808,10 @@ class EntitySequenceBuilder(SequenceBuilder):
 
         Yields:
             TemplateSequence: One grouped and template-enriched sequence.
-
-        Raises:
-            ValueError: If the requested train split is impossible for the
-                configured grouping and constraints.
         """
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
-        counts, normal_pool_count = self._entity_split_counts(
-            label_for_group=label_for_group,
-        )
-        if (
-            self.train_on_normal_entities_only
-            and counts.train_count > normal_pool_count
-        ):
-            msg = (
-                "Requested train fraction is impossible with a fixed test "
-                "suffix and train_on_normal_entities_only enabled: "
-                f"target_train_sequences={counts.train_count}, "
-                f"eligible_normal_sequences={normal_pool_count}, "
-                f"train_pool_sequences={counts.total_count - counts.test_count}, "
-                f"test_sequences={counts.test_count}, "
-                f"total_sequences={counts.total_count}. "
-                "Lower train_fraction or disable normal-only training."
-            )
-            raise ValueError(msg)
+        counts, _ = self._entity_split_counts(label_for_group=label_for_group)
         normals_seen_in_train = 0
         test_start_index = counts.total_count - counts.test_count
 

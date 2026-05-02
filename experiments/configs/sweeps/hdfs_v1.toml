@@ -1,16 +1,11 @@
 name = "hdfs_v1"
-dataset = "hdfs_v1_entity_supervised"
+dataset = "hdfs_v1_entity_chronological"
 model = "template_frequency_default"
-description = "HDFS v1 model matrix across detector choice and train fraction."
+description = "HDFS v1 baseline matrix across chronological split models and train fraction."
 
 [[axes]]
 path = "sweep.model"
-values = [
-  "deepcase_default",
-  "deeplog_default",
-  # "template_frequency_default",
-  # "naive_bayes_default",
-]
+values = ["template_frequency_default", "naive_bayes_default"]
 
 [[axes]]
 path = "dataset.sequence.train_fraction"

@@ -1,0 +1,10 @@
+name = "bgl_entity_chronological"
+dataset_name = "BGL"
+preset = "bgl"
+template_parser = "drain3"
+description = "Built-in BGL preset grouped by entity with chronological prefix/suffix splitting."
+
+[sequence]
+grouping = "entity"
+train_fraction = 0.2
+train_on_normal_entities_only = false

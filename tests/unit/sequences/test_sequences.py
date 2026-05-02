@@ -243,8 +243,8 @@ def test_entity_sequences_fractional_split_counts_only_normals() -> None:
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
 
 
-def test_entity_sequences_error_when_normal_only_target_is_impossible() -> None:
-    """Normal-only training should fail if the requested overall split is impossible."""
+def test_entity_sequences_normal_only_training_uses_available_prefix_normals() -> None:
+    """Normal-only training should keep working when the prefix contains anomalies."""
     sink = _sink(
         structured_line(
             line_order=0,
@@ -274,22 +274,222 @@ def test_entity_sequences_error_when_normal_only_target_is_impossible() -> None:
             untemplated_message_text="fourth",
             anomalous=None,
         ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="e",
+            untemplated_message_text="fifth",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=5,
+            timestamp_unix_ms=600,
+            entity_id="f",
+            untemplated_message_text="sixth",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=6,
+            timestamp_unix_ms=700,
+            entity_id="g",
+            untemplated_message_text="seventh",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=7,
+            timestamp_unix_ms=800,
+            entity_id="h",
+            untemplated_message_text="eighth",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=8,
+            timestamp_unix_ms=900,
+            entity_id="i",
+            untemplated_message_text="ninth",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=9,
+            timestamp_unix_ms=1000,
+            entity_id="j",
+            untemplated_message_text="tenth",
+            anomalous=None,
+        ),
     )
 
     builder = EntitySequenceBuilder(
         sink=sink,
         infer_template=_upper_template,
-        label_for_group=lambda entity_id: 0 if entity_id == "c" else 1,
-        train_frac=0.8,
-        test_frac=0.2,
+        label_for_group=lambda entity_id: 1 if entity_id == "a" else 0,
+        train_frac=0.2,
+        test_frac=0.8,
         train_on_normal_entities_only=True,
     )
 
-    with pytest.raises(
-        ValueError,
-        match="Requested train fraction is impossible",
-    ):
-        list(builder)
+    sequences = list(builder)
+    split_summary = builder.build_split_summary(
+        sequence_summary=SequenceSummary(
+            sequence_count=10,
+            train_sequence_count=1,
+            test_sequence_count=8,
+            train_label_counts={0: 1},
+            test_label_counts={0: 8},
+            ignored_label_counts={1: 1},
+            ignored_sequence_count=1,
+        ),
+    )
+
+    assert [sequence.sole_entity_id for sequence in sequences] == [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+    ]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.IGNORED,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert split_summary == SequenceSplitSummary(
+        requested_train_fraction=0.2,
+        requested_test_fraction=0.8,
+        train_on_normal_entities_only=True,
+        train_pool_sequence_count=2,
+        ineligible_train_pool_count=1,
+        realised_train_sequence_count=1,
+        excluded_from_train_count=1,
+        eligible_train_sequence_count=1,
+        ignored_sequence_count=1,
+        effective_train_fraction_of_eligible=1.0,
+        effective_train_fraction_overall=0.1,
+    )
+
+
+def test_entity_sequences_use_chronological_prefix_and_suffix_without_filtering() -> (
+    None
+):
+    """DeepCASE-style entity splits should use the chronological prefix unchanged."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="first",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="b",
+            untemplated_message_text="second",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="c",
+            untemplated_message_text="third",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="d",
+            untemplated_message_text="fourth",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="e",
+            untemplated_message_text="fifth",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=5,
+            timestamp_unix_ms=600,
+            entity_id="f",
+            untemplated_message_text="sixth",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=6,
+            timestamp_unix_ms=700,
+            entity_id="g",
+            untemplated_message_text="seventh",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=7,
+            timestamp_unix_ms=800,
+            entity_id="h",
+            untemplated_message_text="eighth",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=8,
+            timestamp_unix_ms=900,
+            entity_id="i",
+            untemplated_message_text="ninth",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=9,
+            timestamp_unix_ms=1000,
+            entity_id="j",
+            untemplated_message_text="tenth",
+            anomalous=0,
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda entity_id: 1 if entity_id in {"a", "d"} else 0,
+            train_frac=0.2,
+            test_frac=0.8,
+        ),
+    )
+
+    assert [sequence.sole_entity_id for sequence in sequences] == [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+    ]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
 
 
 @pytest.mark.allow_no_new_coverage
@@ -599,7 +799,12 @@ def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
         ),
     ) == SequenceSplitSummary(
         requested_train_fraction=0.2,
+        requested_test_fraction=0.8,
         train_on_normal_entities_only=None,
+        train_pool_sequence_count=1,
+        ineligible_train_pool_count=0,
+        realised_train_sequence_count=1,
+        excluded_from_train_count=0,
         eligible_train_sequence_count=expected_eligible_sequence_count,
         ignored_sequence_count=0,
         effective_train_fraction_of_eligible=1.0,
