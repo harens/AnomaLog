@@ -5,6 +5,7 @@ from __future__ import annotations
 import msgspec
 import numpy as np
 import pytest
+import torch
 from deepcase import DeepCASE
 from deepcase.context_builder.context_builder import ContextBuilder
 from deepcase.interpreter.interpreter import Interpreter
@@ -13,7 +14,7 @@ from rich.progress import Progress
 from anomalog.sequences import SplitLabel, TemplateSequence
 from experiments import ConfigError
 from experiments.models import resolve_model_config_type
-from experiments.models.base import decode_experiment_model_config
+from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deepcase import DeepCaseModelConfig
 from experiments.models.deepcase.detector import DeepCaseDetector
 from experiments.models.deepcase.shared import (
@@ -27,6 +28,7 @@ from experiments.models.deepcase.shared import (
     decision_label_for_score,
     finding_reason_for_score,
 )
+from experiments.models.next_event_metrics import VocabularyPolicy
 
 MALICIOUS_SCORE = 3.0
 UNKNOWN_EVENT_SCORE = -2.0
@@ -88,6 +90,20 @@ def test_deepcase_model_config_accepts_mps_device() -> None:
     config = _deep_case_config(name="deepcase", device="mps")
 
     assert config.device == "mps"
+
+
+def test_deepcase_model_config_defaults_next_event_policy() -> None:
+    """DeepCase should default next-event diagnostics to the full dataset."""
+    config = _deep_case_config(name="deepcase")
+
+    assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+
+
+def test_deepcase_model_config_accepts_train_only_next_event_policy() -> None:
+    """DeepCase should accept train-only next-event diagnostics when requested."""
+    config = _deep_case_config(name="deepcase", vocabulary_policy="train_only")
+
+    assert config.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
 
 
 @pytest.mark.allow_no_new_coverage
@@ -224,6 +240,15 @@ def test_build_sample_batch_left_pads_missing_context() -> None:
         [no_event, no_event, event_id_map.template_to_event_id["A"]],
         [
             no_event,
+            event_id_map.template_to_event_id["A"],
+            event_id_map.template_to_event_id["B"],
+        ],
+    ]
+    assert batch.context_original_event_ids == [
+        [None, None, None],
+        [None, None, event_id_map.template_to_event_id["A"]],
+        [
+            None,
             event_id_map.template_to_event_id["A"],
             event_id_map.template_to_event_id["B"],
         ],
@@ -393,6 +418,120 @@ def test_deepcase_predict_aggregates_event_findings(
     assert outcome.findings[1].is_abstained
 
 
+def test_deepcase_manifest_reports_next_event_prediction_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase manifests should expose Context Builder next-event diagnostics.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream prediction
+            hooks so the test can observe next-event diagnostics directly.
+    """
+    train_sequence = _sequence(templates=["A", "B", "C"])
+    test_sequence = _sequence(
+        templates=["A", "UNSEEN", "C"],
+        split_label=SplitLabel.TEST,
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(
+            name="deepcase",
+            context_length=2,
+            epochs=1,
+            iterations=0,
+        ),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+
+    def _fake_context_predict(
+        self: ContextBuilder,
+        *,
+        steps: int = 1,
+        **kwargs: object,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = kwargs["X"]
+        del self, x
+        assert steps == 1
+        confidence = torch.tensor(
+            [
+                [[0.7, 0.2, 0.1, 0.0]],
+                [[0.1, 0.7, 0.1, 0.1]],
+                [[0.1, 0.1, 0.7, 0.1]],
+            ],
+            dtype=torch.float32,
+        )
+        attention = torch.zeros((3, 1, 2), dtype=torch.float32)
+        return confidence, attention
+
+    def _fake_predict_batch(_batch: DeepCaseSampleBatch) -> list[float]:
+        return [0.0, 0.0, 0.0]
+
+    monkeypatch.setattr(ContextBuilder, "predict", _fake_context_predict)
+    monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
+
+    detector.predict(test_sequence)
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+
+    next_event_prediction = manifest.next_event_prediction
+    expected_events_seen = len(test_sequence.events)
+    expected_eligible_events = 3
+    assert next_event_prediction is not None
+    assert next_event_prediction.task == "next_event_prediction"
+    assert next_event_prediction.totals.events_seen == expected_events_seen
+    assert next_event_prediction.totals.events_eligible == expected_eligible_events
+    assert next_event_prediction.totals.coverage == pytest.approx(1.0)
+    assert next_event_prediction.top_k.k_values == [1, 2, 3, 5]
+    assert next_event_prediction.top_k.hit_count == {
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "5": 2,
+    }
+    assert next_event_prediction.top_k.accuracy == {
+        "1": pytest.approx(2 / 3),
+        "2": pytest.approx(2 / 3),
+        "3": pytest.approx(2 / 3),
+        "5": pytest.approx(2 / 3),
+    }
+    assert next_event_prediction.classification_top1_macro.precision == pytest.approx(
+        2 / 3,
+    )
+    assert next_event_prediction.classification_top1_macro.recall == pytest.approx(
+        2 / 3,
+    )
+    assert next_event_prediction.classification_top1_macro.f1 == pytest.approx(2 / 3)
+    assert next_event_prediction.classification_top1_macro.accuracy == pytest.approx(
+        2 / 3,
+    )
+    assert (
+        next_event_prediction.classification_top1_weighted.precision
+        == pytest.approx(
+            2 / 3,
+        )
+    )
+    assert next_event_prediction.classification_top1_weighted.recall == pytest.approx(
+        2 / 3,
+    )
+    assert next_event_prediction.classification_top1_weighted.f1 == pytest.approx(
+        2 / 3,
+    )
+    assert next_event_prediction.classification_top1_weighted.accuracy == pytest.approx(
+        2 / 3,
+    )
+    assert next_event_prediction.exclusions.insufficient_history == 0
+    assert next_event_prediction.exclusions.unknown_history == 0
+    assert next_event_prediction.exclusions.unknown_target == 0
+    assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+
+
 def test_deepcase_predict_all_batches_multiple_sequences(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -437,6 +576,90 @@ def test_deepcase_predict_all_batches_multiple_sequences(
         [0.0],
     ]
     assert [outcome.abstained_event_count for _, outcome in outcomes] == [0, 0]
+
+
+def test_deepcase_next_event_predictions_reset_between_bulk_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase bulk next-event diagnostics should reflect only the latest run.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream prediction
+            hooks so the test can isolate the diagnostic reset behaviour.
+    """
+    train_sequence = _sequence(templates=["A", "B", "C"])
+    detector = DeepCaseDetector(
+        config=_deep_case_config(
+            name="deepcase",
+            context_length=2,
+            epochs=1,
+            iterations=0,
+        ),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+
+    def _fake_context_predict(
+        self: ContextBuilder,
+        *,
+        steps: int = 1,
+        **kwargs: object,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = kwargs["X"]
+        del self, x
+        assert steps == 1
+        confidence = torch.tensor(
+            [
+                [[0.8, 0.1, 0.1, 0.0]],
+                [[0.1, 0.8, 0.1, 0.0]],
+                [[0.1, 0.1, 0.8, 0.0]],
+            ],
+            dtype=torch.float32,
+        )
+        attention = torch.zeros((3, 1, 2), dtype=torch.float32)
+        return confidence, attention
+
+    def _fake_predict_batch(_batch: DeepCaseSampleBatch) -> list[float]:
+        return [0.0, 0.0, 0.0]
+
+    monkeypatch.setattr(ContextBuilder, "predict", _fake_context_predict)
+    monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
+
+    first_sequence = _sequence(templates=["A", "B"], split_label=SplitLabel.TEST)
+    second_sequence = _sequence(
+        templates=["A", "B", "C"],
+        split_label=SplitLabel.TEST,
+    )
+
+    list(detector.predict_all((first_sequence,)))
+    first_manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+    list(detector.predict_all((second_sequence,)))
+    second_manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+
+    assert first_manifest.next_event_prediction is not None
+    assert first_manifest.next_event_prediction.totals.events_seen == len(
+        first_sequence.events,
+    )
+    assert second_manifest.next_event_prediction is not None
+    assert second_manifest.next_event_prediction.totals.events_seen == len(
+        second_sequence.events,
+    )
 
 
 def test_deepcase_predict_batch_uses_zero_query_iterations(

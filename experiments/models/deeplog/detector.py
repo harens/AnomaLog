@@ -33,12 +33,19 @@ from experiments.models.deeplog.parameters import (
 )
 from experiments.models.deeplog.shared import (
     DeepLogEventFinding,
+    DeepLogKeyFinding,
     DeepLogManifest,
     KeyLSTM,
     ParameterModelManifestEntry,
     ParameterModelState,
     SkippedParameterModelEntry,
     build_normal_training_corpus,
+)
+from experiments.models.next_event_metrics import (
+    NextEventPredictionDiagnostics,
+    NextEventPredictionExclusionReason,
+    NextEventPredictionState,
+    VocabularyPolicy,
 )
 from experiments.models.torch_runtime import (
     TorchDeviceName,
@@ -167,6 +174,17 @@ class DeepLogModelConfig(
         int,
         msgspec.Meta(description="Random seed used for deterministic torch training."),
     ] = 0
+    vocabulary_policy: Annotated[
+        VocabularyPolicy,
+        msgspec.Meta(
+            description=(
+                "Vocabulary policy used for next-event diagnostics. "
+                "DeepLog defaults to full-dataset diagnostics for direct "
+                "comparison with DeepCASE, while train-only remains available "
+                "when a closed-world scope is preferred."
+            ),
+        ),
+    ] = VocabularyPolicy.FULL_DATASET
     device: Annotated[
         TorchDeviceName,
         msgspec.Meta(description="Torch device selection: auto, cpu, cuda, or mps."),
@@ -221,6 +239,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     test_event_count: int = 0
     scored_parameter_event_count: int = 0
     device: torch.device = field(default_factory=lambda: torch.device("cpu"))
+    _next_event_prediction_state: NextEventPredictionState | None = field(
+        default=None,
+        repr=False,
+    )
 
     def fit(
         self,
@@ -271,6 +293,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self.skipped_parameter_models = skipped_parameter_models
         self.train_event_count = train_event_count
         self.train_parameter_covered_event_count = train_parameter_covered_event_count
+        self._next_event_prediction_state = NextEventPredictionState.create(
+            k_values=_next_event_k_values(self.config.top_g),
+            vocabulary_policy=self.config.vocabulary_policy,
+        )
         self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> DeepLogPredictionOutcome:
@@ -307,6 +333,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 history_size=self.config.history_size,
                 top_g=self.config.top_g,
             ),
+        )
+        self._record_next_event_predictions(
+            sequence=sequence,
+            key_findings=key_findings,
         )
         # The paper's inference path is "key first, parameters second". We
         # therefore only pay the parameter-model cost for events whose key
@@ -433,7 +463,62 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 SkippedParameterModelEntry(template=template, reason=reason)
                 for template, reason in sorted(self.skipped_parameter_models.items())
             ],
+            next_event_prediction=self._consume_next_event_prediction_state(),
         )
+
+    def _record_next_event_predictions(
+        self,
+        *,
+        sequence: TemplateSequence,
+        key_findings: dict[int, DeepLogKeyFinding],
+    ) -> None:
+        state = self._ensure_next_event_prediction_state()
+        for event_index, template in enumerate(sequence.templates):
+            if event_index < self.config.history_size:
+                state.record_exclusion(
+                    NextEventPredictionExclusionReason.INSUFFICIENT_HISTORY,
+                )
+                continue
+            key_finding = key_findings.get(event_index)
+            if key_finding is None:
+                state.record_exclusion(
+                    NextEventPredictionExclusionReason.INSUFFICIENT_HISTORY,
+                )
+                continue
+            state.record_observation(
+                actual_label=template,
+                predicted_labels=[
+                    prediction.template for prediction in key_finding.top_predictions
+                ],
+                target_is_known=not key_finding.is_oov,
+                history_is_known=not key_finding.unknown_history_templates,
+            )
+
+    def _ensure_next_event_prediction_state(self) -> NextEventPredictionState:
+        state = self._next_event_prediction_state
+        if state is None:
+            state = NextEventPredictionState.create(
+                k_values=_next_event_k_values(self.config.top_g),
+                vocabulary_policy=self.config.vocabulary_policy,
+            )
+            self._next_event_prediction_state = state
+        return state
+
+    def _consume_next_event_prediction_state(
+        self,
+    ) -> NextEventPredictionDiagnostics | None:
+        """Return and clear next-event diagnostics for the latest scoring run.
+
+        Returns:
+            NextEventPredictionDiagnostics | None: Diagnostics for the latest
+                scoring run, or `None` if no next-event pass has been recorded.
+        """
+        state = self._next_event_prediction_state
+        if state is None:
+            return None
+        snapshot = state.snapshot()
+        self._next_event_prediction_state = None
+        return snapshot
 
 
 def _fraction(numerator: int, denominator: int) -> float:
@@ -449,3 +534,15 @@ def _fraction(numerator: int, denominator: int) -> float:
     if denominator == 0:
         return 0.0
     return numerator / denominator
+
+
+def _next_event_k_values(top_g: int) -> tuple[int, ...]:
+    """Return the DeepLog next-event reporting cut-offs.
+
+    Args:
+        top_g (int): DeepLog top-g reporting threshold from the config.
+
+    Returns:
+        tuple[int, ...]: Ordered top-k cut-offs up to `top_g`.
+    """
+    return tuple(sorted({k for k in (1, 2, 3, 5, top_g) if 0 < k <= top_g}))

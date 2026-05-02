@@ -56,6 +56,13 @@ the sequence was actually decisive. Run metrics additionally aggregate the
 DeepCASE reason histogram and confidence/abstain coverage so the evaluation does
 not collapse uncertainty into anomaly.
 
+The manifest also carries detector-owned next-event diagnostics from the
+Context Builder. This is a separate, deterministic diagnostic pass that uses
+the padded context windows produced by DeepCASE. The diagnostic vocabulary
+policy is configurable on `DeepCaseModelConfig` and defaults to
+`full_dataset`, with `train_only` still available for closed-world
+comparisons. The anomaly detector itself remains unchanged.
+
 The model should be run with entity grouping:
 
 ```toml

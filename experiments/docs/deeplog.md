@@ -36,6 +36,9 @@ extensions:
   findings.
 - Manifest reporting for parameter-model coverage and per-template feature
   counts.
+- Detector-owned next-event diagnostics derived from the key model's ranked
+  predictions. These diagnostics are separate from anomaly scoring and remain
+  available in the model manifest for the latest scoring run.
 
 ## Remaining Gaps Vs The Paper
 
@@ -59,6 +62,11 @@ extensions:
 - Unknown target templates:
   treated as key-model anomalies because the trained vocabulary contains no
   probability for the observed template.
+- Next-event diagnostics:
+  default to `full_dataset` so the diagnostic output is directly comparable
+  with DeepCASE. The diagnostic vocabulary policy is configurable on
+  `DeepLogModelConfig`; `train_only` remains available when you want the
+  report restricted to the training vocabulary used by the key scorer.
 - Missing or non-numeric parameter values:
   positions not admitted by the strict schema are never modeled. For admitted
   positions, missing values are padded with `0.0` internally but masked out of

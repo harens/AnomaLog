@@ -34,6 +34,11 @@ from experiments.models.deepcase.shared import (
     decision_label_for_score,
     finding_reason_for_score,
 )
+from experiments.models.next_event_metrics import (
+    NextEventPredictionDiagnostics,
+    NextEventPredictionState,
+    VocabularyPolicy,
+)
 from experiments.models.torch_runtime import (
     TorchDeviceName,
     resolve_torch_device,
@@ -208,6 +213,17 @@ class DeepCaseModelConfig(
         PositiveInt,
         msgspec.Meta(description="Batch size used during interpreter querying."),
     ] = 1024
+    vocabulary_policy: Annotated[
+        VocabularyPolicy,
+        msgspec.Meta(
+            description=(
+                "Vocabulary policy used for next-event diagnostics. "
+                "The maintained baseline uses the complete dataset "
+                "vocabulary, but train-only mode is available for closed-"
+                "world comparisons."
+            ),
+        ),
+    ] = VocabularyPolicy.FULL_DATASET
     cluster_score_strategy: Annotated[
         DeepCaseClusterScoreStrategy,
         msgspec.Meta(description="How event scores are aggregated within a cluster."),
@@ -268,6 +284,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
     train_sample_count: int = 0
     clustered_sample_count: int = 0
     known_cluster_count: int = 0
+    _next_event_prediction_state: NextEventPredictionState | None = field(
+        default=None,
+        repr=False,
+    )
     _prediction_diagnostics_state: _DeepCasePredictionDiagnosticsState = field(
         default_factory=_DeepCasePredictionDiagnosticsState,
         repr=False,
@@ -361,6 +381,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.known_cluster_count = len(
             {cluster for cluster in model.interpreter.clusters if cluster != -1},
         )
+        self._reset_next_event_prediction_state()
         self._reset_prediction_diagnostics()
         self._mark_fit_complete()
 
@@ -398,6 +419,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                 confident_anomaly_event_count=0,
             )
 
+        self._record_next_event_predictions(
+            sequences=(sequence,),
+            batch=batch,
+        )
         raw_scores = self._predict_batch(batch)
         findings = _findings_from_scores(batch=batch, raw_scores=raw_scores)
         summary = _summarise_findings(findings=findings, raw_scores=raw_scores)
@@ -436,6 +461,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             in input order.
         """
         self._reset_prediction_diagnostics()
+        self._reset_next_event_prediction_state()
         buffered_sequences: list[TemplateSequence] = []
         buffered_sample_count = 0
         for sequence in sequences:
@@ -495,6 +521,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             prediction_diagnostics=self._prediction_diagnostics_state.snapshot(),
             online_updates_status="not implemented",
             persistent_cluster_database_status="not implemented",
+            next_event_prediction=self._consume_next_event_prediction_state(),
         )
 
     def _predict_batch(self, batch: DeepCaseSampleBatch) -> list[float]:
@@ -558,6 +585,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                 )
             return
 
+        self._record_next_event_predictions(
+            sequences=sequences,
+            batch=batch,
+        )
         raw_scores = self._predict_batch(batch)
         score_offset = 0
         for sequence in sequences:
@@ -601,6 +632,115 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
     def _reset_prediction_diagnostics(self) -> None:
         """Reset accumulated prediction diagnostics before a new scoring run."""
         self._prediction_diagnostics_state.reset()
+
+    def _reset_next_event_prediction_state(self) -> None:
+        """Reset accumulated next-event diagnostics before a new scoring run."""
+        self._next_event_prediction_state = NextEventPredictionState.create(
+            k_values=_next_event_k_values(),
+            vocabulary_policy=self.config.vocabulary_policy,
+        )
+
+    def _consume_next_event_prediction_state(
+        self,
+    ) -> NextEventPredictionDiagnostics | None:
+        """Return and clear next-event diagnostics for the latest scoring run.
+
+        Returns:
+            NextEventPredictionDiagnostics | None: Diagnostics for the latest
+                scoring run, or `None` if no next-event pass has been recorded.
+        """
+        state = self._next_event_prediction_state
+        if state is None:
+            return None
+        snapshot = state.snapshot()
+        self._next_event_prediction_state = None
+        return snapshot
+
+    def _record_next_event_predictions(
+        self,
+        *,
+        sequences: Sequence[TemplateSequence],
+        batch: DeepCaseSampleBatch,
+    ) -> None:
+        """Record deterministic Context Builder diagnostics for one scoring run.
+
+        Args:
+            sequences (Sequence[TemplateSequence]): Sequences being scored in
+                this run.
+            batch (DeepCaseSampleBatch): Materialised event-centred batch for
+                the same sequences.
+
+        Raises:
+            ValueError: If the detector has not been fit or the batch cannot
+                be mapped back to train vocabulary entries.
+        """
+        state = self._ensure_next_event_prediction_state()
+        confidence = _normalise_next_event_confidence(
+            self._predict_next_event_batch(batch),
+        )
+        sample_offset = 0
+        event_id_map = self.event_id_map
+        if event_id_map is None:
+            msg = "deepcase must be fit before prediction."
+            raise ValueError(msg)
+        for sequence in sequences:
+            for event_index, template in enumerate(sequence.templates):
+                batch_index = sample_offset + event_index
+                state.record_observation(
+                    actual_label=template,
+                    predicted_labels=_top_event_templates(
+                        confidence[batch_index],
+                        event_id_map.event_id_to_template,
+                        k=max(state.k_values),
+                    ),
+                    target_is_known=batch.original_event_ids[batch_index] is not None,
+                    history_is_known=not any(
+                        context_event_id is None
+                        for context_event_id in batch.context_original_event_ids[
+                            batch_index
+                        ]
+                    ),
+                )
+            sample_offset += len(sequence.events)
+
+    def _predict_next_event_batch(self, batch: DeepCaseSampleBatch) -> torch.Tensor:
+        """Run the diagnostic-only Context Builder next-event pass.
+
+        This intentionally performs a separate deterministic prediction pass
+        from the interpreter-based anomaly path so the anomaly logic remains
+        unchanged.
+        Upstream ContextBuilder.predict returns confidence tensors of shape
+        ``(n_samples, steps, output_size)``; with ``steps=1`` the final step
+        slice is the next-event distribution.
+
+        Args:
+            batch (DeepCaseSampleBatch): Bounded event-centred sample batch.
+
+        Returns:
+            torch.Tensor: Context Builder confidence tensor for the batch.
+
+        Raises:
+            ValueError: If the detector has not been fit.
+        """
+        model = self.model
+        if model is None:
+            msg = "deepcase must be fit before prediction."
+            raise ValueError(msg)
+        confidence, _ = model.context_builder.predict(
+            X=batch.contexts.to(self.device),
+            steps=1,
+        )
+        return confidence
+
+    def _ensure_next_event_prediction_state(self) -> NextEventPredictionState:
+        state = self._next_event_prediction_state
+        if state is None:
+            state = NextEventPredictionState.create(
+                k_values=_next_event_k_values(),
+                vocabulary_policy=self.config.vocabulary_policy,
+            )
+            self._next_event_prediction_state = state
+        return state
 
 
 def _findings_from_scores(
@@ -673,3 +813,62 @@ def _summarise_findings(
         abstained_event_count=abstained_event_count,
         confident_anomaly_event_count=confident_anomaly_event_count,
     )
+
+
+def _normalise_next_event_confidence(confidence: torch.Tensor) -> torch.Tensor:
+    """Return a 2D next-event confidence tensor.
+
+    Args:
+        confidence (torch.Tensor): Raw context-builder confidence tensor.
+
+    Returns:
+        torch.Tensor: Two-dimensional confidence tensor with one row per
+            scored event.
+
+    Raises:
+        ValueError: If the DeepCASE context builder returns an unexpected tensor
+            rank.
+    """
+    if confidence.ndim == _NEXT_EVENT_CONFIDENCE_THREE_D:
+        return confidence[:, -1, :]
+    if confidence.ndim == _NEXT_EVENT_CONFIDENCE_TWO_D:
+        return confidence
+    msg = f"Unexpected DeepCase confidence shape: {tuple(confidence.shape)}"
+    raise ValueError(msg)
+
+
+def _top_event_templates(
+    confidence: torch.Tensor,
+    event_id_to_template: dict[int, str],
+    *,
+    k: int,
+) -> list[str]:
+    """Return the top predicted next-event templates for one sample.
+
+    Args:
+        confidence (torch.Tensor): One sample's next-event confidence vector.
+        event_id_to_template (dict[int, str]): Mapping from event ids to
+            training templates.
+        k (int): Number of candidate templates to return.
+
+    Returns:
+        list[str]: Ranked predicted templates, highest confidence first.
+    """
+    top_k = min(k, confidence.shape[-1])
+    if top_k == 0:
+        return []
+    _, top_indexes = torch.topk(confidence, k=top_k)
+    return [event_id_to_template[int(index)] for index in top_indexes.tolist()]
+
+
+def _next_event_k_values() -> tuple[int, ...]:
+    """Return the DeepCASE next-event reporting cut-offs.
+
+    Returns:
+        tuple[int, ...]: Standard top-k cut-offs for DeepCASE diagnostics.
+    """
+    return (1, 2, 3, 5)
+
+
+_NEXT_EVENT_CONFIDENCE_THREE_D = 3
+_NEXT_EVENT_CONFIDENCE_TWO_D = 2

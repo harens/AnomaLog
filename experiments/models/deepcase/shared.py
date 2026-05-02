@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from rich.progress import Progress
 
     from anomalog.sequences import TemplateSequence
+    from experiments.models.next_event_metrics import NextEventPredictionDiagnostics
 
 DEEPCASE_NO_EVENT = -1337
 """Upstream DeepCASE sentinel for missing or timed-out context events."""
@@ -97,6 +98,9 @@ class DeepCaseSampleBatch:
     Attributes:
         contexts (torch.Tensor): Integer context windows of shape
             ``(sample_count, context_length)``.
+        context_original_event_ids (list[list[int | None]]): Original
+            train-vocabulary ids for each context slot, with ``None`` used for
+            padding slots and unknown prediction-time templates.
         events (torch.Tensor): Integer target event ids of shape
             ``(sample_count,)``.
         scores (np.ndarray): Per-sample labels or scores aligned with
@@ -112,6 +116,7 @@ class DeepCaseSampleBatch:
     """
 
     contexts: torch.Tensor
+    context_original_event_ids: list[list[int | None]]
     events: torch.Tensor
     scores: np.ndarray
     event_indexes: list[int]
@@ -353,6 +358,8 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         online_updates_status (str): Status of online model updates.
         persistent_cluster_database_status (str): Status of persistent cluster
             storage support.
+        next_event_prediction (NextEventPredictionDiagnostics | None): Optional
+            next-event prediction diagnostics for the latest scoring run.
     """
 
     implementation_scope: str
@@ -380,6 +387,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     prediction_diagnostics: DeepCasePredictionDiagnostics | None
     online_updates_status: str
     persistent_cluster_database_status: str
+    next_event_prediction: NextEventPredictionDiagnostics | None = None
 
 
 def build_sample_batch(
@@ -596,8 +604,9 @@ def _context_for_target(
     sequence_event_ids: Sequence[int],
     target_index: int,
     context_policy: ContextWindowPolicy,
-) -> list[int]:
-    """Return the left-padded context window for one target event.
+    original_event_id_lookup: dict[str, int],
+) -> tuple[list[int], list[int | None]]:
+    """Return the encoded context window and original ids for one target event.
 
     The DeepCASE paper defines an event context as the preceding events from
     the same entity. This helper adapts AnomaLog's ``dt_prev_ms`` gaps into
@@ -612,9 +621,12 @@ def _context_for_target(
         target_index (int): Index of the event whose context is being built.
         context_policy (ContextWindowPolicy): Context length, timeout, and
             no-event policy to apply.
+        original_event_id_lookup (dict[str, int]): Mapping used to recover
+            train-vocabulary ids for the original context templates.
 
     Returns:
-        list[int]: Left-padded context event ids for the target event.
+        tuple[list[int], list[int | None]]: Encoded context event ids and the
+            corresponding original train-vocabulary ids for each slot.
 
     Examples:
         We have a sequence of three events "A", "B", and "C" with 1_000 ms between each.
@@ -623,7 +635,8 @@ def _context_for_target(
 
         >>> from types import SimpleNamespace
         >>> sequence = SimpleNamespace(
-        ...     events=[("A", [], None), ("B", [], 1_000), ("C", [], 2_000)]
+        ...     events=[("A", [], None), ("B", [], 1_000), ("C", [], 2_000)],
+        ...     templates=["A", "B", "C"],
         ... )
         >>> _context_for_target(
         ...     sequence=sequence,
@@ -634,14 +647,19 @@ def _context_for_target(
         ...         timeout_ms=2_500,
         ...         no_event_id=99,
         ...     ),
+        ...     original_event_id_lookup={"A": 10, "B": 11, "C": 12},
         ... )
-        [99, 11]
+        ([99, 11], [10, 11])
     """
     context = [context_policy.no_event_id] * context_policy.context_length
+    context_original_event_ids: list[int | None] = [
+        None,
+    ] * context_policy.context_length
     start_index = max(0, target_index - context_policy.context_length)
     write_offset = context_policy.context_length - (target_index - start_index)
     for context_index in range(start_index, target_index):
         event_id = sequence_event_ids[context_index]
+        context_template = sequence.templates[context_index]
         if _is_stale_context_event(
             sequence=sequence,
             context_index=context_index,
@@ -650,8 +668,11 @@ def _context_for_target(
         ):
             event_id = context_policy.no_event_id
         context[write_offset] = event_id
+        context_original_event_ids[write_offset] = original_event_id_lookup.get(
+            context_template,
+        )
         write_offset += 1
-    return context
+    return context, context_original_event_ids
 
 
 def _is_stale_context_event(
@@ -724,6 +745,8 @@ class _EmptyBatchColumns:
 
     Attributes:
         contexts (list[list[int]]): Context rows collected for each sample.
+        context_original_event_ids (list[list[int | None]]): Original
+            train-vocabulary ids for each collected context slot.
         events (list[int]): Target event ids for each sample.
         scores (list[float]): Per-sample labels or scores.
         event_indexes (list[int]): Target event indexes within their source
@@ -736,6 +759,7 @@ class _EmptyBatchColumns:
     """
 
     contexts: list[list[int]]
+    context_original_event_ids: list[list[int | None]]
     events: list[int]
     scores: list[float]
     event_indexes: list[int]
@@ -752,6 +776,7 @@ class _EmptyBatchColumns:
         """
         return cls(
             contexts=[],
+            context_original_event_ids=[],
             events=[],
             scores=[],
             event_indexes=[],
@@ -795,6 +820,7 @@ class _EmptyBatchColumns:
 
         return DeepCaseSampleBatch(
             contexts=torch.tensor(contexts_array, dtype=torch.long),
+            context_original_event_ids=self.context_original_event_ids,
             events=torch.tensor(self.events, dtype=torch.long),
             scores=np.asarray(self.scores, dtype=float),
             event_indexes=self.event_indexes,
@@ -825,13 +851,16 @@ def _append_sequence_samples(
             the generated samples.
     """
     for target_index, event_id in enumerate(sequence_event_ids):
-        batch_columns.contexts.append(
-            _context_for_target(
-                sequence=sequence,
-                sequence_event_ids=sequence_event_ids,
-                target_index=target_index,
-                context_policy=context_policy,
-            ),
+        context_ids, context_original_event_ids = _context_for_target(
+            sequence=sequence,
+            sequence_event_ids=sequence_event_ids,
+            target_index=target_index,
+            context_policy=context_policy,
+            original_event_id_lookup=original_event_id_lookup,
+        )
+        batch_columns.contexts.append(context_ids)
+        batch_columns.context_original_event_ids.append(
+            context_original_event_ids,
         )
         batch_columns.events.append(event_id)
         batch_columns.scores.append(float(sequence.label))

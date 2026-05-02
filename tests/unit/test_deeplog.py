@@ -37,6 +37,10 @@ from experiments.models.deeplog.shared import (
     ParameterModelState,
     build_normal_training_corpus,
 )
+from experiments.models.next_event_metrics import (
+    NextEventPredictionState,
+    VocabularyPolicy,
+)
 
 # DeepLog lives in `experiments/`, outside the configured `--cov=anomalog`
 # target. These tests still protect the experiment-layer detector contract.
@@ -55,6 +59,20 @@ def _deep_log_config(**values: ConfigValue) -> DeepLogModelConfig:
         raise
     except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def test_deeplog_model_config_defaults_next_event_policy() -> None:
+    """DeepLog should default next-event diagnostics to full-dataset scope."""
+    config = _deep_log_config(name="deeplog")
+
+    assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+
+
+def test_deeplog_model_config_accepts_full_dataset_next_event_policy() -> None:
+    """DeepLog should decode the full-dataset policy for diagnostics."""
+    config = _deep_log_config(name="deeplog", vocabulary_policy="full_dataset")
+
+    assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
 
 
 def _sequence(
@@ -573,6 +591,204 @@ def test_predict_flags_key_model_anomalies() -> None:
     assert outcome.triggered_by_parameter_model is False
     assert outcome.score > 0.0
     assert outcome.findings[0].key_model_finding is not None
+
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+    next_event_prediction = manifest.next_event_prediction
+    expected_events_seen = len(outcome.findings) + 2
+    expected_events_eligible = 1
+    expected_insufficient_history = 2
+    assert next_event_prediction is not None
+    assert next_event_prediction.task == "next_event_prediction"
+    assert next_event_prediction.totals.events_seen == expected_events_seen
+    assert next_event_prediction.totals.events_eligible == expected_events_eligible
+    assert next_event_prediction.totals.coverage == pytest.approx(1 / 3)
+    assert next_event_prediction.top_k.k_values == [1]
+    assert next_event_prediction.top_k.hit_count == {"1": 0}
+    assert next_event_prediction.top_k.accuracy == {"1": 0.0}
+    assert next_event_prediction.exclusions.insufficient_history == (
+        expected_insufficient_history
+    )
+    assert next_event_prediction.exclusions.unknown_history == 0
+    assert next_event_prediction.exclusions.unknown_target == 0
+    assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+
+
+def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() -> None:
+    """Next-event diagnostics should aggregate macro, weighted, and top-k metrics."""
+    state = NextEventPredictionState(
+        k_values=(1, 2, 5),
+        vocabulary_policy=VocabularyPolicy.TRAIN_ONLY,
+    )
+    state.record_prediction(
+        actual_label="A",
+        predicted_labels=["A", "B"],
+    )
+    state.record_prediction(
+        actual_label="A",
+        predicted_labels=["B", "A"],
+    )
+    state.record_prediction(
+        actual_label="B",
+        predicted_labels=["B", "C"],
+    )
+
+    snapshot = state.snapshot()
+
+    expected_events_seen = 3
+    expected_eligible_events = 3
+    assert snapshot is not None
+    assert snapshot.totals.events_seen == expected_events_seen
+    assert snapshot.totals.events_eligible == expected_eligible_events
+    assert snapshot.totals.coverage == pytest.approx(1.0)
+    assert snapshot.top_k.hit_count == {"1": 2, "2": 3, "5": 3}
+    assert snapshot.top_k.accuracy == {"1": pytest.approx(2 / 3), "2": 1.0, "5": 1.0}
+    assert snapshot.classification_top1_macro.precision == pytest.approx(0.75)
+    assert snapshot.classification_top1_macro.recall == pytest.approx(0.75)
+    assert snapshot.classification_top1_macro.f1 == pytest.approx(2 / 3)
+    assert snapshot.classification_top1_macro.accuracy == pytest.approx(2 / 3)
+    assert snapshot.classification_top1_weighted.precision == pytest.approx(5 / 6)
+    assert snapshot.classification_top1_weighted.recall == pytest.approx(2 / 3)
+    assert snapshot.classification_top1_weighted.f1 == pytest.approx(2 / 3)
+    assert snapshot.classification_top1_weighted.accuracy == pytest.approx(2 / 3)
+    assert snapshot.exclusions.insufficient_history == 0
+    assert snapshot.exclusions.unknown_target == 0
+    assert snapshot.exclusions.unknown_history == 0
+    assert snapshot.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
+
+
+def test_next_event_prediction_state_supports_k_beyond_candidate_count() -> None:
+    """Top-k reporting should tolerate k values larger than the candidate set."""
+    state = NextEventPredictionState(
+        k_values=(1, 5),
+        vocabulary_policy=VocabularyPolicy.TRAIN_ONLY,
+    )
+    state.record_prediction(
+        actual_label="A",
+        predicted_labels=["A", "B"],
+    )
+    state.record_prediction(
+        actual_label="B",
+        predicted_labels=["B", "A"],
+    )
+
+    snapshot = state.snapshot()
+
+    assert snapshot is not None
+    assert snapshot.top_k.hit_count == {"1": 2, "5": 2}
+    assert snapshot.top_k.accuracy == {"1": 1.0, "5": 1.0}
+
+
+def test_next_event_prediction_state_applies_vocabulary_policy() -> None:
+    """Policy-aware observations should exclude or score samples consistently."""
+    train_only = NextEventPredictionState.create(
+        k_values=(1,),
+        vocabulary_policy=VocabularyPolicy.TRAIN_ONLY,
+    )
+    train_only.record_observation(
+        actual_label="A",
+        predicted_labels=["A"],
+        target_is_known=False,
+    )
+    train_only.record_observation(
+        actual_label="B",
+        predicted_labels=["B"],
+        history_is_known=False,
+    )
+
+    full_dataset = NextEventPredictionState.create(
+        k_values=(1,),
+        vocabulary_policy=VocabularyPolicy.FULL_DATASET,
+    )
+    full_dataset.record_observation(
+        actual_label="A",
+        predicted_labels=["A"],
+        target_is_known=False,
+        history_is_known=False,
+    )
+
+    train_only_snapshot = train_only.snapshot()
+    full_dataset_snapshot = full_dataset.snapshot()
+
+    assert train_only_snapshot is not None
+    expected_train_only_events_seen = 2
+    expected_full_dataset_events_seen = 1
+    assert train_only_snapshot.totals.events_seen == expected_train_only_events_seen
+    assert train_only_snapshot.totals.events_eligible == 0
+    assert train_only_snapshot.exclusions.unknown_target == 1
+    assert train_only_snapshot.exclusions.unknown_history == 1
+    assert full_dataset_snapshot is not None
+    assert full_dataset_snapshot.totals.events_seen == expected_full_dataset_events_seen
+    assert full_dataset_snapshot.totals.events_eligible == 1
+    assert full_dataset_snapshot.exclusions.unknown_target == 0
+    assert full_dataset_snapshot.exclusions.unknown_history == 0
+    assert full_dataset_snapshot.top_k.hit_count == {"1": 1}
+
+
+def test_deeplog_next_event_predictions_reset_after_manifest() -> None:
+    """DeepLog next-event diagnostics should reflect the latest scoring run only."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    first_sequence = _sequence(templates=["A", "B", "C"])
+    second_sequence = _sequence(templates=["A", "B", "D", "C"])
+
+    detector.predict(first_sequence)
+    first_manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+    detector.predict(second_sequence)
+    second_manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={0: 0},
+            test_label_counts={0: 1},
+        ),
+    )
+
+    assert first_manifest.next_event_prediction is not None
+    assert first_manifest.next_event_prediction.totals.events_seen == len(
+        first_sequence.events,
+    )
+    assert second_manifest.next_event_prediction is not None
+    assert second_manifest.next_event_prediction.totals.events_seen == len(
+        second_sequence.events,
+    )
 
 
 def test_predict_flags_parameter_model_anomalies() -> None:
