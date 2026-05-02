@@ -324,6 +324,7 @@ def test_run_experiment_errors_when_normal_only_train_fraction_is_impossible(
         "\n[sequence]\n"
         'grouping = "entity"\n'
         "train_fraction = 0.8\n"
+        "test_fraction = 0.2\n"
         "train_on_normal_entities_only = true\n",
         encoding="utf-8",
     )

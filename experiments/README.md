@@ -48,14 +48,16 @@ datasets, matching the core `anomalog` sequence API.
 
 Entity-grouped sequences are ordered chronologically by each entity's first
 timestamp before the split is applied. A fixed chronological holdout suffix
-defines the test set, and each requested train fraction takes a prefix of the
-shared train pool before that suffix. The middle portion of the train pool is
-withheld from the current run, so performance changes reflect model behaviour
-rather than a moving test set.
+defines the test set, and the requested train fraction is applied to the total
+population before rounding and capping against the remaining middle band. The
+middle portion between the train prefix and fixed test suffix is withheld from
+the current run, so performance changes reflect model behaviour rather than a
+moving test set.
 
 The same fixed-holdout contract is available for fixed-window and time-window
-sequence configs through `sequence.test_fraction`. When that field is omitted,
-those grouping modes keep the older prefix-only split semantics.
+sequence configs through the `sequence.train_fraction` and
+`sequence.test_fraction` pair. The defaults are `0.2` and `0.8`, respectively,
+so omitted values still preserve the same fixed suffix behaviour.
 
 When `sequence.train_on_normal_entities_only = true`, the requested
 `train_fraction` still applies to the full entity population. Anomalous

@@ -43,6 +43,7 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
             infer_template=lambda _: ("", ()),
             label_for_group=lambda _: 0,
             train_frac=expected_requested_train_fraction,
+            test_frac=0.5,
             train_on_normal_entities_only=True,
         ),
         sequence_summary=SequenceSummary(

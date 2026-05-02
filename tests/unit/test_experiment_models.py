@@ -213,6 +213,7 @@ def test_fit_detector_wraps_lazy_train_stream_with_known_total() -> None:
         infer_template=lambda text: (text, []),
         label_for_group=lambda _entity_id: 0,
         train_frac=0.5,
+        test_frac=0.5,
     )
     detector = _RecordingDetector()
     logger = logging.getLogger("tests.fit_detector")

@@ -82,6 +82,7 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
                 "\n[sequence]\n"
                 'grouping = "entity"\n'
                 "train_fraction = 0.8\n"
+                "test_fraction = 0.2\n"
                 "train_on_normal_entities_only = true\n"
             ),
         ),

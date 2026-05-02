@@ -15,6 +15,7 @@ from anomalog.sources import (
     LocalZipSource,
     RemoteZipSource,
 )
+from anomalog.split_validation import validate_split_fractions
 from experiments import ConfigError
 
 if TYPE_CHECKING:
@@ -308,13 +309,13 @@ class SequenceConfigBase(
         step (int | None): Grouping-specific step between windows. `None`
             delegates to the grouping mode's default.
         train_fraction (TrainFraction): Requested training fraction for the
-            grouping-specific eligible train pool.
+            total sequence population.
         test_fraction (TestFraction): Fixed test suffix fraction.
     """
 
     step: int | None = None
-    train_fraction: TrainFraction = 0.8
-    test_fraction: TestFraction = 0.2
+    train_fraction: TrainFraction = 0.2
+    test_fraction: TestFraction = 0.8
 
     def __post_init__(self) -> None:
         """Validate cross-field split constraints.
@@ -323,13 +324,13 @@ class SequenceConfigBase(
             ConfigError: If the requested test suffix is invalid or leaves no
                 room for the train prefix.
         """
-        if self.train_fraction + self.test_fraction > 1.0:
-            msg = (
-                "train_fraction and test_fraction must sum to no more than 1.0, "
-                f"got train_fraction={self.train_fraction} and "
-                f"test_fraction={self.test_fraction}."
+        try:
+            validate_split_fractions(
+                train_frac=self.train_fraction,
+                test_frac=self.test_fraction,
             )
-            raise ConfigError(msg)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
 
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured sequence view from a templated dataset.
@@ -375,10 +376,10 @@ class SequenceConfigBase(
             TSequenceBuilder: Grouped sequence builder with shared split
                 settings applied.
         """
-        sequences = sequences.with_train_fraction(self.train_fraction)
-        if self.test_fraction is not None:
-            sequences = sequences.with_test_fraction(self.test_fraction)
-        return sequences
+        return sequences.with_split_fractions(
+            self.train_fraction,
+            self.test_fraction,
+        )
 
 
 class EntitySequenceConfig(

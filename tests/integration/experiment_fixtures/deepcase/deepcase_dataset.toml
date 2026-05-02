@@ -9,4 +9,5 @@ raw_logs_relpath = "logs/deepcase_fixture.log"
 
 [sequence]
 grouping = "entity"
-train_fraction = 0.5
+train_fraction = 0.2
+test_fraction = 0.8

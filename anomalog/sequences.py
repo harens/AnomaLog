@@ -22,6 +22,7 @@ from anomalog.representations import (
     SequenceRepresentationView,
     TRepresentation,
 )
+from anomalog.split_validation import validate_split_fractions
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator
@@ -186,39 +187,21 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         label_for_group (Callable[[str], int | None]): Group-level anomaly label
             lookup by entity id.
         train_frac (float): Requested training fraction for the builder.
-        test_frac (float | None): Fixed test suffix fraction.
+        test_frac (float): Fixed test suffix fraction.
     """
 
     sink: StructuredSink
     infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
-    train_frac: float = 0.8
-    test_frac: float | None = 0.2
+    train_frac: float = 0.2
+    test_frac: float = 0.8
 
     def __post_init__(self) -> None:
-        """Validate the requested split fractions.
-
-        Raises:
-            ValueError: If the requested fractions are out of range or do not
-                leave room for the ignored middle band when a fixed test suffix
-                is configured.
-        """
-        if not 0.0 <= self.train_frac <= 1.0:
-            msg = (
-                f"train_frac must be between 0 and 1 inclusive, got {self.train_frac}."
-            )
-            raise ValueError(msg)
-        if self.test_frac is None:
-            return
-        if not 0.0 <= self.test_frac <= 1.0:
-            msg = f"test_frac must be between 0 and 1 inclusive, got {self.test_frac}."
-            raise ValueError(msg)
-        if self.train_frac + self.test_frac > 1.0:
-            msg = (
-                "train_frac and test_frac must sum to no more than 1.0, "
-                f"got train_frac={self.train_frac} and test_frac={self.test_frac}."
-            )
-            raise ValueError(msg)
+        """Validate the requested split fractions."""
+        validate_split_fractions(
+            train_frac=self.train_frac,
+            test_frac=self.test_frac,
+        )
 
     def _split_counts(self, total_count: int) -> SequenceSplitCounts:
         """Return train, ignored, and test counts for one chronological split.
@@ -237,21 +220,12 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 ignored_count=0,
                 test_count=0,
             )
-        if self.test_frac is None:
-            train_count = min(total_count, math.ceil(self.train_frac * total_count))
-            return SequenceSplitCounts(
-                total_count=total_count,
-                train_count=train_count,
-                ignored_count=0,
-                test_count=total_count - train_count,
-            )
         test_count = min(total_count, math.ceil(self.test_frac * total_count))
-        train_pool_count = total_count - test_count
         train_count = min(
-            train_pool_count,
-            math.ceil(self.train_frac * train_pool_count),
+            total_count - test_count,
+            math.ceil(self.train_frac * total_count),
         )
-        ignored_count = train_pool_count - train_count
+        ignored_count = total_count - train_count - test_count
         return SequenceSplitCounts(
             total_count=total_count,
             train_count=train_count,
@@ -275,7 +249,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 necessarily the number of sequences that were actually assigned
                 to train.
         """
-        if self.test_frac is None:
+        if not self.test_frac:
             return sequence_summary.sequence_count
         return sequence_summary.sequence_count - sequence_summary.test_sequence_count
 
@@ -289,36 +263,23 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         del self
         return None
 
-    def with_train_fraction(
+    def with_split_fractions(
         self,
         train_frac: float,
+        test_frac: float,
     ) -> Self:
-        """Return a copy with an updated train/test split fraction.
+        """Return a copy with both split fractions updated together.
 
         Args:
-            train_frac (float): Requested fraction of the eligible train pool
-                to assign to the train prefix.
+            train_frac (float): Requested fraction of the total population to
+                assign to the train prefix.
+            test_frac (float): Requested fraction reserved for the fixed test
+                suffix.
 
         Returns:
-            Self: Copy with updated train/test split fraction.
+            Self: Copy with updated split fractions.
         """
-        return replace(self, train_frac=train_frac)
-
-    def with_test_fraction(
-        self,
-        test_frac: float | None,
-    ) -> Self:
-        """Return a copy with an updated fixed test suffix fraction.
-
-        Args:
-            test_frac (float | None): Fraction reserved for the fixed test
-                suffix, or `None` to fall back to the old prefix-only split
-                semantics.
-
-        Returns:
-            Self: Copy with updated fixed test fraction.
-        """
-        return replace(self, test_frac=test_frac)
+        return replace(self, train_frac=train_frac, test_frac=test_frac)
 
     def represent_with(
         self,
@@ -646,12 +607,9 @@ class EntitySequenceBuilder(SequenceBuilder):
     Attributes:
         train_on_normal_entities_only (bool): Whether anomalous entities are
             excluded from the training split budget.
-        test_frac (float): Fixed chronological holdout fraction reserved for
-            the test suffix.
     """
 
     train_on_normal_entities_only: bool = False
-    test_frac: float = 0.2
 
     @classmethod
     def from_dataset(
@@ -705,13 +663,8 @@ class EntitySequenceBuilder(SequenceBuilder):
         """
         entity_counts = self.sink.count_entities_by_label(label_for_group)
         total_entities = entity_counts.total_entities
-        test_count = math.ceil(self.test_frac * total_entities) if total_entities else 0
-        test_count = min(test_count, total_entities)
-        train_pool_count = total_entities - test_count
-        train_prefix_count = (
-            math.ceil(self.train_frac * train_pool_count) if train_pool_count else 0
-        )
-        train_prefix_count = min(train_prefix_count, train_pool_count)
+        counts = self._split_counts(total_entities)
+        train_pool_count = total_entities - counts.test_count
         normal_pool_count = train_pool_count
         if self.train_on_normal_entities_only:
             normal_pool_count = 0
@@ -726,12 +679,6 @@ class EntitySequenceBuilder(SequenceBuilder):
                     continue
                 if not is_anomalous_label(label_for_group(entity_id)):
                     normal_pool_count += 1
-        counts = SequenceSplitCounts(
-            total_count=total_entities,
-            train_count=train_prefix_count,
-            ignored_count=train_pool_count - train_prefix_count,
-            test_count=test_count,
-        )
         return counts, normal_pool_count
 
     @override

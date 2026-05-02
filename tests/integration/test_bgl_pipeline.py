@@ -200,7 +200,7 @@ def _assert_entity_sequences_are_reproducible(
     assert second_by_entity == first_by_entity
 
     anomalous_sequence = first_by_entity[ANOMALOUS_ENTITY]
-    assert anomalous_sequence.split_label is SplitLabel.IGNORED
+    assert anomalous_sequence.split_label is SplitLabel.TEST
     assert anomalous_sequence.label == 1
     assert (
         anomalous_sequence.templates == expected_templates_by_entity[ANOMALOUS_ENTITY]
@@ -253,7 +253,7 @@ def test_user_can_turn_a_small_bgl_archive_into_reproducible_entity_sequences(
 
     builder = (
         templated.group_by_entity()
-        .with_train_fraction(0.5)
+        .with_split_fractions(0.5, 0.5)
         .with_train_on_normal_entities_only()
     )
     first_pass = list(builder)
@@ -270,7 +270,7 @@ def test_user_can_turn_a_small_bgl_archive_into_reproducible_entity_sequences(
     rebuilt_templates_by_message = _templates_by_message(rebuilt, rebuilt_rows)
     rebuilt_sequences = list(
         rebuilt.group_by_entity()
-        .with_train_fraction(0.5)
+        .with_split_fractions(0.5, 0.5)
         .with_train_on_normal_entities_only(),
     )
 
