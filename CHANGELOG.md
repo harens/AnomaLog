@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.4.0](https://github.com/harens/AnomaLog/compare/v0.3.0...v0.4.0) (2026-05-03)
+
+
+### Features
+
+* add next-event prediction diagnostics to DeepCASE and DeepLog models ([1b48275](https://github.com/harens/AnomaLog/commit/1b4827599795ff4d5184035132483e6f5c59d758))
+* add optional per-event anomaly labels to TemplateSequence and validate alignment ([3820888](https://github.com/harens/AnomaLog/commit/3820888f53306eaa69cf3ea414afe0df9ef08d8d))
+* **build_templated_dataset:** coarse lock over dataset name + cache path ([5ab01b5](https://github.com/harens/AnomaLog/commit/5ab01b50b535e82fe2689e628060a5e52c366bc6))
+* **deepcase:** add event-level prediction metrics, not just sequence ([436e154](https://github.com/harens/AnomaLog/commit/436e15460e30ef98589af90ad3a07d2ef6dca9a9))
+* **deepcase:** enhance training feedback by reporting progress per epoch ([7693743](https://github.com/harens/AnomaLog/commit/76937432241fdac12a6ff7fb3b3e1055a4c2f2eb))
+* **deepcase:** update documentation and tests for zero-query iterations in scoring ([c2d0629](https://github.com/harens/AnomaLog/commit/c2d0629b7d2d9cc0c042db8720a4efa824c04ca6))
+* **deeplog:** add progress reporting for key model and parameter schema preparation ([a631783](https://github.com/harens/AnomaLog/commit/a631783c8a5a211066da27e497ed352d00fbaa34))
+* **detectors:** implement BatchExperimentDetector for bulk scoring and enhance evaluation logic ([b1f0ff8](https://github.com/harens/AnomaLog/commit/b1f0ff8015a2cdf0f23c24d8cd71fe891b89332f))
+* **docs:** add reference documentation for experiments package ([80e20ae](https://github.com/harens/AnomaLog/commit/80e20aeb4e6ae439c9cfa71bae3effc05d4c74ab))
+* **experiment_logger:** enhance logging with concrete run names ([413f52a](https://github.com/harens/AnomaLog/commit/413f52a09865841a1f2ac638456daf62e986ecd1))
+* **experiment_runner:** add --write-predictions option to persist predictions.jsonl ([ef06f46](https://github.com/harens/AnomaLog/commit/ef06f468c112af27a3c9a207717b3400d02771e2))
+* **experiments:** add DeepLog and DeepCASE detectors ([7b3745e](https://github.com/harens/AnomaLog/commit/7b3745e9ab4e2daf08ba4ffc792ac1ee505515c8))
+* **experiments:** allow for multi-process model sweeps ([46e0a05](https://github.com/harens/AnomaLog/commit/46e0a05e5c40a188f4b8db22f9f24ce109f7a6e6))
+* **experiments:** lazy load models for optional extra dependencies ([a58e50c](https://github.com/harens/AnomaLog/commit/a58e50c3d873363aeafb0d32fd0c6992a2b99f55))
+* **experiments:** share progress totals and logging ([f0019a6](https://github.com/harens/AnomaLog/commit/f0019a636d75b433804516aed6fd5a1b3be09fbf))
+* **models:** add SingleFitMixin for single fit state management in detectors ([9f4247b](https://github.com/harens/AnomaLog/commit/9f4247b10c9280c3e47a4cd0d240202b89b46255))
+* **models:** support bounded train progress hints ([2b24a2a](https://github.com/harens/AnomaLog/commit/2b24a2af0edb89068f1d2be3c0cec3637813ab31))
+* modify train/test fractions in tandem ([28a21f0](https://github.com/harens/AnomaLog/commit/28a21f0f0cd9202e2a843c72fc10ffb70b0d40bd))
+* **naive_bayes:** add type annotations and improve docstrings ([b611c63](https://github.com/harens/AnomaLog/commit/b611c634787c580bd60ab2e255ae8aac8f39c564))
+* **parquet:** implement chronological entity grouping and persist entity chronology index ([28d7f48](https://github.com/harens/AnomaLog/commit/28d7f48f0002694871e03209bdec85a562992f84))
+* set paper-faithful deepcase iterations, expose next event prediction metrics ([0131ccf](https://github.com/harens/AnomaLog/commit/0131ccf1650a2df4ec17f6cdc39393e5b11a270c))
+* **tests:** add fixtures to mirror Prefect API URL in subprocess environments ([71c1c23](https://github.com/harens/AnomaLog/commit/71c1c2384ff392d5bec64c40ff023b3ab1ca0578))
+* **torch_runtime:** add shared helpers for managing torch device and seed ([b7c0485](https://github.com/harens/AnomaLog/commit/b7c0485c11b590f087c5c1932e7dfb3373692a1b))
+
+
+### Bug Fixes
+
+* **deepcase:** don't treat abstained scores as anomalous ([0b99151](https://github.com/harens/AnomaLog/commit/0b99151533918f7f42a7011d325b9b369e43bccb))
+* **deepcase:** optimise template access and label resolution in training batch ([9155033](https://github.com/harens/AnomaLog/commit/91550331999deba7156b12424526278ab3912ee3))
+* **deepcase:** use finer grained anomaly labels where available ([03741f0](https://github.com/harens/AnomaLog/commit/03741f092806e480892aa671493197217abad397))
+* **deeplog:** next-event predictions over all logs, not just latest one ([c20858e](https://github.com/harens/AnomaLog/commit/c20858e21ea56a429e19066bc3f5770a349326f4))
+* evaluator no longer treats every DeepCASE outcome as abstained ([9e8a1ef](https://github.com/harens/AnomaLog/commit/9e8a1ef1110934bb0fca5769f3904d8787a54aed))
+* **experiments:** correct supervised entity split fractions ([0e27773](https://github.com/harens/AnomaLog/commit/0e27773d1a83c74cb6e52c5963d0d19e2f666133))
+* **hdfs_v1:** add support for non-integer csv anomaly labels ([7a2f4df](https://github.com/harens/AnomaLog/commit/7a2f4dffb0595b2028a0f5421e3532e96c94875e))
+* keep test set the same across different train splits ([d27fc42](https://github.com/harens/AnomaLog/commit/d27fc424e3513accf4a641992440d282a7f49eba))
+* paper-faithful split contract changes ([da2d6c5](https://github.com/harens/AnomaLog/commit/da2d6c5313e312c8319cbe269620c39715af1b3a))
+* **tests:** keep deeplog/case runners independent of dataset.toml ([f003c94](https://github.com/harens/AnomaLog/commit/f003c94544e19648e9ff87424e952eb1406cd03b))
+
+
+### Documentation
+
+* **anomalog:** apply strict pydoclint across modules ([8429e76](https://github.com/harens/AnomaLog/commit/8429e76895f76d660a8268f7b72b20edf3057aa1))
+* **experiments:** document caching and reruns ([5240b0d](https://github.com/harens/AnomaLog/commit/5240b0dd1bbe6ec9fa9ed5ad5fb3eb81e22bcf67))
+* **experiments:** document DeepLog and DeepCASE support ([8b5bda5](https://github.com/harens/AnomaLog/commit/8b5bda5e3376f4de8512a0956fbaaf682e991597))
+* **experiments:** pydoclint docstrings ([8c082df](https://github.com/harens/AnomaLog/commit/8c082df42642138e383430afc5f5ae098892a188))
+* **tests:** apply strict pydoclint ([0978c04](https://github.com/harens/AnomaLog/commit/0978c041d0a819f2f7ad31bf7870b839b2f385b1))
+
 ## [0.3.0](https://github.com/harens/AnomaLog/compare/v0.2.0...v0.3.0) (2026-04-14)
 
 
