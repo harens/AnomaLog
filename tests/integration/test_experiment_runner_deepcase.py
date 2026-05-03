@@ -91,6 +91,7 @@ def _assert_deepcase_metrics(
     assert "abstain_rate" in metrics
     assert "abstained_anomalous_label_count" in metrics
     assert "abstained_normal_label_count" in metrics
+    assert "parent_sequence_fallback_count" in metrics
     assert "counted_predictions" in metrics
     assert "next_event_prediction" in metrics
     assert metrics["sequence_count"] == (

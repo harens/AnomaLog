@@ -105,6 +105,8 @@ class DeepCaseRunMetrics(msgspec.Struct, frozen=True):
         abstained_prediction_count (int): Number of deferred test sequences.
         abstained_anomalous_label_count (int): Deferred anomalous sequences.
         abstained_normal_label_count (int): Deferred normal sequences.
+        parent_sequence_fallback_count (int): Number of scored events that had
+            to fall back to the parent sequence label.
         auto_coverage (float): Fraction of test sequences handled
             automatically.
         abstain_rate (float): Fraction of test sequences deferred for
@@ -119,6 +121,7 @@ class DeepCaseRunMetrics(msgspec.Struct, frozen=True):
     abstained_prediction_count: int
     abstained_anomalous_label_count: int
     abstained_normal_label_count: int
+    parent_sequence_fallback_count: int
     auto_coverage: float
     abstain_rate: float
     prediction_diagnostics: DeepCasePredictionDiagnostics | None
@@ -476,6 +479,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             timeout_seconds=self.config.timeout_seconds,
             unknown_event_id=self.event_id_map.no_event_id,
         )
+        self._prediction_diagnostics_state.record_parent_sequence_fallback_count(
+            batch.parent_sequence_fallback_count,
+        )
         if batch.sample_count == 0:
             return DeepCasePredictionOutcome(
                 predicted_label=0,
@@ -564,8 +570,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             sequence_summary=sequence_summary,
             implementation_scope="Official DeepCase library integration",
             label_policy=(
-                "sequence-label supervision: every event-centered sample inherits "
-                "the source TemplateSequence label"
+                "event-label supervision when available: each event-centered "
+                "sample uses its target event label and falls back to the "
+                "parent TemplateSequence label when the event label is missing"
             ),
             context_length=self.config.context_length,
             timeout_seconds=self.config.timeout_seconds,
@@ -643,6 +650,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                 if prediction_diagnostics is None
                 else prediction_diagnostics.abstained_normal_label_count
             ),
+            parent_sequence_fallback_count=(
+                self._prediction_diagnostics_state.parent_sequence_fallback_count
+            ),
             auto_coverage=round(auto_coverage, 8),
             abstain_rate=round(abstain_rate, 8),
             prediction_diagnostics=prediction_diagnostics,
@@ -689,6 +699,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             context_length=self.config.context_length,
             timeout_seconds=self.config.timeout_seconds,
             unknown_event_id=self.event_id_map.no_event_id,
+        )
+        self._prediction_diagnostics_state.record_parent_sequence_fallback_count(
+            batch.parent_sequence_fallback_count,
         )
         if batch.sample_count == 0:
             for sequence in sequences:

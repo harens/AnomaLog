@@ -112,6 +112,8 @@ class DeepCaseSampleBatch:
             ``None`` because they were never assigned a train id, which keeps
             unseen templates distinct from known templates that happen to map
             to the unknown-event sentinel during scoring.
+        parent_sequence_fallback_count (int): Number of target events that had
+            to fall back to the parent sequence label.
     """
 
     contexts: torch.Tensor
@@ -121,6 +123,7 @@ class DeepCaseSampleBatch:
     event_indexes: list[int]
     templates: list[str]
     original_event_ids: list[int | None]
+    parent_sequence_fallback_count: int
 
     @property
     def sample_count(self) -> int:
@@ -283,6 +286,7 @@ class _DeepCasePredictionDiagnosticsState:
     sequence_confident_anomaly_count: int = 0
     sequence_confident_normal_count: int = 0
     sequence_abstained_count: int = 0
+    parent_sequence_fallback_count: int = 0
     reason_counts: Counter[str] = field(default_factory=Counter)
 
     def record(
@@ -319,7 +323,17 @@ class _DeepCasePredictionDiagnosticsState:
         self.sequence_confident_anomaly_count = 0
         self.sequence_confident_normal_count = 0
         self.sequence_abstained_count = 0
+        self.parent_sequence_fallback_count = 0
         self.reason_counts = Counter()
+
+    def record_parent_sequence_fallback_count(self, count: int) -> None:
+        """Record how many samples in the latest run used parent labels.
+
+        Args:
+            count (int): Number of samples that fell back to the parent
+                sequence label.
+        """
+        self.parent_sequence_fallback_count += count
 
     def snapshot(self) -> DeepCasePredictionDiagnostics | None:
         if self.event_count == 0:
@@ -699,6 +713,27 @@ def _context_for_target(
     return context, context_original_event_ids
 
 
+def _sample_label_for_target(
+    sequence: TemplateSequence,
+    target_index: int,
+) -> int:
+    """Return the supervised label for one target event.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being expanded into
+            DeepCASE samples.
+        target_index (int): Index of the target event within the source
+            sequence.
+
+    Returns:
+        int: Binary label for the target event.
+    """
+    event_label = _target_event_label(sequence, target_index)
+    if event_label is not None:
+        return int(is_anomalous_label(event_label))
+    return int(is_anomalous_label(sequence.label))
+
+
 def _is_stale_context_event(
     *,
     sequence: TemplateSequence,
@@ -780,6 +815,8 @@ class _EmptyBatchColumns:
             target templates. Prediction-time unseen templates stay ``None``
             so the batch can preserve the distinction between an unknown event
             sentinel and a genuinely missing train-vocabulary id.
+        parent_sequence_fallback_count (int): Number of samples using parent
+            sequence labels.
     """
 
     contexts: list[list[int]]
@@ -789,6 +826,7 @@ class _EmptyBatchColumns:
     event_indexes: list[int]
     templates: list[str]
     original_event_ids: list[int | None]
+    parent_sequence_fallback_count: int
 
     @classmethod
     def create(cls) -> _EmptyBatchColumns:
@@ -806,6 +844,7 @@ class _EmptyBatchColumns:
             event_indexes=[],
             templates=[],
             original_event_ids=[],
+            parent_sequence_fallback_count=0,
         )
 
     def to_batch(
@@ -850,6 +889,7 @@ class _EmptyBatchColumns:
             event_indexes=self.event_indexes,
             templates=self.templates,
             original_event_ids=self.original_event_ids,
+            parent_sequence_fallback_count=self.parent_sequence_fallback_count,
         )
 
 
@@ -875,6 +915,9 @@ def _append_sequence_samples(
             the generated samples.
     """
     for target_index, event_id in enumerate(sequence_event_ids):
+        if _target_event_label(sequence, target_index) is None:
+            batch_columns.parent_sequence_fallback_count += 1
+        sample_label = _sample_label_for_target(sequence, target_index)
         context_ids, context_original_event_ids = _context_for_target(
             sequence=sequence,
             sequence_event_ids=sequence_event_ids,
@@ -887,9 +930,31 @@ def _append_sequence_samples(
             context_original_event_ids,
         )
         batch_columns.events.append(event_id)
-        batch_columns.scores.append(float(sequence.label))
+        batch_columns.scores.append(float(sample_label))
         batch_columns.event_indexes.append(target_index)
         batch_columns.templates.append(sequence.templates[target_index])
         batch_columns.original_event_ids.append(
             original_event_id_lookup.get(sequence.templates[target_index]),
         )
+
+
+def _target_event_label(
+    sequence: TemplateSequence,
+    target_index: int,
+) -> int | None:
+    """Return the label attached directly to one event, if present.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being expanded into
+            DeepCASE samples.
+        target_index (int): Index of the target event within the source
+            sequence.
+
+    Returns:
+        int | None: Event-level label for the target event, or ``None`` when
+        no event-specific label exists.
+    """
+    event_labels = sequence.event_labels
+    if event_labels is None:
+        return None
+    return event_labels[target_index]

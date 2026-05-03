@@ -51,12 +51,34 @@ def _deep_case_config(**values: ConfigValue) -> DeepCaseModelConfig:
 def _sequence(
     *,
     templates: list[str],
-    dts_by_event: list[int | None] | None = None,
     label: int = 0,
     entity_ids: list[str] | None = None,
     split_label: SplitLabel = SplitLabel.TRAIN,
+    event_metadata: dict[str, list[int | None] | None] | None = None,
 ) -> TemplateSequence:
-    resolved_dts = dts_by_event or [None for _ in templates]
+    """Build a compact `TemplateSequence` fixture for DeepCase tests.
+
+    Args:
+        templates (list[str]): Ordered event templates for the sequence.
+        label (int): Parent sequence label.
+        entity_ids (list[str] | None): Optional entity ids for the sequence.
+        split_label (SplitLabel): Dataset split assigned to the sequence.
+        event_metadata (dict[str, list[int | None] | None] | None): Optional
+            per-event metadata for tests that need timestamps or event labels.
+
+    Returns:
+        TemplateSequence: Sequence fixture with aligned event rows.
+    """
+    resolved_dts = (
+        event_metadata.get("dts_by_event") if event_metadata is not None else None
+    )
+    resolved_event_labels = (
+        event_metadata.get("event_labels") if event_metadata is not None else None
+    )
+    if resolved_dts is None:
+        resolved_dts = [None for _ in templates]
+    if resolved_event_labels is None:
+        resolved_event_labels = None
     return TemplateSequence(
         events=[
             (template, [], dt_prev_ms)
@@ -66,6 +88,9 @@ def _sequence(
         entity_ids=["entity-1"] if entity_ids is None else entity_ids,
         window_id=0,
         split_label=split_label,
+        event_labels=(
+            tuple(resolved_event_labels) if resolved_event_labels is not None else None
+        ),
     )
 
 
@@ -260,6 +285,48 @@ def test_build_sample_batch_left_pads_missing_context() -> None:
     ]
 
 
+def test_build_sample_batch_uses_target_event_labels_when_available() -> None:
+    """DeepCase should prefer target-event labels over smeared parent labels."""
+    sequence = _sequence(
+        templates=["A", "B", "C", "D", "E"],
+        event_metadata={"event_labels": [0, 0, 1, 0, 0]},
+        label=1,
+    )
+    event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
+
+    batch = build_sample_batch(
+        (sequence,),
+        event_id_map=event_id_map,
+        context_length=2,
+        timeout_seconds=86_400,
+    )
+
+    assert batch.scores.tolist() == [0.0, 0.0, 1.0, 0.0, 0.0]
+    assert batch.parent_sequence_fallback_count == 0
+
+
+def test_build_sample_batch_falls_back_to_parent_label_when_event_labels_missing() -> (
+    None
+):
+    """DeepCase should use the parent label when no event label is available."""
+    sequence = _sequence(
+        templates=["A", "B", "C", "D", "E"],
+        label=1,
+    )
+    sample_count = len(sequence.events)
+    event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
+
+    batch = build_sample_batch(
+        (sequence,),
+        event_id_map=event_id_map,
+        context_length=2,
+        timeout_seconds=86_400,
+    )
+
+    assert batch.scores.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert batch.parent_sequence_fallback_count == sample_count
+
+
 @pytest.mark.allow_no_new_coverage
 def test_build_sample_batch_replaces_stale_context_events() -> None:
     """A target event should only keep context events within the timeout."""
@@ -268,7 +335,7 @@ def test_build_sample_batch_replaces_stale_context_events() -> None:
     # DeepCase tests, so a separate uncovered branch is not the right fit.
     sequence = _sequence(
         templates=["A", "B", "C"],
-        dts_by_event=[None, 1_000, 2_000],
+        event_metadata={"dts_by_event": [None, 1_000, 2_000]},
     )
     event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
 
@@ -311,7 +378,10 @@ def test_build_sample_batch_uses_train_vocabulary_for_unknown_events() -> None:
 def test_build_training_batch_matches_direct_sequence_batch() -> None:
     """Training should reuse one train vocabulary while keeping sample rows aligned."""
     sequences = (
-        _sequence(templates=["A", "B", "C"], dts_by_event=[None, 1_000, 2_000]),
+        _sequence(
+            templates=["A", "B", "C"],
+            event_metadata={"dts_by_event": [None, 1_000, 2_000]},
+        ),
         _sequence(templates=["B", "A"], label=1),
     )
 
@@ -335,6 +405,26 @@ def test_build_training_batch_matches_direct_sequence_batch() -> None:
     assert batch.events.tolist() == [a_id, b_id, c_id, b_id, a_id]
     assert batch.scores.tolist() == [0.0, 0.0, 0.0, 1.0, 1.0]
     assert batch.original_event_ids == [a_id, b_id, c_id, b_id, a_id]
+
+
+def test_build_training_batch_uses_target_event_labels_when_available() -> None:
+    """DeepCase training should also avoid smearing parent labels."""
+    sequences = (
+        _sequence(
+            templates=["A", "B", "C", "D", "E"],
+            event_metadata={"event_labels": [0, 0, 1, 0, 0]},
+            label=1,
+        ),
+    )
+
+    _, batch = build_training_batch(
+        sequences,
+        context_length=2,
+        timeout_seconds=2.5,
+    )
+
+    assert batch.scores.tolist() == [0.0, 0.0, 1.0, 0.0, 0.0]
+    assert batch.parent_sequence_fallback_count == 0
 
 
 def test_deepcase_rejects_multi_entity_sequences() -> None:
@@ -453,6 +543,59 @@ def test_deepcase_predict_marks_all_abstained_sequence(
     assert outcome.confident_event_count == 0
     assert outcome.abstained_event_count == expected_abstained_event_count
     assert outcome.confident_anomaly_event_count == 0
+
+
+def test_deepcase_run_metrics_reports_parent_sequence_fallback_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase run metrics should report parent-label fallback usage.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream DeepCASE fit
+            hooks so the test can isolate fallback-count reporting.
+    """
+    train_sequence = _sequence(templates=["A", "B"])
+    test_sequence = _sequence(
+        templates=["A", "B", "C", "D", "E"],
+        label=1,
+        split_label=SplitLabel.TEST,
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+
+    def _fake_context_predict(
+        self: ContextBuilder,
+        *,
+        steps: int = 1,
+        **kwargs: object,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del self, kwargs
+        assert steps == 1
+        confidence = torch.full((5, 1, 2), 0.5, dtype=torch.float32)
+        attention = torch.zeros((5, 1, 2), dtype=torch.float32)
+        return confidence, attention
+
+    monkeypatch.setattr(ContextBuilder, "predict", _fake_context_predict)
+    monkeypatch.setattr(
+        detector,
+        "_predict_batch",
+        lambda batch: [0.0] * len(batch.events),
+    )
+
+    detector.predict(test_sequence)
+    metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 1,
+            "counted_predictions": 1,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
+    assert metrics.parent_sequence_fallback_count == len(test_sequence.events)
+    assert metrics.prediction_diagnostics is not None
 
 
 def test_deepcase_run_metrics_reports_next_event_prediction_diagnostics(

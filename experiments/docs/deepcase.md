@@ -21,11 +21,12 @@ AnomaLog's sequence-oriented experiment runner.
 
 ## AnomaLog Adaptations
 
-AnomaLog experiment labels are sequence/entity labels. During DeepCase cluster
-scoring, every event-centered sample derived from a sequence inherits that
-sequence's label. This keeps the shared `TemplateSequence` interface unchanged
-and avoids adding event-level labels that the rest of the experiment layer does
-not currently use.
+AnomaLog experiment labels are sequence/entity labels, but `TemplateSequence`
+now preserves optional event-level labels when they exist. During DeepCase
+sample construction, each event-centered sample uses the target event label
+when one is present and falls back to the parent sequence label only when the
+event label is missing. Run metrics record how often DeepCASE had to fall back
+to the parent sequence label.
 
 DeepCase training reports progress per context-builder epoch before moving on
 to interpreter clustering. That keeps long training runs visibly alive instead
@@ -52,9 +53,7 @@ between:
 The sequence-level prediction remains binary for the shared experiment contract,
 but the persisted prediction record carries `sequence_decision`,
 `confident_event_count`, and `abstained_event_count` so you can see how much of
-the sequence was actually decisive. Run metrics additionally aggregate the
-DeepCASE reason histogram and confidence/abstain coverage so the evaluation does
-not collapse uncertainty into anomaly.
+the sequence was actually decisive.
 
 ### Metric Interpretation
 
