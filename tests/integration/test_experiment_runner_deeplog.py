@@ -131,7 +131,8 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     hit_count = _object_dict(top_k["hit_count"])
     accuracy = _object_dict(top_k["accuracy"])
     assert _int_value(totals, "events_seen") >= _int_value(
-        metrics, "test_sequence_count",
+        metrics,
+        "test_sequence_count",
     )
     assert _int_value(totals, "events_eligible") > 0
     assert 0.0 < _float_value(totals, "coverage") <= 1.0

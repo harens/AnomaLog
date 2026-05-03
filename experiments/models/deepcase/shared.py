@@ -460,18 +460,26 @@ def build_sample_batch(
 
     for sequence in sequences:
         require_entity_local_sequences((sequence,), detector_name="DeepCase")
+        templates = sequence.templates
         sequence_event_ids = [
             _event_id_for_template(
                 template,
                 event_id_map=event_id_map,
                 unknown_event_id=unknown_event_id,
             )
-            for template in sequence.templates
+            for template in templates
         ]
-        _append_sequence_samples(
+        sequence_batch = _SequenceBatchData(
             sequence=sequence,
+            templates=templates,
             sequence_event_ids=sequence_event_ids,
-            original_event_id_lookup=event_id_map.template_to_event_id,
+            original_event_ids=[
+                event_id_map.template_to_event_id.get(template)
+                for template in templates
+            ],
+        )
+        _append_sequence_samples(
+            sequence_batch=sequence_batch,
             context_policy=context_policy,
             batch_columns=batch_columns,
         )
@@ -524,14 +532,21 @@ def build_training_batch(
     try:
         for sequence in sequences:
             require_entity_local_sequences((sequence,), detector_name="DeepCase")
+            templates = sequence.templates
             sequence_event_ids = [
                 template_to_event_id.setdefault(template, len(template_to_event_id))
-                for template in sequence.templates
+                for template in templates
             ]
-            _append_sequence_samples(
+            sequence_batch = _SequenceBatchData(
                 sequence=sequence,
+                templates=templates,
                 sequence_event_ids=sequence_event_ids,
-                original_event_id_lookup=template_to_event_id,
+                original_event_ids=[
+                    template_to_event_id.get(template) for template in templates
+                ],
+            )
+            _append_sequence_samples(
+                sequence_batch=sequence_batch,
                 context_policy=context_policy,
                 batch_columns=batch_columns,
             )
@@ -638,11 +653,9 @@ def _event_id_for_template(
 
 def _context_for_target(
     *,
-    sequence: TemplateSequence,
-    sequence_event_ids: Sequence[int],
+    sequence_batch: _SequenceBatchData,
     target_index: int,
     context_policy: ContextWindowPolicy,
-    original_event_id_lookup: dict[str, int],
 ) -> tuple[list[int], list[int | None]]:
     """Return the encoded context window and original ids for one target event.
 
@@ -653,14 +666,11 @@ def _context_for_target(
     ``timeout_ms``.
 
     Args:
-        sequence (TemplateSequence): Source sequence containing event gap data.
-        sequence_event_ids (Sequence[int]): Event ids aligned with
-            ``sequence.templates``.
+        sequence_batch (_SequenceBatchData): Cached per-sequence views used to
+            build event-centered samples.
         target_index (int): Index of the event whose context is being built.
         context_policy (ContextWindowPolicy): Context length, timeout, and
             no-event policy to apply.
-        original_event_id_lookup (dict[str, int]): Mapping used to recover
-            train-vocabulary ids for the original context templates.
 
     Returns:
         tuple[list[int], list[int | None]]: Encoded context event ids and the
@@ -677,15 +687,18 @@ def _context_for_target(
         ...     templates=["A", "B", "C"],
         ... )
         >>> _context_for_target(
-        ...     sequence=sequence,
-        ...     sequence_event_ids=[10, 11, 12],
+        ...     sequence_batch=_SequenceBatchData(
+        ...         sequence=sequence,
+        ...         templates=sequence.templates,
+        ...         sequence_event_ids=[10, 11, 12],
+        ...         original_event_ids=[10, 11, 12],
+        ...     ),
         ...     target_index=2,
         ...     context_policy=ContextWindowPolicy(
         ...         context_length=2,
         ...         timeout_ms=2_500,
         ...         no_event_id=99,
         ...     ),
-        ...     original_event_id_lookup={"A": 10, "B": 11, "C": 12},
         ... )
         ([99, 11], [10, 11])
     """
@@ -694,108 +707,100 @@ def _context_for_target(
         None,
     ] * context_policy.context_length
     start_index = max(0, target_index - context_policy.context_length)
-    write_offset = context_policy.context_length - (target_index - start_index)
-    for context_index in range(start_index, target_index):
-        event_id = sequence_event_ids[context_index]
-        context_template = sequence.templates[context_index]
-        if _is_stale_context_event(
-            sequence=sequence,
-            context_index=context_index,
-            target_index=target_index,
-            timeout_ms=context_policy.timeout_ms,
-        ):
-            event_id = context_policy.no_event_id
-        context[write_offset] = event_id
-        context_original_event_ids[write_offset] = original_event_id_lookup.get(
-            context_template,
-        )
-        write_offset += 1
+    context_sequence_event_ids = sequence_batch.sequence_event_ids[
+        start_index:target_index
+    ]
+    context_original_event_ids_slice = sequence_batch.original_event_ids[
+        start_index:target_index
+    ]
+    if not context_sequence_event_ids:
+        return context, context_original_event_ids
+
+    stale_context_flags = _stale_context_flags(
+        events=sequence_batch.sequence.events,
+        start_index=start_index,
+        target_index=target_index,
+        timeout_ms=context_policy.timeout_ms,
+    )
+    write_offset = context_policy.context_length - len(context_sequence_event_ids)
+    for context_offset, (event_id, is_stale) in enumerate(
+        zip(
+            context_sequence_event_ids,
+            stale_context_flags,
+            strict=True,
+        ),
+    ):
+        context_position = write_offset + context_offset
+        context_event_id = context_policy.no_event_id if is_stale else event_id
+        context[context_position] = context_event_id
+        context_original_event_ids[context_position] = context_original_event_ids_slice[
+            context_offset
+        ]
     return context, context_original_event_ids
 
 
-def _sample_label_for_target(
-    sequence: TemplateSequence,
-    target_index: int,
-) -> int:
-    """Return the supervised label for one target event.
-
-    Args:
-        sequence (TemplateSequence): Source sequence being expanded into
-            DeepCASE samples.
-        target_index (int): Index of the target event within the source
-            sequence.
-
-    Returns:
-        int: Binary label for the target event.
-    """
-    event_label = _target_event_label(sequence, target_index)
-    if event_label is not None:
-        return int(is_anomalous_label(event_label))
-    return int(is_anomalous_label(sequence.label))
-
-
-def _is_stale_context_event(
+def _stale_context_flags(
     *,
-    sequence: TemplateSequence,
-    context_index: int,
+    events: Sequence[tuple[str, list[str], int | None]],
+    start_index: int,
     target_index: int,
     timeout_ms: int,
-) -> bool:
-    """Return whether a context event is too old for a target event.
-
-    The source ``TemplateSequence`` stores event-local ``dt_prev_ms`` gaps
-    rather than absolute timestamps. To decide whether a context event is still
-    valid, DeepCase needs the total elapsed time between that context event and
-    the target event. If any intermediate gap is unknown, the helper keeps the
-    context event instead of discarding it as stale.
+) -> list[bool]:
+    """Return staleness flags for one target event's context window.
 
     Args:
-        sequence (TemplateSequence): Source sequence containing event gap data.
-        context_index (int): Index of the candidate context event.
+        events (Sequence[tuple[str, list[str], int | None]]): Source sequence
+            containing event gap data.
+        start_index (int): Index of the earliest context event in the current
+            target window.
         target_index (int): Index of the target event.
         timeout_ms (int): Maximum allowed elapsed time between context event
             and target event.
 
     Returns:
-        bool: ``True`` when the context event is stale and should be replaced
-        with the no-event sentinel.
-
-    Examples:
-        "A" is originally stale for "C" because the total elapsed
-        time is 3_000 ms > 2_500 ms. In the second case, "A" is not stale
-        for "C" because the elapsed time is unknown, so we keep the context
-        event just in case.
-
-        >>> from types import SimpleNamespace
-        >>> sequence = SimpleNamespace(
-        ...     events=[("A", [], None), ("B", [], 1_000), ("C", [], 2_000)]
-        ... )
-        >>> _is_stale_context_event(
-        ...     sequence=sequence,
-        ...     context_index=0,
-        ...     target_index=2,
-        ...     timeout_ms=2_500,
-        ... )
-        True
-        >>> _is_stale_context_event(
-        ...     sequence=SimpleNamespace(
-        ...         events=[("A", [], None), ("B", [], None), ("C", [], 2_000)]
-        ...     ),
-        ...     context_index=0,
-        ...     target_index=2,
-        ...     timeout_ms=2_500,
-        ... )
-        False
+        list[bool]: Staleness flags aligned with the context events in
+            chronological order.
     """
+    context_count = target_index - start_index
+    if context_count <= 0:
+        return []
+
+    stale_context_flags = [False] * context_count
     elapsed_ms = 0
-    saw_elapsed = False
-    for event_index in range(context_index + 1, target_index + 1):
-        dt_prev_ms = sequence.events[event_index][2]
+    can_be_stale = True
+    for reverse_offset, event_index in enumerate(
+        range(target_index, start_index, -1),
+    ):
+        dt_prev_ms = events[event_index][2]
         if dt_prev_ms is None:
-            return False
-        elapsed_ms += dt_prev_ms
-        saw_elapsed = True
-    return saw_elapsed and elapsed_ms > timeout_ms
+            can_be_stale = False
+            continue
+        if can_be_stale:
+            elapsed_ms += dt_prev_ms
+            stale_context_flags[context_count - 1 - reverse_offset] = (
+                elapsed_ms > timeout_ms
+            )
+    return stale_context_flags
+
+
+@dataclass(slots=True)
+class _SequenceBatchData:
+    """Cached per-sequence views used while expanding DeepCase samples.
+
+    Attributes:
+        sequence (TemplateSequence): Source sequence being expanded into event
+            samples.
+        templates (Sequence[str]): Ordered template strings for the sequence.
+        sequence_event_ids (Sequence[int]): Event ids aligned with
+            ``templates``.
+        original_event_ids (Sequence[int | None]): Original train-vocabulary
+            ids aligned with ``templates``.
+    """
+
+    sequence: TemplateSequence
+    templates: Sequence[str]
+    sequence_event_ids: Sequence[int]
+    original_event_ids: Sequence[int | None]
 
 
 @dataclass(slots=True)
@@ -895,35 +900,39 @@ class _EmptyBatchColumns:
 
 def _append_sequence_samples(
     *,
-    sequence: TemplateSequence,
-    sequence_event_ids: Sequence[int],
-    original_event_id_lookup: dict[str, int],
+    sequence_batch: _SequenceBatchData,
     context_policy: ContextWindowPolicy,
     batch_columns: _EmptyBatchColumns,
 ) -> None:
     """Append one sequence's event-centered samples into aligned batch columns.
 
     Args:
-        sequence (TemplateSequence): Source sequence being expanded into event
-            samples.
-        sequence_event_ids (Sequence[int]): Event ids aligned with
-            ``sequence.templates``.
-        original_event_id_lookup (dict[str, int]): Mapping used to recover the
-            train-vocabulary id for each target template.
+        sequence_batch (_SequenceBatchData): Cached per-sequence views used to
+            build event-centered samples.
         context_policy (ContextWindowPolicy): Context construction policy.
         batch_columns (_EmptyBatchColumns): Mutable aligned columns receiving
             the generated samples.
     """
-    for target_index, event_id in enumerate(sequence_event_ids):
-        if _target_event_label(sequence, target_index) is None:
+    sequence = sequence_batch.sequence
+    templates = sequence_batch.templates
+    sequence_event_ids = sequence_batch.sequence_event_ids
+    parent_sample_label = int(is_anomalous_label(sequence.label))
+    event_labels = sequence.event_labels
+    for target_index, (template, event_id) in enumerate(
+        zip(templates, sequence_event_ids, strict=True),
+    ):
+        target_event_label = (
+            None if event_labels is None else event_labels[target_index]
+        )
+        if target_event_label is None:
             batch_columns.parent_sequence_fallback_count += 1
-        sample_label = _sample_label_for_target(sequence, target_index)
+            sample_label = parent_sample_label
+        else:
+            sample_label = int(is_anomalous_label(target_event_label))
         context_ids, context_original_event_ids = _context_for_target(
-            sequence=sequence,
-            sequence_event_ids=sequence_event_ids,
+            sequence_batch=sequence_batch,
             target_index=target_index,
             context_policy=context_policy,
-            original_event_id_lookup=original_event_id_lookup,
         )
         batch_columns.contexts.append(context_ids)
         batch_columns.context_original_event_ids.append(
@@ -932,29 +941,7 @@ def _append_sequence_samples(
         batch_columns.events.append(event_id)
         batch_columns.scores.append(float(sample_label))
         batch_columns.event_indexes.append(target_index)
-        batch_columns.templates.append(sequence.templates[target_index])
+        batch_columns.templates.append(template)
         batch_columns.original_event_ids.append(
-            original_event_id_lookup.get(sequence.templates[target_index]),
+            sequence_batch.original_event_ids[target_index],
         )
-
-
-def _target_event_label(
-    sequence: TemplateSequence,
-    target_index: int,
-) -> int | None:
-    """Return the label attached directly to one event, if present.
-
-    Args:
-        sequence (TemplateSequence): Source sequence being expanded into
-            DeepCASE samples.
-        target_index (int): Index of the target event within the source
-            sequence.
-
-    Returns:
-        int | None: Event-level label for the target event, or ``None`` when
-        no event-specific label exists.
-    """
-    event_labels = sequence.event_labels
-    if event_labels is None:
-        return None
-    return event_labels[target_index]

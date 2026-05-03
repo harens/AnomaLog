@@ -16,6 +16,7 @@ from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deepcase import DeepCaseModelConfig
+from experiments.models.deepcase import shared as deepcase_shared
 from experiments.models.deepcase.detector import DeepCaseDetector
 from experiments.models.deepcase.shared import (
     DeepCaseEventIdMap,
@@ -407,6 +408,61 @@ def test_build_training_batch_matches_direct_sequence_batch() -> None:
     assert batch.original_event_ids == [a_id, b_id, c_id, b_id, a_id]
 
 
+def test_build_training_batch_materialises_sequence_templates_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase training should read each sequence's templates a single time.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces DeepCase helpers with
+            counters so the test can observe how often the hot path resolves
+            sequence-level inputs.
+    """
+    event_labels = (0, 1, 0, 1)
+    sequence = TemplateSequence(
+        events=[("A", [], 1), ("B", [], 1), ("C", [], 1), ("D", [], 1)],
+        label=1,
+        entity_ids=["entity-1"],
+        window_id=0,
+        event_labels=event_labels,
+    )
+    templates_access_count = 0
+    original_templates = TemplateSequence.templates.fget
+    assert original_templates is not None
+    label_resolution_count = 0
+    original_is_anomalous_label = deepcase_shared.is_anomalous_label
+
+    def _counting_templates(
+        self: TemplateSequence,
+    ) -> list[str]:
+        nonlocal templates_access_count
+        templates_access_count += 1
+        return original_templates(self)
+
+    def _counting_is_anomalous_label(label: int) -> bool:
+        nonlocal label_resolution_count
+        label_resolution_count += 1
+        return original_is_anomalous_label(label)
+
+    monkeypatch.setattr(TemplateSequence, "templates", property(_counting_templates))
+    monkeypatch.setattr(
+        deepcase_shared,
+        "is_anomalous_label",
+        _counting_is_anomalous_label,
+    )
+
+    _, batch = build_training_batch(
+        (sequence,),
+        context_length=2,
+        timeout_seconds=2.5,
+    )
+
+    assert templates_access_count == 1
+    assert label_resolution_count == len(sequence.events) + 1
+    assert batch.sample_count == len(sequence.events)
+    assert batch.parent_sequence_fallback_count == 0
+
+
 def test_build_training_batch_uses_target_event_labels_when_available() -> None:
     """DeepCase training should also avoid smearing parent labels."""
     sequences = (
@@ -425,6 +481,23 @@ def test_build_training_batch_uses_target_event_labels_when_available() -> None:
 
     assert batch.scores.tolist() == [0.0, 0.0, 1.0, 0.0, 0.0]
     assert batch.parent_sequence_fallback_count == 0
+
+
+def test_build_training_batch_falls_back_to_parent_label_when_labels_missing() -> None:
+    """Training should keep the parent label only when event labels are absent."""
+    sequence = _sequence(
+        templates=["A", "B", "C", "D", "E"],
+        label=1,
+    )
+
+    _, batch = build_training_batch(
+        (sequence,),
+        context_length=2,
+        timeout_seconds=2.5,
+    )
+
+    assert batch.scores.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert batch.parent_sequence_fallback_count == len(sequence.events)
 
 
 def test_deepcase_rejects_multi_entity_sequences() -> None:
