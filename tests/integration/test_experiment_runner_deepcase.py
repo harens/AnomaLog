@@ -131,16 +131,57 @@ def _assert_deepcase_prediction_diagnostics(
     assert prediction_diagnostics["event_count"] == sum(
         prediction["event_count"] for prediction in predictions
     )
-    assert (
+    assert prediction_diagnostics["event_count"] == (
         prediction_diagnostics["confident_event_count"]
         + prediction_diagnostics["abstained_event_count"]
-        == prediction_diagnostics["event_count"]
     )
     assert prediction_diagnostics[
         "sequence_confident_anomaly_count"
     ] + prediction_diagnostics[
         "sequence_confident_normal_count"
     ] + prediction_diagnostics["sequence_abstained_count"] == len(predictions)
+    event_decision_metrics = prediction_diagnostics["event_decision_metrics"]
+    assert isinstance(event_decision_metrics, dict)
+    assert (
+        event_decision_metrics["event_count"] == prediction_diagnostics["event_count"]
+    )
+    assert (
+        event_decision_metrics["event_auto_decision_count"]
+        + event_decision_metrics["event_abstained_decision_count"]
+        == event_decision_metrics["event_count"]
+    )
+    assert (
+        event_decision_metrics["event_tp"]
+        + event_decision_metrics["event_fp"]
+        + event_decision_metrics["event_tn"]
+        + event_decision_metrics["event_fn"]
+        == event_decision_metrics["event_auto_decision_count"]
+    )
+    assert (
+        event_decision_metrics["event_predicted_normal_count"]
+        + event_decision_metrics["event_predicted_anomalous_count"]
+        == event_decision_metrics["event_auto_decision_count"]
+    )
+    assert (
+        event_decision_metrics["event_true_normal_count"]
+        + event_decision_metrics["event_true_anomalous_count"]
+        == event_decision_metrics["event_count"]
+    )
+    assert event_decision_metrics["event_auto_coverage"] == pytest.approx(
+        event_decision_metrics["event_auto_decision_count"]
+        / event_decision_metrics["event_count"],
+    )
+    assert event_decision_metrics["event_abstain_rate"] == pytest.approx(
+        event_decision_metrics["event_abstained_decision_count"]
+        / event_decision_metrics["event_count"],
+    )
+    assert "sequence_evidence_totals" not in prediction_diagnostics
+    assert "sequence_evidence_category_counts" not in prediction_diagnostics
+    assert "sequence_evidence_by_true_label" not in prediction_diagnostics
+    assert "sequence_event_count_summaries" not in prediction_diagnostics
+    assert (
+        "blocked_from_confident_normal_no_malicious_count" not in prediction_diagnostics
+    )
 
 
 def _assert_deepcase_model_manifest(

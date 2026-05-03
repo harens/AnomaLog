@@ -483,6 +483,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             batch.parent_sequence_fallback_count,
         )
         if batch.sample_count == 0:
+            self._prediction_diagnostics_state.record_empty_sequence(
+                sequence_label=sequence.label,
+            )
             return DeepCasePredictionOutcome(
                 predicted_label=0,
                 score=0.0,
@@ -503,6 +506,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self._prediction_diagnostics_state.record(
             summary=summary,
             findings=findings,
+            event_labels=batch.scores.tolist(),
             sequence_label=sequence.label,
         )
         return DeepCasePredictionOutcome(
@@ -705,6 +709,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         )
         if batch.sample_count == 0:
             for sequence in sequences:
+                self._prediction_diagnostics_state.record_empty_sequence(
+                    sequence_label=sequence.label,
+                )
                 yield (
                     sequence,
                     DeepCasePredictionOutcome(
@@ -740,6 +747,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             self._prediction_diagnostics_state.record(
                 summary=summary,
                 findings=findings,
+                event_labels=batch.scores[
+                    score_offset : score_offset + sample_count
+                ].tolist(),
                 sequence_label=sequence.label,
             )
             yield (

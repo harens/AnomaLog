@@ -39,9 +39,14 @@ runner stays faithful to the paper's semi-automatic inference loop.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCASE would receive during manual
-analysis. Predictions are still emitted as sequence records for the common
-metrics contract, with detector-owned event findings preserving DeepCASE's
-event-level decisions.
+analysis. Predictions are still emitted as sequence records for the shared
+metrics contract, but the sequence-level numbers are only a parent-sequence
+aggregation wrapper for comparison with detectors such as DeepLog.
+
+DeepCASE's natural evaluation unit is the event-centred contextual sample. The
+diagnostics block therefore also carries event-level automatic-decision metrics
+for the latest scoring run. Those metrics reflect the model's automatic
+decisions before any sequence aggregation is applied.
 
 DeepCASE abstentions are not treated as anomalies. Event findings now distinguish
 between:
@@ -50,16 +55,40 @@ between:
 - confident malicious
 - abstained/manual-review
 
-The sequence-level prediction remains binary for the shared experiment contract,
-but the persisted prediction record carries `sequence_decision`,
+The persisted prediction record carries `sequence_decision`,
 `confident_event_count`, and `abstained_event_count` so you can see how much of
-the sequence was actually decisive.
+the sequence was actually decisive. The event-level diagnostics expose the
+underlying automatic decisions separately from abstentions.
 
 ### Metric Interpretation
 
-Automated precision, recall, F1, and accuracy are computed over confident
-auto-decisions only. Abstained sequences are reported separately as
-manual-review workload and coverage signals:
+Sequence-level precision, recall, F1, and accuracy remain the shared wrapper
+view over sequence decisions. Event-level automatic-decision metrics evaluate
+DeepCASE at its contextual-sample level, where:
+
+- `known_benign_cluster` maps to a predicted normal event
+- `known_malicious_cluster` maps to a predicted anomalous event
+- `not_confident_enough`, `closest_cluster_outside_epsilon`, unknown events,
+  and other manual-review reasons are counted as abstentions
+
+At the event level, abstentions are excluded from the confusion matrix and
+tracked separately:
+
+- `event_count`: total contextual event samples scored
+- `event_auto_decision_count`: automatic event decisions
+- `event_abstained_decision_count`: event samples deferred for review
+- `event_auto_coverage`: automatic decision fraction
+- `event_abstain_rate`: abstention fraction
+- `event_tp`, `event_fp`, `event_tn`, `event_fn`: automatic confusion matrix
+- `event_precision`, `event_recall`, `event_f1`, `event_accuracy`: automatic
+  decision metrics
+- `event_predicted_normal_count`, `event_predicted_anomalous_count`: automatic
+  prediction totals
+- `event_true_normal_count`, `event_true_anomalous_count`: ground-truth event
+  totals
+
+Abstained sequences are still reported separately as manual-review workload and
+coverage signals:
 
 - `auto_decision_count`: number of confident auto-decisions
 - `counted_predictions`: number of automatic predictions that entered the
@@ -69,6 +98,11 @@ manual-review workload and coverage signals:
 - `abstain_rate`: fraction of test sequences deferred for review
 - `abstained_normal_label_count`: deferred normal sequences
 - `abstained_anomalous_label_count`: deferred anomalous sequences
+
+BGL can use target-event labels where they are available, which makes the event
+metrics genuinely event-supervised on that dataset. HDFS often only has the
+parent sequence label available, so event-level anomaly metrics there are a
+weakly supervised fallback and should be interpreted in that light.
 
 `mean_test_score` still averages all test sequences, so the score trend remains
 comparable even when the abstain rate changes.

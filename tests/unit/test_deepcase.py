@@ -33,6 +33,33 @@ from experiments.models.next_event_metrics import VocabularyPolicy
 
 MALICIOUS_SCORE = 3.0
 UNKNOWN_EVENT_SCORE = -2.0
+EXPECTED_EVENT_METRICS = {
+    "event_count": 5,
+    "event_auto_decision_count": 4,
+    "event_abstained_decision_count": 1,
+    "event_auto_coverage": pytest.approx(0.8),
+    "event_abstain_rate": pytest.approx(0.2),
+    "event_tp": 1,
+    "event_fp": 1,
+    "event_tn": 1,
+    "event_fn": 1,
+    "event_precision": pytest.approx(0.5),
+    "event_recall": pytest.approx(0.5),
+    "event_f1": pytest.approx(0.5),
+    "event_accuracy": pytest.approx(0.5),
+    "event_predicted_normal_count": 2,
+    "event_predicted_anomalous_count": 2,
+    "event_true_normal_count": 3,
+    "event_true_anomalous_count": 2,
+}
+EXPECTED_CONFIDENT_EVENT_COUNT = 4
+EXPECTED_ABSTAINED_EVENT_COUNT = 1
+EXPECTED_CONFIDENT_ANOMALY_EVENT_COUNT = 2
+EXPECTED_ABSTAINED_ANOMALOUS_LABEL_COUNT = 0
+EXPECTED_ABSTAINED_NORMAL_LABEL_COUNT = 1
+EXPECTED_SEQUENCE_CONFIDENT_ANOMALY_COUNT = 2
+EXPECTED_SEQUENCE_CONFIDENT_NORMAL_COUNT = 2
+EXPECTED_SEQUENCE_ABSTAINED_COUNT = 1
 ConfigValue = str | int | float | bool | None
 
 
@@ -93,6 +120,220 @@ def _sequence(
             tuple(resolved_event_labels) if resolved_event_labels is not None else None
         ),
     )
+
+
+def _finding(
+    *,
+    event_index: int,
+    raw_score: float,
+) -> deepcase_shared.DeepCaseEventFinding:
+    reason = finding_reason_for_score(raw_score)
+    return deepcase_shared.DeepCaseEventFinding(
+        event_index=event_index,
+        template=f"event-{event_index}",
+        event_id=event_index,
+        raw_score=raw_score,
+        reason=reason,
+        predicted_label=decision_label_for_score(raw_score),
+        is_abstained=reason.is_abstained,
+    )
+
+
+def _deepcase_detector_for_event_decision_tests() -> DeepCaseDetector:
+    """Return a minimal fitted-shape DeepCASE detector for event tests.
+
+    Returns:
+        DeepCaseDetector: Detector with train vocabulary and model handles
+        populated enough for synthetic prediction tests.
+    """
+    train_sequence = _sequence(templates=["A", "B", "C"])
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+    return detector
+
+
+def _assert_event_decision_diagnostics(
+    diagnostics: deepcase_shared.DeepCasePredictionDiagnostics,
+) -> None:
+    """Assert the expected DeepCASE event decision diagnostics for the fixture run.
+
+    Args:
+        diagnostics (deepcase_shared.DeepCasePredictionDiagnostics): Run
+            diagnostics to verify.
+    """
+    assert diagnostics.event_count == EXPECTED_EVENT_METRICS["event_count"]
+    assert (
+        diagnostics.confident_event_count + diagnostics.abstained_event_count
+        == diagnostics.event_count
+    )
+    assert diagnostics.confident_event_count == EXPECTED_CONFIDENT_EVENT_COUNT
+    assert diagnostics.abstained_event_count == EXPECTED_ABSTAINED_EVENT_COUNT
+    assert (
+        diagnostics.confident_anomaly_event_count
+        == EXPECTED_CONFIDENT_ANOMALY_EVENT_COUNT
+    )
+    assert (
+        diagnostics.abstained_anomalous_label_count
+        == EXPECTED_ABSTAINED_ANOMALOUS_LABEL_COUNT
+    )
+    assert (
+        diagnostics.abstained_normal_label_count
+        == EXPECTED_ABSTAINED_NORMAL_LABEL_COUNT
+    )
+    assert (
+        diagnostics.sequence_confident_anomaly_count
+        == EXPECTED_SEQUENCE_CONFIDENT_ANOMALY_COUNT
+    )
+    assert (
+        diagnostics.sequence_confident_normal_count
+        == EXPECTED_SEQUENCE_CONFIDENT_NORMAL_COUNT
+    )
+    assert diagnostics.sequence_abstained_count == EXPECTED_SEQUENCE_ABSTAINED_COUNT
+    assert diagnostics.reason_counts == {
+        "known_benign_cluster": 2,
+        "known_malicious_cluster": 2,
+        "not_confident_enough": 1,
+    }
+    event_decision_metrics = diagnostics.event_decision_metrics
+    assert isinstance(
+        event_decision_metrics,
+        deepcase_shared.DeepCaseEventDecisionMetrics,
+    )
+    for field_name, expected_value in EXPECTED_EVENT_METRICS.items():
+        assert getattr(event_decision_metrics, field_name) == expected_value
+    assert (
+        event_decision_metrics.event_auto_decision_count
+        == event_decision_metrics.event_tp
+        + event_decision_metrics.event_fp
+        + event_decision_metrics.event_tn
+        + event_decision_metrics.event_fn
+    )
+    assert (
+        event_decision_metrics.event_predicted_normal_count
+        + event_decision_metrics.event_predicted_anomalous_count
+        == event_decision_metrics.event_auto_decision_count
+    )
+    assert (
+        event_decision_metrics.event_count
+        == event_decision_metrics.event_auto_decision_count
+        + event_decision_metrics.event_abstained_decision_count
+    )
+
+
+def _build_event_decision_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> deepcase_shared.DeepCasePredictionDiagnostics:
+    """Run a synthetic DeepCASE bulk prediction pass and return diagnostics.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the batch prediction hook
+            with deterministic fixture scores.
+
+    Returns:
+        deepcase_shared.DeepCasePredictionDiagnostics: Diagnostics captured
+        from the synthetic run.
+    """
+    detector = _deepcase_detector_for_event_decision_tests()
+    sequences = [
+        _sequence(
+            templates=["A"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_metadata={"event_labels": [0]},
+        ),
+        _sequence(
+            templates=["A"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_metadata={"event_labels": [1]},
+        ),
+        _sequence(
+            templates=["A"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_metadata={"event_labels": [1]},
+        ),
+        _sequence(
+            templates=["A"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_metadata={"event_labels": [0]},
+        ),
+        _sequence(
+            templates=["A"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_metadata={"event_labels": [0]},
+        ),
+    ]
+    raw_scores = [
+        0.0,
+        0.0,
+        MALICIOUS_SCORE,
+        -1.0,
+        MALICIOUS_SCORE,
+    ]
+    monkeypatch.setattr(detector, "_predict_batch", lambda _batch: raw_scores)
+
+    outcomes = list(detector.predict_all(sequences))
+    assert len(outcomes) == len(sequences)
+
+    metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": len(sequences),
+            "counted_predictions": len(sequences) - 1,
+            "abstained_prediction_count": 1,
+            "ignored_sequence_count": 0,
+        },
+    )
+    diagnostics = metrics.prediction_diagnostics
+    assert diagnostics is not None
+    return diagnostics
+
+
+def _build_single_event_decision_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    raw_score: float,
+    true_label: int,
+) -> deepcase_shared.DeepCasePredictionDiagnostics:
+    """Run a one-event DeepCASE prediction and return diagnostics.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the batch prediction hook.
+        raw_score (float): Synthetic DeepCASE score for the single event.
+        true_label (int): Ground-truth label for the single event.
+
+    Returns:
+        deepcase_shared.DeepCasePredictionDiagnostics: Diagnostics captured
+        from the synthetic run.
+    """
+    detector = _deepcase_detector_for_event_decision_tests()
+    sequence = _sequence(
+        templates=["A"],
+        label=true_label,
+        split_label=SplitLabel.TEST,
+        event_metadata={"event_labels": [true_label]},
+    )
+    monkeypatch.setattr(detector, "_predict_batch", lambda _batch: [raw_score])
+
+    outcomes = list(detector.predict_all((sequence,)))
+    assert len(outcomes) == 1
+
+    metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 1,
+            "counted_predictions": 1,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
+    diagnostics = metrics.prediction_diagnostics
+    assert diagnostics is not None
+    return diagnostics
 
 
 @pytest.mark.allow_no_new_coverage
@@ -535,6 +776,87 @@ def test_deepcase_score_mapping_is_conservative() -> None:
     assert aggregate_sequence_score([0.0, MALICIOUS_SCORE, -1.0]) == MALICIOUS_SCORE
     assert aggregate_sequence_score([0.0, -1.0]) == pytest.approx(0.0)
     assert not aggregate_sequence_score([0.0, 0.0])
+
+
+@pytest.mark.parametrize(
+    ("raw_score", "true_label", "expected_field"),
+    [
+        (0.0, 0, "event_tn"),
+        (0.0, 1, "event_fn"),
+        (MALICIOUS_SCORE, 1, "event_tp"),
+        (MALICIOUS_SCORE, 0, "event_fp"),
+    ],
+)
+def test_deepcase_event_decision_metrics_cover_auto_confusion_cells(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_score: float,
+    true_label: int,
+    expected_field: str,
+) -> None:
+    """DeepCase should map confident event decisions onto the confusion matrix.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the batch prediction hook.
+        raw_score (float): Synthetic DeepCASE score for the single event.
+        true_label (int): Ground-truth label for the single event.
+        expected_field (str): The confusion-matrix field expected to hit one.
+    """
+    diagnostics = _build_single_event_decision_diagnostics(
+        monkeypatch,
+        raw_score=raw_score,
+        true_label=true_label,
+    )
+
+    event_metrics = diagnostics.event_decision_metrics
+    assert getattr(event_metrics, expected_field) == 1
+    assert event_metrics.event_auto_decision_count == 1
+    assert event_metrics.event_abstained_decision_count == 0
+    assert event_metrics.event_count == 1
+    assert event_metrics.event_auto_coverage == pytest.approx(1.0)
+    assert event_metrics.event_abstain_rate == pytest.approx(0.0)
+
+
+def test_deepcase_event_decision_metrics_count_abstentions_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase should count abstained events outside the confusion matrix.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the batch prediction hook.
+    """
+    diagnostics = _build_single_event_decision_diagnostics(
+        monkeypatch,
+        raw_score=-1.0,
+        true_label=1,
+    )
+
+    event_metrics = diagnostics.event_decision_metrics
+    assert event_metrics.event_count == 1
+    assert event_metrics.event_auto_decision_count == 0
+    assert event_metrics.event_abstained_decision_count == 1
+    assert event_metrics.event_tp == 0
+    assert event_metrics.event_fp == 0
+    assert event_metrics.event_tn == 0
+    assert event_metrics.event_fn == 0
+    assert event_metrics.event_auto_coverage == pytest.approx(0.0)
+    assert event_metrics.event_abstain_rate == pytest.approx(1.0)
+    assert event_metrics.event_precision == pytest.approx(0.0)
+    assert event_metrics.event_recall == pytest.approx(0.0)
+    assert event_metrics.event_f1 == pytest.approx(0.0)
+    assert event_metrics.event_accuracy == pytest.approx(0.0)
+
+
+def test_deepcase_prediction_diagnostics_track_event_decision_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase diagnostics should expose the event-level decision metrics block.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces batch prediction with
+            deterministic fixture scores.
+    """
+    diagnostics = _build_event_decision_diagnostics(monkeypatch)
+    _assert_event_decision_diagnostics(diagnostics)
 
 
 def test_deepcase_predict_aggregates_event_findings(

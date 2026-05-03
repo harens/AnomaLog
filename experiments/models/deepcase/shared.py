@@ -77,6 +77,50 @@ class DeepCaseSequenceDecision(str, Enum):
     CONFIDENT_ANOMALY = "confident_anomaly"
 
 
+class DeepCaseEventDecisionMetrics(msgspec.Struct, frozen=True):
+    """Automatic event-level DeepCASE decision metrics.
+
+    Attributes:
+        event_count (int): Total number of scored events.
+        event_auto_decision_count (int): Number of events that were scored
+            automatically rather than deferred for manual review.
+        event_abstained_decision_count (int): Number of events deferred for
+            manual review.
+        event_auto_coverage (float): Fraction of events decided automatically.
+        event_abstain_rate (float): Fraction of events deferred for review.
+        event_tp (int): Automatic anomalous decisions on anomalous events.
+        event_fp (int): Automatic anomalous decisions on normal events.
+        event_tn (int): Automatic normal decisions on normal events.
+        event_fn (int): Automatic normal decisions on anomalous events.
+        event_precision (float): Precision over automatic anomalous decisions.
+        event_recall (float): Recall over automatic anomalous decisions.
+        event_f1 (float): F1 score over automatic anomalous decisions.
+        event_accuracy (float): Accuracy over automatic decisions only.
+        event_predicted_normal_count (int): Automatic normal decisions.
+        event_predicted_anomalous_count (int): Automatic anomalous decisions.
+        event_true_normal_count (int): Normal ground-truth events.
+        event_true_anomalous_count (int): Anomalous ground-truth events.
+    """
+
+    event_count: int
+    event_auto_decision_count: int
+    event_abstained_decision_count: int
+    event_auto_coverage: float
+    event_abstain_rate: float
+    event_tp: int
+    event_fp: int
+    event_tn: int
+    event_fn: int
+    event_precision: float
+    event_recall: float
+    event_f1: float
+    event_accuracy: float
+    event_predicted_normal_count: int
+    event_predicted_anomalous_count: int
+    event_true_normal_count: int
+    event_true_anomalous_count: int
+
+
 # Sentinel scores emitted by the DeepCase library for non-cluster outcomes.
 SPECIAL_SCORE_REASONS: dict[float, ScoreReason] = {
     -1.0: ScoreReason.NOT_CONFIDENT_ENOUGH,
@@ -250,6 +294,8 @@ class DeepCasePredictionDiagnostics(msgspec.Struct, frozen=True):
             final decision was confident normal.
         sequence_abstained_count (int): Number of sequences whose final
             decision was abstained.
+        event_decision_metrics (DeepCaseEventDecisionMetrics): Automatic
+            event-level decision metrics for the latest scoring run.
         reason_counts (dict[str, int]): Histogram of event finding reasons.
     """
 
@@ -262,6 +308,7 @@ class DeepCasePredictionDiagnostics(msgspec.Struct, frozen=True):
     sequence_confident_anomaly_count: int
     sequence_confident_normal_count: int
     sequence_abstained_count: int
+    event_decision_metrics: DeepCaseEventDecisionMetrics
     reason_counts: dict[str, int]
 
 
@@ -276,8 +323,99 @@ class _DeepCasePredictionSummary:
 
 
 @dataclass(slots=True)
+class _DeepCaseEventDecisionMetricsState:
+    event_count: int = 0
+    event_auto_decision_count: int = 0
+    event_abstained_decision_count: int = 0
+    event_tp: int = 0
+    event_fp: int = 0
+    event_tn: int = 0
+    event_fn: int = 0
+    event_predicted_normal_count: int = 0
+    event_predicted_anomalous_count: int = 0
+    event_true_normal_count: int = 0
+    event_true_anomalous_count: int = 0
+
+    def record(
+        self,
+        *,
+        findings: Sequence[DeepCaseEventFinding],
+        true_labels: Sequence[int | float],
+    ) -> None:
+        for finding, true_label in zip(findings, true_labels, strict=True):
+            self.event_count += 1
+            true_is_anomalous = is_anomalous_label(int(true_label))
+            if true_is_anomalous:
+                self.event_true_anomalous_count += 1
+            else:
+                self.event_true_normal_count += 1
+            if finding.is_abstained:
+                self.event_abstained_decision_count += 1
+                continue
+            self.event_auto_decision_count += 1
+            if finding.predicted_label == 1:
+                self.event_predicted_anomalous_count += 1
+                if true_is_anomalous:
+                    self.event_tp += 1
+                else:
+                    self.event_fp += 1
+            else:
+                self.event_predicted_normal_count += 1
+                if true_is_anomalous:
+                    self.event_fn += 1
+                else:
+                    self.event_tn += 1
+
+    def snapshot(self) -> DeepCaseEventDecisionMetrics:
+        precision_denominator = self.event_tp + self.event_fp
+        recall_denominator = self.event_tp + self.event_fn
+        precision = (
+            self.event_tp / precision_denominator if precision_denominator else 0.0
+        )
+        recall = self.event_tp / recall_denominator if recall_denominator else 0.0
+        f1 = (
+            2.0 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
+        accuracy = (
+            (self.event_tp + self.event_tn) / self.event_auto_decision_count
+            if self.event_auto_decision_count
+            else 0.0
+        )
+        return DeepCaseEventDecisionMetrics(
+            event_count=self.event_count,
+            event_auto_decision_count=self.event_auto_decision_count,
+            event_abstained_decision_count=self.event_abstained_decision_count,
+            event_auto_coverage=(
+                self.event_auto_decision_count / self.event_count
+                if self.event_count
+                else 0.0
+            ),
+            event_abstain_rate=(
+                self.event_abstained_decision_count / self.event_count
+                if self.event_count
+                else 0.0
+            ),
+            event_tp=self.event_tp,
+            event_fp=self.event_fp,
+            event_tn=self.event_tn,
+            event_fn=self.event_fn,
+            event_precision=precision,
+            event_recall=recall,
+            event_f1=f1,
+            event_accuracy=accuracy,
+            event_predicted_normal_count=self.event_predicted_normal_count,
+            event_predicted_anomalous_count=self.event_predicted_anomalous_count,
+            event_true_normal_count=self.event_true_normal_count,
+            event_true_anomalous_count=self.event_true_anomalous_count,
+        )
+
+
+@dataclass(slots=True)
 class _DeepCasePredictionDiagnosticsState:
     event_count: int = 0
+    sequence_count: int = 0
     confident_event_count: int = 0
     abstained_event_count: int = 0
     abstained_anomalous_label_count: int = 0
@@ -288,17 +426,23 @@ class _DeepCasePredictionDiagnosticsState:
     sequence_abstained_count: int = 0
     parent_sequence_fallback_count: int = 0
     reason_counts: Counter[str] = field(default_factory=Counter)
+    event_decision_metrics: _DeepCaseEventDecisionMetricsState = field(
+        default_factory=_DeepCaseEventDecisionMetricsState,
+    )
 
     def record(
         self,
         *,
         summary: _DeepCasePredictionSummary,
         findings: Sequence[DeepCaseEventFinding],
+        event_labels: Sequence[int | float],
         sequence_label: int,
     ) -> None:
         self.event_count += len(findings)
+        self.sequence_count += 1
         self.confident_event_count += summary.confident_event_count
         self.abstained_event_count += summary.abstained_event_count
+        self.event_decision_metrics.record(findings=findings, true_labels=event_labels)
         if summary.sequence_decision is DeepCaseSequenceDecision.ABSTAINED:
             if is_anomalous_label(sequence_label):
                 self.abstained_anomalous_label_count += 1
@@ -313,8 +457,18 @@ class _DeepCasePredictionDiagnosticsState:
             self.sequence_abstained_count += 1
         self.reason_counts.update(finding.reason.value for finding in findings)
 
+    def record_empty_sequence(self, *, sequence_label: int) -> None:
+        """Record a scored sequence with no event-centred samples.
+
+        Args:
+            sequence_label (int): Ground-truth label for the empty sequence.
+        """
+        del sequence_label
+        self.sequence_count += 1
+
     def reset(self) -> None:
         self.event_count = 0
+        self.sequence_count = 0
         self.confident_event_count = 0
         self.abstained_event_count = 0
         self.abstained_anomalous_label_count = 0
@@ -325,6 +479,7 @@ class _DeepCasePredictionDiagnosticsState:
         self.sequence_abstained_count = 0
         self.parent_sequence_fallback_count = 0
         self.reason_counts = Counter()
+        self.event_decision_metrics = _DeepCaseEventDecisionMetricsState()
 
     def record_parent_sequence_fallback_count(self, count: int) -> None:
         """Record how many samples in the latest run used parent labels.
@@ -336,7 +491,7 @@ class _DeepCasePredictionDiagnosticsState:
         self.parent_sequence_fallback_count += count
 
     def snapshot(self) -> DeepCasePredictionDiagnostics | None:
-        if self.event_count == 0:
+        if self.event_count == 0 and self.sequence_count == 0:
             return None
         return DeepCasePredictionDiagnostics(
             event_count=self.event_count,
@@ -348,6 +503,7 @@ class _DeepCasePredictionDiagnosticsState:
             sequence_confident_anomaly_count=self.sequence_confident_anomaly_count,
             sequence_confident_normal_count=self.sequence_confident_normal_count,
             sequence_abstained_count=self.sequence_abstained_count,
+            event_decision_metrics=self.event_decision_metrics.snapshot(),
             reason_counts=dict(self.reason_counts),
         )
 
