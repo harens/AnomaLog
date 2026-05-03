@@ -38,7 +38,7 @@ extensions:
   counts.
 - Detector-owned next-event diagnostics derived from the key model's ranked
   predictions. These diagnostics are separate from anomaly scoring and are
-  exposed in run metrics for the latest scoring run.
+  exposed in run metrics for the full test scoring pass.
 
 ## Remaining Gaps Vs The Paper
 

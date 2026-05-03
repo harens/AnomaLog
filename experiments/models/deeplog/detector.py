@@ -323,7 +323,6 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             msg = "deeplog must be fit before prediction."
             raise ValueError(msg)
         require_entity_local_sequences((sequence,), detector_name="DeepLog")
-        self._reset_next_event_prediction_state()
 
         findings: list[DeepLogEventFinding] = []
         key_triggered = False
@@ -487,6 +486,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         """
         del run_metrics
         next_event_prediction = self._next_event_prediction_state_snapshot()
+        self._reset_next_event_prediction_state()
         return DeepLogRunMetrics(next_event_prediction=next_event_prediction)
 
     def _record_next_event_predictions(

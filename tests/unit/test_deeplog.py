@@ -615,6 +615,108 @@ def test_predict_flags_key_model_anomalies() -> None:
     assert metrics.next_event_prediction is not None
 
 
+def test_predict_excludes_unknown_targets_under_train_only_policy() -> None:
+    """Train-only next-event diagnostics should exclude unseen target templates."""
+    expected_events_seen = 3
+    expected_insufficient_history = 2
+    expected_unknown_target = 1
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            vocabulary_policy="train_only",
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    detector.predict(_sequence(templates=["A", "B", "UNSEEN"]))
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    next_event_prediction = metrics.next_event_prediction
+
+    assert next_event_prediction is not None
+    assert next_event_prediction.totals.events_seen == expected_events_seen
+    assert next_event_prediction.totals.events_eligible == 0
+    assert (
+        next_event_prediction.exclusions.insufficient_history
+        == expected_insufficient_history
+    )
+    assert next_event_prediction.exclusions.unknown_target == expected_unknown_target
+    assert next_event_prediction.exclusions.unknown_history == 0
+    assert next_event_prediction.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
+
+
+def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> None:
+    """Run-level DeepLog diagnostics should aggregate all scored test sequences."""
+    expected_events_seen = 8
+    expected_events_eligible = 4
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=5,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[0.1, 0.2, 9.0, 8.0, 7.0, -1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+        "E": 4,
+        "F": 5,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    first_sequence = _sequence(templates=["A", "B", "C", "D"])
+    second_sequence = _sequence(templates=["B", "C", "D", "F"])
+
+    detector.predict(first_sequence)
+    detector.predict(second_sequence)
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 2})
+    next_event_prediction = metrics.next_event_prediction
+
+    assert next_event_prediction is not None
+    totals = next_event_prediction.totals
+    assert totals.events_seen == expected_events_seen
+    assert totals.events_eligible == expected_events_eligible
+    assert totals.coverage == pytest.approx(
+        expected_events_eligible / expected_events_seen,
+    )
+    assert next_event_prediction.top_k.hit_count == {
+        "1": 1,
+        "2": 3,
+        "3": 3,
+        "5": 3,
+    }
+    assert next_event_prediction.top_k.accuracy == {
+        "1": pytest.approx(1 / 4),
+        "2": pytest.approx(3 / 4),
+        "3": pytest.approx(3 / 4),
+        "5": pytest.approx(3 / 4),
+    }
+
+
 def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() -> None:
     """Next-event diagnostics should aggregate macro, weighted, and top-k metrics."""
     state = NextEventPredictionState(
@@ -656,6 +758,36 @@ def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() 
     assert snapshot.exclusions.unknown_target == 0
     assert snapshot.exclusions.unknown_history == 0
     assert snapshot.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
+
+
+def test_next_event_prediction_state_top_k_is_monotonic() -> None:
+    """Top-k hit counts should never decrease as k grows."""
+    state = NextEventPredictionState(
+        k_values=(1, 2, 5),
+        vocabulary_policy=VocabularyPolicy.TRAIN_ONLY,
+    )
+    state.record_prediction(
+        actual_label="A",
+        predicted_labels=["A", "B", "C", "D", "E"],
+    )
+    state.record_prediction(
+        actual_label="B",
+        predicted_labels=["C", "B", "D", "E", "F"],
+    )
+    state.record_prediction(
+        actual_label="C",
+        predicted_labels=["D", "E", "C", "F", "G"],
+    )
+
+    snapshot = state.snapshot()
+
+    assert snapshot is not None
+    assert snapshot.top_k.hit_count == {"1": 1, "2": 2, "5": 3}
+    assert snapshot.top_k.accuracy == {
+        "1": pytest.approx(1 / 3),
+        "2": pytest.approx(2 / 3),
+        "5": pytest.approx(1.0),
+    }
 
 
 def test_next_event_prediction_state_supports_k_beyond_candidate_count() -> None:

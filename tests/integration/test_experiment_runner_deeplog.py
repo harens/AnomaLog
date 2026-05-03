@@ -128,12 +128,18 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     totals = _object_dict(next_event_prediction["totals"])
     top_k = _object_dict(next_event_prediction["top_k"])
     exclusions = _object_dict(next_event_prediction["exclusions"])
-    assert _int_value(totals, "events_seen") > 0
-    assert _int_value(totals, "events_eligible") >= 0
-    assert 0.0 <= _float_value(totals, "coverage") <= 1.0
+    hit_count = _object_dict(top_k["hit_count"])
+    accuracy = _object_dict(top_k["accuracy"])
+    assert _int_value(totals, "events_seen") >= _int_value(
+        metrics, "test_sequence_count",
+    )
+    assert _int_value(totals, "events_eligible") > 0
+    assert 0.0 < _float_value(totals, "coverage") <= 1.0
     assert 1 in _list_value(top_k, "k_values")
-    assert "1" in _object_dict(top_k["hit_count"])
-    assert "1" in _object_dict(top_k["accuracy"])
+    assert "1" in hit_count
+    assert "1" in accuracy
+    assert any(_int_value(hit_count, key) > 0 for key in hit_count)
+    assert any(_float_value(accuracy, key) > 0.0 for key in accuracy)
     assert _int_value(exclusions, "insufficient_history") >= 0
     assert _int_value(exclusions, "unknown_history") >= 0
     assert _int_value(exclusions, "unknown_target") >= 0
