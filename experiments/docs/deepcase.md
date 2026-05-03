@@ -63,6 +63,8 @@ auto-decisions only. Abstained sequences are reported separately as
 manual-review workload and coverage signals:
 
 - `auto_decision_count`: number of confident auto-decisions
+- `counted_predictions`: number of automatic predictions that entered the
+  shared confusion matrix
 - `abstained_prediction_count`: number of deferred sequences
 - `auto_coverage`: fraction of test sequences decided automatically
 - `abstain_rate`: fraction of test sequences deferred for review

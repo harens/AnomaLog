@@ -91,6 +91,7 @@ def _assert_deepcase_metrics(
     assert "abstain_rate" in metrics
     assert "abstained_anomalous_label_count" in metrics
     assert "abstained_normal_label_count" in metrics
+    assert "counted_predictions" in metrics
     assert "next_event_prediction" in metrics
     assert metrics["sequence_count"] == (
         metrics["train_sequence_count"]
@@ -100,9 +101,16 @@ def _assert_deepcase_metrics(
     assert metrics["test_sequence_count"] == (
         metrics["auto_decision_count"] + metrics["abstained_prediction_count"]
     )
+    assert metrics["counted_predictions"] == (
+        metrics["tp"] + metrics["tn"] + metrics["fp"] + metrics["fn"]
+    )
+    assert metrics["auto_decision_count"] == metrics["counted_predictions"]
     assert metrics["abstained_prediction_count"] == (
         metrics["abstained_anomalous_label_count"]
         + metrics["abstained_normal_label_count"]
+    )
+    assert metrics["test_sequence_count"] == (
+        metrics["counted_predictions"] + metrics["abstained_prediction_count"]
     )
     assert 0.0 <= metrics["auto_coverage"] <= 1.0
     assert 0.0 <= metrics["abstain_rate"] <= 1.0

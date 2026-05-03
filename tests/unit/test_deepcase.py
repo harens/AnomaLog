@@ -447,7 +447,7 @@ def test_deepcase_predict_marks_all_abstained_sequence(
     outcome = detector.predict(test_sequence)
 
     expected_abstained_event_count = len(test_sequence.events)
-    assert outcome.is_abstained()
+    assert outcome.is_abstained
     assert outcome.sequence_decision is DeepCaseSequenceDecision.ABSTAINED
     assert outcome.predicted_label == 0
     assert outcome.confident_event_count == 0
@@ -507,7 +507,14 @@ def test_deepcase_run_metrics_reports_next_event_prediction_diagnostics(
     monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
 
     detector.predict(test_sequence)
-    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 1,
+            "counted_predictions": 1,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
     next_event_prediction = metrics.next_event_prediction
     expected_events_seen = len(test_sequence.events)
     expected_eligible_events = 3
@@ -713,9 +720,23 @@ def test_deepcase_next_event_predictions_reset_between_bulk_runs(
     )
 
     list(detector.predict_all((first_sequence,)))
-    first_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    first_metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 1,
+            "counted_predictions": 1,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
     list(detector.predict_all((second_sequence,)))
-    second_metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    second_metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 1,
+            "counted_predictions": 1,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
 
     assert first_metrics.next_event_prediction is not None
     assert first_metrics.next_event_prediction.totals.events_seen == len(

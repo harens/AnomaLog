@@ -66,6 +66,8 @@ class RunMetrics:
         tn (int): True negatives on the test split.
         fp (int): False positives on the test split.
         fn (int): False negatives on the test split.
+        abstained_prediction_count (int): Number of test sequences deferred
+            for manual review.
         test_score_sum (float): Running sum of test-split anomaly scores.
         train_label_counts (dict[int, int]): Train label histogram.
         test_label_counts (dict[int, int]): Test label histogram.
@@ -81,6 +83,7 @@ class RunMetrics:
     tn: int = 0
     fp: int = 0
     fn: int = 0
+    abstained_prediction_count: int = 0
     test_score_sum: float = 0.0
     train_label_counts: dict[int, int] = field(default_factory=dict)
     test_label_counts: dict[int, int] = field(default_factory=dict)
@@ -138,6 +141,7 @@ class RunMetrics:
         )
         self.test_score_sum += prediction.score
         if abstained:
+            self.abstained_prediction_count += 1
             # Abstained predictions still count towards test coverage and mean
             # score, but they must not affect the automatic confusion matrix.
             return
@@ -180,6 +184,8 @@ class RunMetrics:
             "tn": self.tn,
             "fp": self.fp,
             "fn": self.fn,
+            "counted_predictions": decision_count,
+            "abstained_prediction_count": self.abstained_prediction_count,
             "accuracy": round(accuracy, 8),
             "precision": round(precision, 8),
             "recall": round(recall, 8),

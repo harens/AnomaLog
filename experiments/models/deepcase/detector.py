@@ -85,6 +85,7 @@ class DeepCasePredictionOutcome(
     abstained_event_count: int
     confident_anomaly_event_count: int
 
+    @property
     @override
     def is_abstained(self) -> bool:
         """Return whether the sequence decision deferred to manual review.
