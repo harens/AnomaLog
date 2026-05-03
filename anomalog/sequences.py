@@ -165,6 +165,9 @@ class TemplateSequence:
             first-seen order.
         window_id (int): Stable window identifier assigned by the builder.
         split_label (SplitLabel): Dataset split assigned to the sequence.
+        event_labels (tuple[int | None, ...] | None): Optional per-event anomaly
+            labels aligned positionally with `events`. When present, each entry
+            may be `None` if that event has no direct label.
     """
 
     events: list[
@@ -174,6 +177,23 @@ class TemplateSequence:
     entity_ids: list[str]  # unique entity ids present (may be empty)
     window_id: int
     split_label: SplitLabel = SplitLabel.TRAIN
+    event_labels: tuple[int | None, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """Validate that any event labels stay aligned with the events.
+
+        Raises:
+            ValueError: If `event_labels` is provided with a different length
+                from `events`.
+        """
+        if self.event_labels is None:
+            return
+        if len(self.event_labels) != len(self.events):
+            msg = (
+                "TemplateSequence.event_labels must match the number of events "
+                "when provided."
+            )
+            raise ValueError(msg)
 
     @property
     def templates(self) -> list[str]:
@@ -461,6 +481,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         prev_ts: int | None = None
 
         unique_ids = self._entity_ids_for_rows(rows)
+        event_labels = tuple(r.anomalous for r in rows)
 
         for r in rows:
             template, params = infer_template(r.untemplated_message_text)
@@ -486,6 +507,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             entity_ids=unique_ids,
             window_id=window_id,
             split_label=split_label,
+            event_labels=(
+                event_labels
+                if any(label is not None for label in event_labels)
+                else None
+            ),
         )
 
     def _entity_ids_for_rows(self, rows: Collection[StructuredLine]) -> list[str]:

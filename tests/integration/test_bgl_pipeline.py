@@ -192,6 +192,10 @@ def _assert_entity_sequences_are_reproducible(
         ]
         for entity_id in normal_entities | {ANOMALOUS_ENTITY}
     }
+    expected_event_labels_by_entity = {
+        entity_id: tuple(row.anomalous for row in rows if row.entity_id == entity_id)
+        for entity_id in normal_entities | {ANOMALOUS_ENTITY}
+    }
 
     assert [sequence.sole_entity_id for sequence in second_pass] == [
         sequence.sole_entity_id for sequence in first_pass
@@ -202,6 +206,10 @@ def _assert_entity_sequences_are_reproducible(
     anomalous_sequence = first_by_entity[ANOMALOUS_ENTITY]
     assert anomalous_sequence.split_label is SplitLabel.TEST
     assert anomalous_sequence.label == 1
+    assert (
+        anomalous_sequence.event_labels
+        == expected_event_labels_by_entity[ANOMALOUS_ENTITY]
+    )
     assert (
         anomalous_sequence.templates == expected_templates_by_entity[ANOMALOUS_ENTITY]
     )
@@ -216,6 +224,10 @@ def _assert_entity_sequences_are_reproducible(
 
     for entity_id in normal_entities:
         assert first_by_entity[entity_id].label == 0
+        assert (
+            first_by_entity[entity_id].event_labels
+            == expected_event_labels_by_entity[entity_id]
+        )
 
     assert (
         first_by_entity[NORMAL_ENTITY_A].templates

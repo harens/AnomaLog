@@ -490,6 +490,52 @@ def test_entity_sequences_use_chronological_prefix_and_suffix_without_filtering(
         SplitLabel.TEST,
         SplitLabel.TEST,
     ]
+    assert [sequence.event_labels for sequence in sequences] == [
+        (1,),
+        (0,),
+        (0,),
+        (1,),
+        (0,),
+        (0,),
+        (0,),
+        (0,),
+        (0,),
+        (0,),
+    ]
+
+
+def test_entity_sequences_without_inline_labels_keep_parent_label_only() -> None:
+    """Entity grouping should fall back to the parent label when needed."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="blk-a",
+            untemplated_message_text="first",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="blk-a",
+            untemplated_message_text="second",
+            anomalous=None,
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda entity_id: 1 if entity_id == "blk-a" else 0,
+            train_frac=1.0,
+            test_frac=0.0,
+        ),
+    )
+
+    assert len(sequences) == 1
+    assert sequences[0].label == 1
+    assert sequences[0].event_labels is None
 
 
 @pytest.mark.allow_no_new_coverage
@@ -614,6 +660,8 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
         SplitLabel.TRAIN,
         SplitLabel.TEST,
     ]
+    assert train_window.event_labels == (0, 0)
+    assert test_window.event_labels == (1,)
     assert train_window.entity_ids == ["a"]
     assert train_window.events == [("ONE", ["one"], None), ("TWO", ["two"], 30)]
     assert train_window.label == 0
@@ -745,6 +793,22 @@ def test_template_sequence_exposes_single_entity_only_when_unambiguous() -> None
 
     assert single_entity_sequence.sole_entity_id == "node-a"
     assert multi_entity_sequence.sole_entity_id is None
+
+
+def test_template_sequence_validates_event_label_length() -> None:
+    """TemplateSequence should reject per-event labels with mismatched length."""
+    with pytest.raises(
+        ValueError,
+        match="event_labels must match the number of events",
+    ):
+        TemplateSequence(
+            events=[("ONE", ["one"], None), ("TWO", ["two"], None)],
+            label=0,
+            entity_ids=["node-a"],
+            window_id=9,
+            split_label=SplitLabel.TEST,
+            event_labels=(0,),
+        )
 
 
 def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
@@ -1013,6 +1077,7 @@ def test_time_sequence_builder_uses_public_windowing_and_preserves_null_deltas()
         ("TWO", ["two"], None),
         ("THREE", ["three"], 150),
     ]
+    assert sequences[0].event_labels == (0, 0, 1)
     assert sequences[0].entity_ids == ["a", "b"]
     assert sequences[0].label == 1
 
