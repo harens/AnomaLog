@@ -690,6 +690,45 @@ def test_predict_flags_key_model_anomalies() -> None:
     assert metrics.next_event_prediction is not None
 
 
+def test_predict_accepts_mixed_entity_chronological_streams() -> None:
+    """DeepLog prediction should not require entity-local sequences."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            parameter_detection_enabled=False,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    key_context = _key_context(model=detector.key_model, top_g=1)
+    detector.template_to_index = key_context.template_to_index
+    detector.index_to_template = key_context.index_to_template
+
+    outcome = detector.predict(
+        TemplateSequence(
+            events=[
+                ("A", [], None),
+                ("B", [], None),
+                ("D", [], None),
+            ],
+            label=0,
+            entity_ids=["entity-1", "entity-2"],
+            window_id=0,
+            split_label=SplitLabel.TEST,
+        ),
+    )
+
+    assert outcome.predicted_label == 1
+    assert outcome.triggered_by_key_model is True
+    assert outcome.triggered_by_parameter_model is False
+
+
 def test_predict_ignores_parameter_models_when_key_only_reproduction_is_disabled() -> (
     None
 ):
@@ -1483,27 +1522,31 @@ def test_build_normal_training_corpus_keeps_eligible_targets_from_mixed_chunks()
     assert corpus.sequences == (sequence,)
 
 
-def test_build_normal_training_corpus_rejects_multi_entity_sequences() -> None:
-    """DeepLog should fail fast when a training sequence spans multiple entities."""
+def test_build_normal_training_corpus_keeps_multi_entity_sequences() -> None:
+    """DeepLog should accept mixed-entity chronological streams."""
     progress = Progress(disable=True)
 
-    with pytest.raises(ValueError, match="entity-local sequences"), progress:
-        build_normal_training_corpus(
-            [
-                TemplateSequence(
-                    events=[
-                        ("A", [], None),
-                        ("B", [], None),
-                        ("C", [], None),
-                    ],
-                    label=0,
-                    entity_ids=["entity-1", "entity-2"],
-                    window_id=0,
-                    split_label=SplitLabel.TRAIN,
-                ),
-            ],
-            progress=progress,
-        )
+    corpus = build_normal_training_corpus(
+        [
+            TemplateSequence(
+                events=[
+                    ("A", [], None),
+                    ("B", [], None),
+                    ("C", [], None),
+                ],
+                label=0,
+                entity_ids=["entity-1", "entity-2"],
+                window_id=0,
+                split_label=SplitLabel.TRAIN,
+                training_event_mask=(True, True, False),
+            ),
+        ],
+        progress=progress,
+    )
+
+    assert corpus.event_count == 2
+    assert corpus.templates == ("A", "B", "C")
+    assert corpus.sequences[0].entity_ids == ["entity-1", "entity-2"]
 
 
 def test_fit_rejects_repeated_training() -> None:

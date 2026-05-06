@@ -25,7 +25,7 @@ from torch import nn
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from anomalog.sequences import SplitLabel
-from experiments.models.base import ModelManifest, require_entity_local_sequences
+from experiments.models.base import ModelManifest
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -535,7 +535,6 @@ def build_normal_training_corpus(
     event_count = 0
     try:
         for sequence in train_sequences:
-            require_entity_local_sequences((sequence,), detector_name="DeepLog")
             eligible_indexes = training_event_index_mask(sequence)
             if not eligible_indexes:
                 progress.advance(prepare_task)

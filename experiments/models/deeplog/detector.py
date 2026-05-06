@@ -19,7 +19,6 @@ from experiments.models.base import (
     PredictionOutcome,
     SequenceSummary,
     SingleFitMixin,
-    require_entity_local_sequences,
 )
 from experiments.models.deeplog.key import (
     KeyScoringContext,
@@ -444,7 +443,6 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         if self.key_model is None:
             msg = "deeplog must be fit before prediction."
             raise ValueError(msg)
-        require_entity_local_sequences((sequence,), detector_name="DeepLog")
 
         findings: list[DeepLogEventFinding] = []
         key_triggered = False
