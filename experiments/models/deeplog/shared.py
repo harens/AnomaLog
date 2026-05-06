@@ -24,6 +24,7 @@ import torch
 from torch import nn
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.sequences import SplitLabel
 from experiments.models.base import ModelManifest, require_entity_local_sequences
 
 if TYPE_CHECKING:
@@ -331,6 +332,88 @@ class NormalTrainingCorpus:
     event_count: int
 
 
+def training_event_mask_for_sequence(sequence: TemplateSequence) -> tuple[bool, ...]:
+    """Return the DeepLog training-target eligibility mask for one sequence.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose training-target eligibility
+            mask should be derived.
+
+    Returns:
+        tuple[bool, ...]: Per-event eligibility mask.
+
+    When a sequence carries an explicit `training_event_mask`, that mask is the
+    source of truth. Otherwise the legacy whole-sequence policy is preserved:
+    only normal sequences contribute training targets.
+    """
+    explicit_mask = sequence.training_event_mask
+    if explicit_mask is not None:
+        return explicit_mask
+    if is_anomalous_label(sequence.label):
+        return tuple(False for _ in sequence.events)
+    return tuple(True for _ in sequence.events)
+
+
+def evaluation_event_mask_for_sequence(sequence: TemplateSequence) -> tuple[bool, ...]:
+    """Return the DeepLog evaluation-target mask for one sequence.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose scoring-target eligibility
+            mask should be derived.
+
+    Returns:
+        tuple[bool, ...]: Per-event scoring eligibility mask.
+
+    When a sequence carries an explicit `evaluation_event_mask`, that mask is
+    the source of truth. Otherwise the legacy split-label policy is preserved:
+    only test sequences contribute evaluation targets.
+    """
+    explicit_mask = sequence.evaluation_event_mask
+    if explicit_mask is not None:
+        return explicit_mask
+    if sequence.split_label is not SplitLabel.TEST:
+        return tuple(False for _ in sequence.events)
+    return tuple(True for _ in sequence.events)
+
+
+def training_event_index_mask(sequence: TemplateSequence) -> list[int]:
+    """Return the eligible DeepLog training target indexes for one sequence.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose eligible target indexes
+            should be derived.
+
+    Returns:
+        list[int]: Zero-based indexes of eligible training targets.
+    """
+    return [
+        event_index
+        for event_index, is_eligible in enumerate(
+            training_event_mask_for_sequence(sequence),
+        )
+        if is_eligible
+    ]
+
+
+def evaluation_event_index_mask(sequence: TemplateSequence) -> list[int]:
+    """Return the eligible DeepLog evaluation target indexes for one sequence.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose eligible target indexes
+            should be derived.
+
+    Returns:
+        list[int]: Zero-based indexes of eligible evaluation targets.
+    """
+    return [
+        event_index
+        for event_index, is_eligible in enumerate(
+            evaluation_event_mask_for_sequence(sequence),
+        )
+        if is_eligible
+    ]
+
+
 class KeyLSTM(nn.Module):
     """Stacked-LSTM next-log-key predictor.
 
@@ -422,21 +505,23 @@ def build_normal_training_corpus(
     *,
     progress: Progress,
 ) -> NormalTrainingCorpus:
-    """Collect replayable normal-only training state for offline DeepLog.
+    """Collect replayable normal-target training state for offline DeepLog.
 
     Args:
         train_sequences (Iterable[TemplateSequence]): Train-split sequences.
         progress (Progress): Progress reporter.
 
     Returns:
-        NormalTrainingCorpus: Cached normal training state for replay.
+        NormalTrainingCorpus: Cached training state for replay.
 
     Raises:
         ValueError: If no normal sequences are available for training.
     """
-    # The paper trains DeepLog from normal execution only. We materialise the
-    # filtered corpus once so both the key model and the per-template parameter
-    # models can replay exactly the same normal-only training data.
+    # The paper trains DeepLog from normal execution only. For raw-entry
+    # chronological streams we preserve mixed chunks as context but filter
+    # training targets at the event level, so we materialise the replayable
+    # corpus once and let the model-specific builders consume the eligibility
+    # mask for each event.
     total = len(train_sequences) if isinstance(train_sequences, Sized) else None
     prepare_task = progress.add_task(
         "Preparing DeepLog training corpus",
@@ -448,17 +533,18 @@ def build_normal_training_corpus(
     try:
         for sequence in train_sequences:
             require_entity_local_sequences((sequence,), detector_name="DeepLog")
-            if is_anomalous_label(sequence.label):
+            eligible_indexes = training_event_index_mask(sequence)
+            if not eligible_indexes:
                 progress.advance(prepare_task)
                 continue
             normal_sequences.append(sequence)
-            event_count += len(sequence.events)
+            event_count += len(eligible_indexes)
             template_set.update(sequence.templates)
             progress.advance(prepare_task)
     finally:
         progress.remove_task(prepare_task)
     if not normal_sequences:
-        msg = "DeepLog requires at least one normal training sequence."
+        msg = "DeepLog requires at least one eligible training target."
         raise ValueError(msg)
     return NormalTrainingCorpus(
         sequences=tuple(normal_sequences),

@@ -1,0 +1,8 @@
+name = "bgl_deepcase_event_level_extension"
+dataset = "bgl_entity_chronological"
+model = "deepcase_paper"
+description = "BGL DeepCASE event-level extension sweep, not a paper reproduction target."
+
+# [[axes]]
+# path = "model.random_seed"
+# values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

@@ -11,11 +11,15 @@ from anomalog.parsers.template.dataset import (
     UntemplatedText,
 )
 from anomalog.sequences import (
+    ChronologicalStreamSequenceBuilder,
     EntitySequenceBuilder,
     FixedSequenceBuilder,
+    RawEntrySplitMode,
     SequenceSplitCounts,
     SequenceSplitSummary,
+    SplitApplicationOrder,
     SplitLabel,
+    StraddlingGroupPolicy,
     TemplateSequence,
     TimeSequenceBuilder,
 )
@@ -536,6 +540,574 @@ def test_entity_sequences_without_inline_labels_keep_parent_label_only() -> None
     assert len(sequences) == 1
     assert sequences[0].label == 1
     assert sequences[0].event_labels is None
+
+
+@pytest.mark.allow_no_new_coverage
+def test_entity_sequences_raw_entry_prefix_count_split_partial_sequences() -> None:
+    """Raw-entry count splits should cut sessions at the configured boundary."""
+    # This regression test locks down the split-partial boundary contract for
+    # the new raw-entry prefix mode. The surrounding helper plumbing is already
+    # covered elsewhere, so nearby lines are not the right place to express it.
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+    )
+
+    sequences = list(builder)
+    split_summary = builder.build_raw_entry_split_summary()
+    expected_cutoff_entry_index = 2
+    expected_train_raw_entry_count = 2
+    expected_test_raw_entry_count = 2
+    expected_straddling_group_count = 1
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.templates for sequence in sequences] == [
+        ["ONE", "TWO"],
+        ["THREE", "FOUR"],
+    ]
+    assert split_summary is not None
+    assert split_summary.cutoff_entry_index == expected_cutoff_entry_index
+    assert split_summary.train_raw_entry_count == expected_train_raw_entry_count
+    assert split_summary.test_raw_entry_count == expected_test_raw_entry_count
+    assert split_summary.straddling_group_count == expected_straddling_group_count
+    assert split_summary.straddling_group_policy == (
+        StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES.value
+    )
+
+
+def test_entity_sequences_raw_entry_prefix_fraction_uses_ceiling_cutoff() -> None:
+    """Raw-entry fraction splits should round the train cutoff up."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="a",
+            untemplated_message_text="five",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_fraction=0.4,
+    )
+
+    sequences = list(builder)
+    split_summary = builder.build_raw_entry_split_summary()
+    expected_cutoff_entry_index = 2
+    expected_train_raw_entry_count = 2
+    expected_test_raw_entry_count = 3
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [len(sequence.events) for sequence in sequences] == [2, 3]
+    assert split_summary is not None
+    assert split_summary.cutoff_entry_index == expected_cutoff_entry_index
+    assert split_summary.train_raw_entry_count == expected_train_raw_entry_count
+    assert split_summary.test_raw_entry_count == expected_test_raw_entry_count
+
+
+def test_chronological_stream_raw_entry_normal_fraction_excludes_early_anomalies() -> (
+    None
+):
+    """Chronological stream chunks should stay intact under normal-fraction splits."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="stream",
+            untemplated_message_text="three",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="stream",
+            untemplated_message_text="four",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="stream",
+            untemplated_message_text="five",
+            anomalous=1,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=10,
+        split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_normal_entry_fraction=0.5,
+    )
+
+    sequences = list(builder)
+    split_summary = builder.build_raw_entry_split_summary()
+    expected_cutoff_entry_index = 3
+    expected_train_raw_entry_count = 2
+    expected_ignored_anomalous_entry_count = 1
+    expected_test_raw_entry_count = 2
+    expected_straddling_group_count = 1
+
+    assert len(sequences) == 1
+    assert [sequence.split_label for sequence in sequences] == [SplitLabel.TRAIN]
+    assert [sequence.templates for sequence in sequences] == [
+        ["ONE", "TWO", "THREE", "FOUR", "FIVE"],
+    ]
+    assert [sequence.training_event_mask for sequence in sequences] == [
+        (True, False, True, False, False),
+    ]
+    assert [sequence.evaluation_event_mask for sequence in sequences] == [
+        (False, False, False, True, True),
+    ]
+    assert split_summary is not None
+    assert split_summary.cutoff_entry_index == expected_cutoff_entry_index
+    assert split_summary.train_raw_entry_count == expected_train_raw_entry_count
+    assert (
+        split_summary.ignored_anomalous_entry_count
+        == expected_ignored_anomalous_entry_count
+    )
+    assert split_summary.test_raw_entry_count == expected_test_raw_entry_count
+    assert split_summary.straddling_group_count == expected_straddling_group_count
+
+
+def test_chronological_stream_training_mask_aligns_with_target_events() -> None:
+    """Raw-entry masks should mark target events, not their histories."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="stream",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="stream",
+            untemplated_message_text="four",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="stream",
+            untemplated_message_text="five",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=5,
+            timestamp_unix_ms=600,
+            entity_id="stream",
+            untemplated_message_text="six",
+            anomalous=0,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=10,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=4,
+    )
+
+    [sequence] = list(builder)
+
+    assert sequence.training_event_mask == (
+        True,
+        True,
+        False,
+        True,
+        False,
+        False,
+    )
+    assert sequence.evaluation_event_mask == (
+        False,
+        False,
+        False,
+        False,
+        True,
+        True,
+    )
+    assert sequence.event_labels == (0, 0, 1, 0, 1, 0)
+    assert sequence.split_label is SplitLabel.TRAIN
+
+
+def test_chronological_stream_event_masks_are_stable_across_chunk_sizes() -> None:
+    """Chunk size should not change event-level train/test membership."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="stream",
+            untemplated_message_text="three",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="stream",
+            untemplated_message_text="four",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="stream",
+            untemplated_message_text="five",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=5,
+            timestamp_unix_ms=600,
+            entity_id="stream",
+            untemplated_message_text="six",
+            anomalous=0,
+        ),
+    )
+
+    small_chunks = list(
+        ChronologicalStreamSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            chunk_size=2,
+            split_mode=RawEntrySplitMode.PREFIX_COUNT,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+            train_entry_count=4,
+        ),
+    )
+    large_chunks = list(
+        ChronologicalStreamSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            chunk_size=4,
+            split_mode=RawEntrySplitMode.PREFIX_COUNT,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+            train_entry_count=4,
+        ),
+    )
+
+    assert [
+        mask for sequence in small_chunks for mask in sequence.training_event_mask or ()
+    ] == [True, False, True, True, False, False]
+    assert [
+        mask for sequence in large_chunks for mask in sequence.training_event_mask or ()
+    ] == [True, False, True, True, False, False]
+    assert [
+        mask
+        for sequence in small_chunks
+        for mask in sequence.evaluation_event_mask or ()
+    ] == [False, False, False, False, True, True]
+    assert [
+        mask
+        for sequence in large_chunks
+        for mask in sequence.evaluation_event_mask or ()
+    ] == [False, False, False, False, True, True]
+
+
+def test_chronological_stream_chunk_count_matches_chunk_size() -> None:
+    """Chronological stream grouping should chunk by raw-entry count only."""
+    sink = _sink(
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="stream",
+            untemplated_message_text="third",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="first",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=4,
+            timestamp_unix_ms=500,
+            entity_id="stream",
+            untemplated_message_text="fifth",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="second",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="stream",
+            untemplated_message_text="fourth",
+            anomalous=1,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=2,
+        train_frac=1.0,
+        test_frac=0.0,
+    )
+
+    sequences = list(builder)
+    expected_sequence_count = 3
+
+    assert len(sequences) == expected_sequence_count
+    assert [sequence.templates for sequence in sequences] == [
+        ["FIRST", "SECOND"],
+        ["THIRD", "FOURTH"],
+        ["FIFTH"],
+    ]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+    ]
+
+
+def test_chronological_stream_grouping_preserves_source_order_and_event_labels() -> (
+    None
+):
+    """Chronological stream grouping should emit rows in raw-entry order."""
+    sink = _sink(
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="stream",
+            untemplated_message_text="third",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="first",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="second",
+            anomalous=1,
+        ),
+    )
+
+    sequences = list(
+        ChronologicalStreamSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            chunk_size=2,
+            train_frac=1.0,
+            test_frac=0.0,
+        ),
+    )
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+    ]
+    assert [sequence.templates for sequence in sequences] == [
+        ["FIRST", "SECOND"],
+        ["THIRD"],
+    ]
+    assert [sequence.event_labels for sequence in sequences] == [
+        (0, 1),
+        (0,),
+    ]
+
+
+def test_entity_sequences_before_grouping_assign_by_first_event_uses_group_head() -> (
+    None
+):
+    """First-event straddler policy should keep whole groups on the head side."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+        train_entry_count=2,
+    )
+
+    sequences = list(builder)
+
+    assert len(sequences) == 1
+    assert sequences[0].split_label is SplitLabel.TRAIN
+    assert sequences[0].templates == ["ONE", "TWO", "THREE", "FOUR"]
+    split_summary = builder.build_raw_entry_split_summary()
+    assert split_summary is not None
+    assert split_summary.straddling_group_count == 1
+    assert split_summary.straddling_group_policy == (
+        StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT.value
+    )
 
 
 @pytest.mark.allow_no_new_coverage

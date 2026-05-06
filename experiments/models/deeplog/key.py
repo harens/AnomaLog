@@ -26,6 +26,7 @@ from experiments.models.deeplog.shared import (
     DeepLogTopPrediction,
     KeyLSTM,
     NormalTrainingCorpus,
+    training_event_index_mask,
 )
 
 if TYPE_CHECKING:
@@ -120,11 +121,17 @@ def fit_key_model(
     examples: list[tuple[list[int], int]] = []
     try:
         for sequence in training_corpus.sequences:
+            eligible_target_indexes = training_event_index_mask(sequence)
+            if not eligible_target_indexes:
+                if progress is not None and prepare_task is not None:
+                    progress.advance(prepare_task)
+                continue
             examples.extend(
                 iter_key_examples(
-                    sequences=(sequence,),
                     template_to_index=template_to_index,
                     history_size=config.history_size,
+                    sequences=(sequence,),
+                    eligible_target_indexes=eligible_target_indexes,
                 ),
             )
             if progress is not None and prepare_task is not None:
@@ -173,6 +180,7 @@ def iter_key_examples(
     sequences: Iterable[TemplateSequence],
     template_to_index: dict[str, int],
     history_size: int,
+    eligible_target_indexes: Iterable[int] | None = None,
 ) -> Iterator[tuple[list[int], int]]:
     """Yield DeepLog `(history -> next-key)` training pairs.
 
@@ -180,10 +188,15 @@ def iter_key_examples(
         sequences (Iterable[TemplateSequence]): Normal train sequences.
         template_to_index (dict[str, int]): Key vocabulary.
         history_size (int): Number of prior keys per example.
+        eligible_target_indexes (Iterable[int] | None): Optional sequence-local
+            target indexes that may contribute training examples.
 
     Yields:
         tuple[list[int], int]: Encoded history and target key index.
     """
+    eligible_indexes = (
+        set(eligible_target_indexes) if eligible_target_indexes is not None else None
+    )
     for sequence in sequences:
         template_indexes = [
             template_to_index[template] for template in sequence.templates
@@ -191,9 +204,12 @@ def iter_key_examples(
         if len(template_indexes) <= history_size:
             continue
         for start in range(len(template_indexes) - history_size):
+            target_index = start + history_size
+            if eligible_indexes is not None and target_index not in eligible_indexes:
+                continue
             yield (
                 template_indexes[start : start + history_size],
-                template_indexes[start + history_size],
+                template_indexes[target_index],
             )
 
 

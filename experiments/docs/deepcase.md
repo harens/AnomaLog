@@ -63,8 +63,17 @@ underlying automatic decisions separately from abstentions.
 ### Metric Interpretation
 
 Sequence-level precision, recall, F1, and accuracy remain the shared wrapper
-view over sequence decisions. Event-level automatic-decision metrics evaluate
-DeepCASE at its contextual-sample level, where:
+view over sequence decisions. They are useful for compatibility with the
+shared experiment contract, but they are not the primary paper-comparison
+target for HDFS.
+
+The paper-comparison block for HDFS Table IV is exposed explicitly as
+`next_event_prediction.table_iv_prediction_metrics`. It mirrors the weighted
+multi-class next-event metrics and is the block that should be compared to the
+paper's prediction table.
+
+Event-level automatic-decision metrics evaluate DeepCASE at its
+contextual-sample level, where:
 
 - `known_benign_cluster` maps to a predicted normal event
 - `known_malicious_cluster` maps to a predicted anomalous event
@@ -111,8 +120,14 @@ Run metrics also carry detector-owned next-event diagnostics from the Context
 Builder. This is a separate, deterministic diagnostic pass that uses the
 padded context windows produced by DeepCASE. The diagnostic vocabulary policy
 is configurable on `DeepCaseModelConfig` and defaults to `full_dataset`, with
-`train_only` still available for closed-world comparisons. The anomaly
-detector itself remains unchanged.
+`train_only` still available for closed-world comparisons.
+
+The HDFS workload-reduction formulas are surfaced as `manual_workload_reduction`
+and `semi_automatic_workload_reduction`. Those summaries encode the paper's
+alert, coverage, reduction, and overall calculations, and should be used for
+Table X style reporting instead of the shared anomaly F1 wrapper.
+
+The anomaly detector itself remains unchanged.
 
 The model should be run with entity grouping:
 
@@ -124,9 +139,14 @@ grouping = "entity"
 The detector validates the observable invariant by rejecting sequences that span
 multiple entity ids.
 
+For the BGL extension, the same DeepCASE runtime is still used, but the run is
+treated as an extension rather than a paper reproduction target.
+
 ## Remaining Gaps
 
 - No interactive operator labeling workflow.
 - No persistent cluster database shared across experiment runs.
 - No online update loop for newly inspected clusters or outliers.
 - No separate threshold sweep for alternative abstain / confidence settings.
+- No automatic importer for the public DeepCASE HDFS files referenced by the
+  paper.

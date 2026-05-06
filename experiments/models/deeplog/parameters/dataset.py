@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from statistics import NormalDist
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 import torch
 from torch import nn
@@ -35,7 +35,15 @@ from experiments.models.deeplog.shared import (
     GaussianThreshold,
     NormalisationStats,
     ParameterFeatureSchema,
+    training_event_mask_for_sequence,
 )
+
+ParameterSeriesSplit: TypeAlias = tuple[
+    list[list[RawParameterVector]],
+    list[list[RawParameterVector]],
+    list[list[bool]],
+    list[list[bool]],
+]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -88,7 +96,8 @@ def build_parameter_datasets(
     1. extract the ordered subsequence of events for one template
     2. split that per-template series into a train prefix and validation tail
     3. fit normalisation on the train prefix only
-    4. convert both splits into sliding-window training pairs
+    4. convert both splits into sliding-window training pairs while keeping
+       per-event eligibility masks aligned with the raw series
 
     Args:
         normal_sequences (Iterable[TemplateSequence]): Normal training sequences.
@@ -101,7 +110,9 @@ def build_parameter_datasets(
         ParameterDatasetSplit: Train pairs, validation pairs, and normalisation.
     """
     raw_series: list[list[RawParameterVector]] = []
+    raw_series_target_masks: list[list[bool]] = []
     for sequence in normal_sequences:
+        sequence_target_mask = training_event_mask_for_sequence(sequence)
         vectors = [
             raw_parameter_vector_for_event(
                 parameters=parameters,
@@ -112,10 +123,22 @@ def build_parameter_datasets(
             if event_template == template
         ]
         if vectors:
+            eligible_target_mask = [
+                sequence_target_mask[event_index]
+                for event_index, (event_template, _, _) in enumerate(sequence.events)
+                if event_template == template
+            ]
             raw_series.append(vectors)
+            raw_series_target_masks.append(eligible_target_mask)
 
-    train_raw_series, validation_raw_series = split_parameter_series_temporally(
+    (
+        train_raw_series,
+        validation_raw_series,
+        train_raw_series_target_masks,
+        validation_raw_series_target_masks,
+    ) = split_parameter_series_temporally(
         raw_series=raw_series,
+        raw_series_target_masks=raw_series_target_masks,
         history_size=history_size,
         validation_fraction=validation_fraction,
     )
@@ -123,6 +146,7 @@ def build_parameter_datasets(
     train_pairs = list(
         iter_parameter_pairs(
             raw_series=train_raw_series,
+            raw_series_target_masks=train_raw_series_target_masks,
             normalisation=normalisation,
             history_size=history_size,
         ),
@@ -130,6 +154,7 @@ def build_parameter_datasets(
     validation_pairs = list(
         iter_parameter_pairs(
             raw_series=validation_raw_series,
+            raw_series_target_masks=validation_raw_series_target_masks,
             normalisation=normalisation,
             history_size=history_size,
         ),
@@ -142,9 +167,10 @@ def build_parameter_datasets(
 def split_parameter_series_temporally(
     *,
     raw_series: list[list[RawParameterVector]],
+    raw_series_target_masks: list[list[bool]],
     history_size: int,
     validation_fraction: float,
-) -> tuple[list[list[RawParameterVector]], list[list[RawParameterVector]]]:
+) -> ParameterSeriesSplit:
     """Split each template-specific series into train prefix and validation tail.
 
     The validation slice overlaps the training slice by `history_size` items on
@@ -154,17 +180,26 @@ def split_parameter_series_temporally(
 
     Args:
         raw_series (list[list[RawParameterVector]]): Per-sequence template vectors.
+        raw_series_target_masks (list[list[bool]]): Target eligibility masks
+            aligned with `raw_series`.
         history_size (int): Number of prior template events per example.
         validation_fraction (float): Fraction of examples reserved for validation.
 
     Returns:
-        tuple[list[list[RawParameterVector]], list[list[RawParameterVector]]]:
-            Train-prefix series and validation-tail series.
+        ParameterSeriesSplit:
+            Train-prefix series, validation-tail series, and the aligned target
+            eligibility masks for both splits.
     """
     train_raw_series: list[list[RawParameterVector]] = []
     validation_raw_series: list[list[RawParameterVector]] = []
+    train_raw_series_target_masks: list[list[bool]] = []
+    validation_raw_series_target_masks: list[list[bool]] = []
 
-    for series in raw_series:
+    for series, target_mask in zip(
+        raw_series,
+        raw_series_target_masks,
+        strict=True,
+    ):
         pair_count = len(series) - history_size
         if pair_count < MIN_TEMPORAL_PARAMETER_PAIRS:
             continue
@@ -176,13 +211,23 @@ def split_parameter_series_temporally(
 
         train_raw_series.append(series[:train_prefix_length])
         validation_raw_series.append(series[train_prefix_length - history_size :])
+        train_raw_series_target_masks.append(target_mask[:train_prefix_length])
+        validation_raw_series_target_masks.append(
+            target_mask[train_prefix_length - history_size :],
+        )
 
-    return train_raw_series, validation_raw_series
+    return (
+        train_raw_series,
+        validation_raw_series,
+        train_raw_series_target_masks,
+        validation_raw_series_target_masks,
+    )
 
 
 def iter_parameter_pairs(
     *,
     raw_series: list[list[RawParameterVector]],
+    raw_series_target_masks: list[list[bool]],
     normalisation: NormalisationStats,
     history_size: int,
 ) -> Iterator[ParameterTrainingPair]:
@@ -199,6 +244,8 @@ def iter_parameter_pairs(
     Args:
         raw_series (list[list[RawParameterVector]]): Template-specific raw
             series.
+        raw_series_target_masks (list[list[bool]]): Target eligibility masks
+            aligned with `raw_series`.
         normalisation (NormalisationStats): Fitted normalisation statistics.
         history_size (int): Number of prior template events per example.
 
@@ -206,7 +253,7 @@ def iter_parameter_pairs(
         ParameterTrainingPair: Normalised training pair for the template
             series.
     """
-    for series in raw_series:
+    for series, target_mask in zip(raw_series, raw_series_target_masks, strict=True):
         if len(series) <= history_size:
             continue
         normalized_series = [
@@ -215,6 +262,8 @@ def iter_parameter_pairs(
         ]
         for start in range(len(series) - history_size):
             target_vector = series[start + history_size]
+            if not target_mask[start + history_size]:
+                continue
             if not any(target_vector.mask):
                 continue
             yield ParameterTrainingPair(

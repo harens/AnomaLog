@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
@@ -38,6 +38,7 @@ class _TestPredictionOutcome(PredictionOutcome):
 class _StubDetector:
     outcomes: dict[int, DeepCasePredictionOutcome]
     detector_name: str = "deepcase"
+    predicted_window_ids: list[int] = field(default_factory=list)
 
     @staticmethod
     def fit(
@@ -49,6 +50,7 @@ class _StubDetector:
         del train_sequences, progress, logger
 
     def predict(self, sequence: TemplateSequence) -> DeepCasePredictionOutcome:
+        self.predicted_window_ids.append(sequence.window_id)
         return self.outcomes[sequence.window_id]
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
@@ -76,6 +78,18 @@ def _sequence(*, label: int, window_id: int = 0) -> TemplateSequence:
         entity_ids=["entity-1"],
         window_id=window_id,
         split_label=SplitLabel.TEST,
+    )
+
+
+def _mixed_sequence(*, window_id: int = 0) -> TemplateSequence:
+    return TemplateSequence(
+        events=[("A", [], None), ("B", [], None), ("C", [], None)],
+        label=0,
+        entity_ids=["entity-1"],
+        window_id=window_id,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, True, False),
+        evaluation_event_mask=(False, False, True),
     )
 
 
@@ -245,3 +259,55 @@ def test_stream_predictions_counts_deepcase_automatic_decisions(
     assert summary["counted_predictions"] == expected_counted_predictions
     assert accumulator.test_sequence_count == expected_test_sequence_count
     assert accumulator.abstained_prediction_count == expected_abstained_predictions
+
+
+def test_stream_predictions_scores_train_labeled_mixed_sequences(
+    tmp_path: Path,
+) -> None:
+    """Evaluation masks should let the runner score post-cutoff train chunks.
+
+    Args:
+        tmp_path (Path): Temporary directory used for the prediction output
+            path.
+    """
+    expected_test_sequence_count = 2
+    detector = _StubDetector(
+        outcomes={
+            0: DeepCasePredictionOutcome(
+                predicted_label=0,
+                score=0.0,
+                findings=[],
+                sequence_decision=DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+                confident_event_count=1,
+                abstained_event_count=0,
+                confident_anomaly_event_count=0,
+            ),
+            1: DeepCasePredictionOutcome(
+                predicted_label=0,
+                score=0.0,
+                findings=[],
+                sequence_decision=DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+                confident_event_count=1,
+                abstained_event_count=0,
+                confident_anomaly_event_count=0,
+            ),
+        },
+    )
+
+    accumulator = stream_predictions(
+        detector=detector,
+        sequence_factory=lambda: iter(
+            [
+                _mixed_sequence(window_id=0),
+                _sequence(label=0, window_id=1),
+            ],
+        ),
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "unused-predictions.jsonl",
+            write_predictions=False,
+        ),
+        logger=logging.getLogger("tests.evaluate"),
+    )
+
+    assert detector.predicted_window_ids == [0, 1]
+    assert accumulator.test_sequence_count == expected_test_sequence_count

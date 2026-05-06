@@ -20,6 +20,9 @@ from experiments.models.base import (
     PredictionOutcome,
     SequenceSummary,
 )
+from experiments.models.deeplog.shared import (
+    evaluation_event_mask_for_sequence,
+)
 from experiments.models.progress import (
     ProgressHint,
     RunProgressPlan,
@@ -93,11 +96,11 @@ class RunMetrics:
         self,
         sequence: TemplateSequence,
     ) -> None:
-        """Record one train-split sequence without scoring it.
+        """Record one training-target sequence without scoring it.
 
         Args:
-            sequence (TemplateSequence): Train-split sequence seen while
-                streaming the dataset.
+            sequence (TemplateSequence): Sequence seen while streaming the
+                dataset that contributes training targets.
         """
         self.sequence_count += 1
         self.train_sequence_count += 1
@@ -396,7 +399,7 @@ def _iter_test_sequences(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
     accumulator: RunMetrics,
 ) -> Iterator[TemplateSequence]:
-    """Yield test sequences while accounting for train sequences inline.
+    """Yield sequences that contain at least one evaluation target.
 
     Args:
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
@@ -405,16 +408,19 @@ def _iter_test_sequences(
             sequences.
 
     Yields:
-        TemplateSequence: Test-split sequences in dataset order.
+        TemplateSequence: Sequences with evaluation targets in dataset order.
     """
     for sequence in sequence_factory():
+        evaluation_event_mask = evaluation_event_mask_for_sequence(sequence)
+        if any(evaluation_event_mask):
+            yield sequence
+            continue
         if sequence.split_label is SplitLabel.TRAIN:
             accumulator.record_train(sequence)
             continue
         if sequence.split_label is SplitLabel.IGNORED:
             accumulator.record_ignored(sequence)
             continue
-        yield sequence
 
 
 def _prediction_is_abstained(prediction: PredictionOutcome) -> bool:

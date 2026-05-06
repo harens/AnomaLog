@@ -17,19 +17,25 @@ from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deepcase import DeepCaseModelConfig
 from experiments.models.deepcase import shared as deepcase_shared
-from experiments.models.deepcase.detector import DeepCaseDetector
+from experiments.models.deepcase.detector import DeepCaseDetector, DeepCaseRunMetrics
 from experiments.models.deepcase.shared import (
     DeepCaseEventIdMap,
     DeepCaseSampleBatch,
     DeepCaseSequenceDecision,
+    DeepCaseWorkloadAlertSampling,
+    DeepCaseWorkloadMode,
     ScoreReason,
     aggregate_sequence_score,
     build_sample_batch,
     build_training_batch,
+    build_workload_reduction_metrics,
     decision_label_for_score,
     finding_reason_for_score,
 )
-from experiments.models.next_event_metrics import VocabularyPolicy
+from experiments.models.next_event_metrics import (
+    NextEventPredictionDiagnostics,
+    VocabularyPolicy,
+)
 
 MALICIOUS_SCORE = 3.0
 UNKNOWN_EVENT_SCORE = -2.0
@@ -60,6 +66,14 @@ EXPECTED_ABSTAINED_NORMAL_LABEL_COUNT = 1
 EXPECTED_SEQUENCE_CONFIDENT_ANOMALY_COUNT = 2
 EXPECTED_SEQUENCE_CONFIDENT_NORMAL_COUNT = 2
 EXPECTED_SEQUENCE_ABSTAINED_COUNT = 1
+EXPECTED_WORKLOAD_CLUSTER_COUNT = 5
+EXPECTED_WORKLOAD_ALERTS_PER_CLUSTER = 10
+EXPECTED_WORKLOAD_ALERT_COUNT = 50
+EXPECTED_WORKLOAD_COVERAGE = pytest.approx(0.8)
+EXPECTED_WORKLOAD_REDUCTION = pytest.approx(0.375)
+EXPECTED_WORKLOAD_OVERALL = pytest.approx(0.3)
+EXPECTED_WORKLOAD_SEMI_AUTOMATIC_REDUCTION = pytest.approx(1.0)
+EXPECTED_WORKLOAD_SEMI_AUTOMATIC_OVERALL = pytest.approx(0.8)
 ConfigValue = str | int | float | bool | None
 
 
@@ -547,6 +561,36 @@ def test_build_sample_batch_uses_target_event_labels_when_available() -> None:
     assert batch.parent_sequence_fallback_count == 0
 
 
+def test_build_sample_batch_respects_explicit_evaluation_event_mask() -> None:
+    """DeepCase should only score events flagged for evaluation."""
+    sequence = TemplateSequence(
+        events=[
+            ("A", [], None),
+            ("B", [], None),
+            ("C", [], None),
+        ],
+        label=1,
+        entity_ids=["entity-1"],
+        window_id=0,
+        split_label=SplitLabel.TEST,
+        event_labels=(0, 1, 1),
+        evaluation_event_mask=(False, True, True),
+    )
+    event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
+
+    batch = build_sample_batch(
+        (sequence,),
+        event_id_map=event_id_map,
+        context_length=2,
+        timeout_seconds=86_400,
+    )
+
+    assert batch.event_indexes == [1, 2]
+    assert batch.templates == ["B", "C"]
+    assert batch.scores.tolist() == [1.0, 1.0]
+    assert batch.parent_sequence_fallback_count == 0
+
+
 def test_build_sample_batch_falls_back_to_parent_label_when_event_labels_missing() -> (
     None
 ):
@@ -724,6 +768,33 @@ def test_build_training_batch_uses_target_event_labels_when_available() -> None:
     assert batch.parent_sequence_fallback_count == 0
 
 
+def test_build_training_batch_respects_explicit_training_event_mask() -> None:
+    """DeepCase should only train on events flagged for training."""
+    sequence = TemplateSequence(
+        events=[
+            ("A", [], None),
+            ("B", [], None),
+            ("C", [], None),
+        ],
+        label=1,
+        entity_ids=["entity-1"],
+        window_id=0,
+        training_event_mask=(True, False, True),
+        event_labels=(0, 1, 1),
+    )
+
+    _, batch = build_training_batch(
+        (sequence,),
+        context_length=2,
+        timeout_seconds=2.5,
+    )
+
+    assert batch.event_indexes == [0, 2]
+    assert batch.templates == ["A", "C"]
+    assert batch.scores.tolist() == [0.0, 1.0]
+    assert batch.parent_sequence_fallback_count == 0
+
+
 def test_build_training_batch_falls_back_to_parent_label_when_labels_missing() -> None:
     """Training should keep the parent label only when event labels are absent."""
     sequence = _sequence(
@@ -776,6 +847,44 @@ def test_deepcase_score_mapping_is_conservative() -> None:
     assert aggregate_sequence_score([0.0, MALICIOUS_SCORE, -1.0]) == MALICIOUS_SCORE
     assert aggregate_sequence_score([0.0, -1.0]) == pytest.approx(0.0)
     assert not aggregate_sequence_score([0.0, 0.0])
+
+
+def test_deepcase_workload_reduction_metrics_apply_paper_formulas() -> None:
+    """DeepCase workload metrics should use the paper's alert formulas."""
+    manual = build_workload_reduction_metrics(
+        mode=DeepCaseWorkloadMode.MANUAL,
+        total_contextual_sequence_count=100,
+        covered_contextual_sequence_count=80,
+        uncovered_contextual_sequence_count=20,
+        alert_sampling=DeepCaseWorkloadAlertSampling(
+            cluster_count=EXPECTED_WORKLOAD_CLUSTER_COUNT,
+            alerts_per_cluster=EXPECTED_WORKLOAD_ALERTS_PER_CLUSTER,
+        ),
+    )
+    semi_automatic = build_workload_reduction_metrics(
+        mode=DeepCaseWorkloadMode.SEMI_AUTOMATIC,
+        total_contextual_sequence_count=100,
+        covered_contextual_sequence_count=80,
+        uncovered_contextual_sequence_count=20,
+        alert_sampling=DeepCaseWorkloadAlertSampling(
+            cluster_count=EXPECTED_WORKLOAD_CLUSTER_COUNT,
+            alerts_per_cluster=EXPECTED_WORKLOAD_ALERTS_PER_CLUSTER,
+        ),
+    )
+
+    assert manual.mode is DeepCaseWorkloadMode.MANUAL
+    assert manual.cluster_count == EXPECTED_WORKLOAD_CLUSTER_COUNT
+    assert manual.alerts_per_cluster == EXPECTED_WORKLOAD_ALERTS_PER_CLUSTER
+    assert manual.alert_count == EXPECTED_WORKLOAD_ALERT_COUNT
+    assert manual.coverage == EXPECTED_WORKLOAD_COVERAGE
+    assert manual.reduction == EXPECTED_WORKLOAD_REDUCTION
+    assert manual.overall == EXPECTED_WORKLOAD_OVERALL
+    assert semi_automatic.mode is DeepCaseWorkloadMode.SEMI_AUTOMATIC
+    assert semi_automatic.cluster_count == EXPECTED_WORKLOAD_CLUSTER_COUNT
+    assert semi_automatic.alert_count is None
+    assert semi_automatic.coverage == EXPECTED_WORKLOAD_COVERAGE
+    assert semi_automatic.reduction == EXPECTED_WORKLOAD_SEMI_AUTOMATIC_REDUCTION
+    assert semi_automatic.overall == EXPECTED_WORKLOAD_SEMI_AUTOMATIC_OVERALL
 
 
 @pytest.mark.parametrize(
@@ -993,6 +1102,78 @@ def test_deepcase_run_metrics_reports_parent_sequence_fallback_count(
     assert metrics.prediction_diagnostics is not None
 
 
+def _assert_next_event_prediction_metrics(
+    *,
+    next_event_prediction: NextEventPredictionDiagnostics | None,
+    metrics: DeepCaseRunMetrics,
+    expected_events_seen: int,
+    expected_eligible_events: int,
+) -> None:
+    """Assert the next-event comparison and workload blocks for one run.
+
+    Args:
+        next_event_prediction (NextEventPredictionDiagnostics | None):
+            Next-event diagnostics captured from the run.
+        metrics (DeepCaseRunMetrics): DeepCASE run metrics for the same run.
+        expected_events_seen (int): Expected sample count in the run.
+        expected_eligible_events (int): Expected number of eligible next-event
+            samples.
+    """
+    assert next_event_prediction is not None
+    assert next_event_prediction.task == "next_event_prediction"
+    totals = next_event_prediction.totals
+    top_k = next_event_prediction.top_k
+    exclusions = next_event_prediction.exclusions
+    macro = next_event_prediction.classification_top1_macro
+    weighted = next_event_prediction.classification_top1_weighted
+    table_iv = next_event_prediction.table_iv_prediction_metrics
+    assert totals.events_seen == expected_events_seen
+    assert totals.events_eligible == expected_eligible_events
+    assert totals.coverage == pytest.approx(1.0)
+    assert top_k.k_values == [1, 2, 3, 5]
+    assert top_k.hit_count == {
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "5": 2,
+    }
+    assert top_k.accuracy == {
+        "1": pytest.approx(2 / 3),
+        "2": pytest.approx(2 / 3),
+        "3": pytest.approx(2 / 3),
+        "5": pytest.approx(2 / 3),
+    }
+    assert macro.precision == pytest.approx(2 / 3)
+    assert macro.recall == pytest.approx(2 / 3)
+    assert macro.f1 == pytest.approx(2 / 3)
+    assert macro.accuracy == pytest.approx(2 / 3)
+    assert weighted.precision == pytest.approx(2 / 3)
+    assert weighted.recall == pytest.approx(2 / 3)
+    assert weighted.f1 == pytest.approx(2 / 3)
+    assert weighted.accuracy == pytest.approx(2 / 3)
+    assert table_iv.precision == pytest.approx(weighted.precision)
+    assert table_iv.recall == pytest.approx(weighted.recall)
+    assert table_iv.f1 == pytest.approx(weighted.f1)
+    assert table_iv.accuracy == pytest.approx(weighted.accuracy)
+    assert exclusions.insufficient_history == 0
+    assert exclusions.unknown_history == 0
+    assert exclusions.unknown_target == 0
+    assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+    assert metrics.auto_decision_count == 1
+    assert metrics.abstained_prediction_count == 0
+    assert metrics.auto_coverage == pytest.approx(1.0)
+    assert metrics.abstain_rate == pytest.approx(0.0)
+    assert metrics.random_seed == 0
+    assert metrics.manual_workload_reduction is not None
+    assert metrics.manual_workload_reduction.mode is DeepCaseWorkloadMode.MANUAL
+    assert metrics.manual_workload_reduction.alert_count == 0
+    assert metrics.semi_automatic_workload_reduction is not None
+    assert (
+        metrics.semi_automatic_workload_reduction.mode
+        is DeepCaseWorkloadMode.SEMI_AUTOMATIC
+    )
+
+
 def test_deepcase_run_metrics_reports_next_event_prediction_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1056,45 +1237,12 @@ def test_deepcase_run_metrics_reports_next_event_prediction_diagnostics(
     next_event_prediction = metrics.next_event_prediction
     expected_events_seen = len(test_sequence.events)
     expected_eligible_events = 3
-    assert next_event_prediction is not None
-    assert next_event_prediction.task == "next_event_prediction"
-    totals = next_event_prediction.totals
-    top_k = next_event_prediction.top_k
-    exclusions = next_event_prediction.exclusions
-    macro = next_event_prediction.classification_top1_macro
-    weighted = next_event_prediction.classification_top1_weighted
-    assert totals.events_seen == expected_events_seen
-    assert totals.events_eligible == expected_eligible_events
-    assert totals.coverage == pytest.approx(1.0)
-    assert top_k.k_values == [1, 2, 3, 5]
-    assert top_k.hit_count == {
-        "1": 2,
-        "2": 2,
-        "3": 2,
-        "5": 2,
-    }
-    assert top_k.accuracy == {
-        "1": pytest.approx(2 / 3),
-        "2": pytest.approx(2 / 3),
-        "3": pytest.approx(2 / 3),
-        "5": pytest.approx(2 / 3),
-    }
-    assert macro.precision == pytest.approx(2 / 3)
-    assert macro.recall == pytest.approx(2 / 3)
-    assert macro.f1 == pytest.approx(2 / 3)
-    assert macro.accuracy == pytest.approx(2 / 3)
-    assert weighted.precision == pytest.approx(2 / 3)
-    assert weighted.recall == pytest.approx(2 / 3)
-    assert weighted.f1 == pytest.approx(2 / 3)
-    assert weighted.accuracy == pytest.approx(2 / 3)
-    assert exclusions.insufficient_history == 0
-    assert exclusions.unknown_history == 0
-    assert exclusions.unknown_target == 0
-    assert next_event_prediction.vocabulary_policy is VocabularyPolicy.FULL_DATASET
-    assert metrics.auto_decision_count == 1
-    assert metrics.abstained_prediction_count == 0
-    assert metrics.auto_coverage == pytest.approx(1.0)
-    assert metrics.abstain_rate == pytest.approx(0.0)
+    _assert_next_event_prediction_metrics(
+        next_event_prediction=next_event_prediction,
+        metrics=metrics,
+        expected_events_seen=expected_events_seen,
+        expected_eligible_events=expected_eligible_events,
+    )
 
 
 def test_deepcase_manifest_reports_cluster_score_diagnostics(

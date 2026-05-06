@@ -28,11 +28,15 @@ from experiments.models.deepcase.shared import (
     DeepCaseManifest,
     DeepCasePredictionDiagnostics,
     DeepCaseSequenceDecision,
+    DeepCaseWorkloadAlertSampling,
+    DeepCaseWorkloadMode,
+    DeepCaseWorkloadReductionMetrics,
     _DeepCasePredictionDiagnosticsState,
     _DeepCasePredictionSummary,
     aggregate_sequence_score,
     build_sample_batch,
     build_training_batch,
+    build_workload_reduction_metrics,
     decision_label_for_score,
     finding_reason_for_score,
 )
@@ -111,10 +115,15 @@ class DeepCaseRunMetrics(msgspec.Struct, frozen=True):
             automatically.
         abstain_rate (float): Fraction of test sequences deferred for
             review.
+        random_seed (int): Configured random seed for the latest run.
         prediction_diagnostics (DeepCasePredictionDiagnostics | None): Event
             and sequence diagnostics for the latest DeepCASE scoring run.
         next_event_prediction (NextEventPredictionDiagnostics | None): Latest
             Context Builder next-event diagnostics.
+        manual_workload_reduction (DeepCaseWorkloadReductionMetrics | None):
+            Manual-mode workload reduction summary, if available.
+        semi_automatic_workload_reduction (DeepCaseWorkloadReductionMetrics |
+            None): Semi-automatic workload reduction summary, if available.
     """
 
     auto_decision_count: int
@@ -124,8 +133,11 @@ class DeepCaseRunMetrics(msgspec.Struct, frozen=True):
     parent_sequence_fallback_count: int
     auto_coverage: float
     abstain_rate: float
+    random_seed: int
     prediction_diagnostics: DeepCasePredictionDiagnostics | None
     next_event_prediction: NextEventPredictionDiagnostics | None = None
+    manual_workload_reduction: DeepCaseWorkloadReductionMetrics | None = None
+    semi_automatic_workload_reduction: DeepCaseWorkloadReductionMetrics | None = None
 
 
 class DeepCaseModelConfig(
@@ -138,7 +150,32 @@ class DeepCaseModelConfig(
     Parameters are grouped by subsystem from the original paper:
     sequencing events, context builder, interpreter, and torch runtime.
 
-    """  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
+    Attributes:
+        context_length (PositiveInt): Number of prior events retained in the context
+            window.
+        timeout_seconds (PositiveFloat): Maximum age of a context event.
+        hidden_size (PositiveInt): Hidden dimension of the context builder
+            encoder.
+        label_smoothing_delta (Probability): Label smoothing used during
+            training.
+        confidence_threshold (Probability): Interpreter confidence threshold.
+        eps (PositiveFloat): DBSCAN neighbourhood radius.
+        min_samples (PositiveInt): Minimum DBSCAN cluster size.
+        epochs (PositiveInt): Context-builder training epochs.
+        batch_size (PositiveInt): Context-builder batch size.
+        learning_rate (PositiveFloat): Context-builder optimiser learning
+            rate.
+        teach_ratio (Probability): Teacher-forcing ratio.
+        iterations (NonNegativeInt): Interpreter query iterations.
+        query_batch_size (PositiveInt): Interpreter query batch size.
+        vocabulary_policy (VocabularyPolicy): Vocabulary policy for
+            next-event diagnostics.
+        cluster_score_strategy (DeepCaseClusterScoreStrategy): Cluster score
+            aggregation strategy.
+        no_score (int): Special no-score sentinel value.
+        device (TorchDeviceName): Requested Torch device policy.
+        random_seed (int): Deterministic random seed.
+    """
 
     # Sequencing events subsystem (Section D-A)
 
@@ -594,6 +631,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             cluster_score_strategy=self.config.cluster_score_strategy,
             no_score=self.config.no_score,
             device=str(self.device),
+            random_seed=self.config.random_seed,
             train_event_vocabulary_size=vocabulary_size,
             train_sample_count=self.train_sample_count,
             clustered_sample_count=self.clustered_sample_count,
@@ -641,6 +679,34 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             if test_sequence_count
             else 0.0
         )
+        manual_workload_reduction = (
+            None
+            if prediction_diagnostics is None
+            else build_workload_reduction_metrics(
+                mode=DeepCaseWorkloadMode.MANUAL,
+                total_contextual_sequence_count=test_sequence_count,
+                covered_contextual_sequence_count=auto_decision_count,
+                uncovered_contextual_sequence_count=abstained_prediction_count,
+                alert_sampling=DeepCaseWorkloadAlertSampling(
+                    cluster_count=self.known_cluster_count,
+                    alerts_per_cluster=10,
+                ),
+            )
+        )
+        semi_automatic_workload_reduction = (
+            None
+            if prediction_diagnostics is None
+            else build_workload_reduction_metrics(
+                mode=DeepCaseWorkloadMode.SEMI_AUTOMATIC,
+                total_contextual_sequence_count=test_sequence_count,
+                covered_contextual_sequence_count=auto_decision_count,
+                uncovered_contextual_sequence_count=abstained_prediction_count,
+                alert_sampling=DeepCaseWorkloadAlertSampling(
+                    cluster_count=self.known_cluster_count,
+                    alerts_per_cluster=10,
+                ),
+            )
+        )
         return DeepCaseRunMetrics(
             auto_decision_count=auto_decision_count,
             abstained_prediction_count=abstained_prediction_count,
@@ -659,8 +725,11 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             ),
             auto_coverage=round(auto_coverage, 8),
             abstain_rate=round(abstain_rate, 8),
+            random_seed=self.config.random_seed,
             prediction_diagnostics=prediction_diagnostics,
             next_event_prediction=next_event_prediction,
+            manual_workload_reduction=manual_workload_reduction,
+            semi_automatic_workload_reduction=semi_automatic_workload_reduction,
         )
 
     def _predict_batch(self, batch: DeepCaseSampleBatch) -> list[float]:

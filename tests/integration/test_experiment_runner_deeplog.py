@@ -146,6 +146,19 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert _int_value(exclusions, "unknown_target") >= 0
     assert next_event_prediction["vocabulary_policy"] == "full_dataset"
 
+    event_level_detection_raw = metrics["event_level_detection"]
+    if event_level_detection_raw is not None:
+        assert isinstance(event_level_detection_raw, dict)
+        event_level_detection = {
+            str(key): value for key, value in event_level_detection_raw.items()
+        }
+        assert event_level_detection["task"] == "event_level_detection"
+        assert _int_value(event_level_detection, "events_seen") >= 0
+        assert _int_value(event_level_detection, "events_eligible") >= 0
+        assert _float_value(event_level_detection, "precision") >= 0.0
+        assert _float_value(event_level_detection, "recall") >= 0.0
+        assert _float_value(event_level_detection, "f1") >= 0.0
+
 
 def _assert_deeplog_manifest(
     *,

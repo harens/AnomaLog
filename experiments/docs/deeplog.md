@@ -119,3 +119,44 @@ history-target pairs, not from a global pooled slice across templates.
 | Diagnosis output | Explain anomalies with workflow-aware diagnosis | `experiments/models/deeplog/`: `DeepLogEventFinding`, `DeepLogPredictionOutcome` | partial | The repo exposes event-level triggers, not the paper's workflow diagnosis system. |
 | Workflow construction / diagnosis | Separate tasks and construct workflows or FSAs for diagnosis | not implemented | not implemented | Explicitly out of scope for this pass. |
 | Online false-positive updates | Incrementally adapt the model after false positives | not implemented | not implemented | Explicitly out of scope for this pass. |
+
+## Paper Reproduction Investigation (2026-05-05)
+
+The detailed reproduction audit now lives in
+[experiments/reports/deeplog_paper_reproduction_investigation.md](../reports/deeplog_paper_reproduction_investigation.md).
+
+This section keeps the short version in the main DeepLog note:
+
+- the reproduction configs now use generic split modes, not a DeepLog-only
+  pipeline;
+- `sequence.split.mode` supports `raw_entry_prefix_count`,
+  `raw_entry_prefix_fraction`, and `raw_entry_prefix_normal_fraction`;
+- `sequence.split.application_order` makes split-before-grouping explicit;
+- `sequence.split.straddling_group_policy` makes boundary handling explicit;
+- `grouping = "chronological_stream"` gives BGL a deterministic entry-stream
+  grouping mode while preserving the existing entity-based default for the
+  benchmark configs;
+- chronological stream chunks remain intact as memory containers, and BGL now
+  uses explicit per-event training and evaluation masks so normal targets can
+  train even when a chunk also contains anomalies or post-cutoff context.
+
+### Summary
+
+| Dataset | Status | Main remaining blockers |
+| --- | --- | --- |
+| HDFS | Split protocol now expressible, but not fully paper-faithful | Current dataset/version mismatch; paper counts still do not match the cited first-100k split. |
+| BGL | Split protocol now expressible, training eligibility is explicit, and event-level evaluation is stable | Online update still absent. |
+
+### Added Reproduction Configs
+
+- HDFS:
+  - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
+  - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
+- BGL:
+  - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
+  - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`
+
+### Where To Look Next
+
+- Audit and count details: [DeepLog paper reproduction report](../reports/deeplog_paper_reproduction_investigation.md)
+- Audit command: `uv run python -m experiments.runners.audit_deeplog_data`

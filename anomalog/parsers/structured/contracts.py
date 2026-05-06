@@ -187,6 +187,16 @@ class StructuredSink(Protocol):
                 yields structured rows when invoked.
         """
 
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Return structured rows in the original raw-entry order.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields structured rows ordered by `line_order`.
+        """
+
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         """Return sparse per-line and per-group inline anomaly labels.
 

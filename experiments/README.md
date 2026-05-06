@@ -41,6 +41,23 @@ The checked-in sweep set is split by detector family:
   normal-only dataset variants
 - `bgl_deepcase.toml` and `hdfs_v1_deepcase.toml` sweep the DeepCASE model on
   the chronological dataset variants
+- `configs/models/deepcase_paper.toml` is the paper-aligned DeepCASE model
+  config used by the dedicated reproduction sweeps
+- `hdfs_v1_deepcase_table_iv_prediction.toml`,
+  `hdfs_v1_deepcase_table_x_workload.toml`, and
+  `bgl_deepcase_event_level_extension.toml` are explicit DeepCASE paper / 
+  extension probes. They reuse the paper-aligned `deepcase_paper.toml` model
+  config and fan out over `model.random_seed` for 10-run reporting.
+- `hdfs_v1_deeplog_paper_entry100k_split_partial.toml`,
+  `hdfs_v1_deeplog_paper_entry100k_assign_first.toml`,
+  `bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`, and
+  `bgl_deeplog_paper_10pct_entry_stream_no_online.toml` are explicit DeepLog
+  paper-reproduction probes. They use the generic raw-entry split modes and
+  chronological-stream grouping added for paper-faithful reproduction. For the
+  BGL chronological stream probes, the stream chunks stay intact and the
+  training corpus uses an explicit per-event eligibility mask so normal target
+  events can train even when a chunk also contains anomalies or post-cutoff
+  context.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix, whereas DeepCASE-style
@@ -92,6 +109,15 @@ Add `--force` to replace the deterministic output directories for the same
 concrete sweep variants.
 Add `--write-predictions` if you want each run to persist `predictions.jsonl`
 alongside the other result artefacts.
+
+To audit dataset/split readiness for DeepLog paper reproduction:
+
+```bash
+uv run python -m experiments.runners.audit_deeplog_data
+```
+
+The DeepCASE paper-readiness report is checked in at
+`experiments/reports/deepcase_reproduction_readiness.md`.
 
 ## Caching Strategy
 

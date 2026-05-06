@@ -1,0 +1,8 @@
+name = "hdfs_v1_deepcase_table_x_workload"
+dataset = "hdfs_v1_entity_chronological"
+model = "deepcase_paper"
+description = "HDFS DeepCASE Table X workload-reduction reproduction sweep."
+
+# [[axes]]
+# path = "model.random_seed"
+# values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

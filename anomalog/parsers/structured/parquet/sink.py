@@ -146,6 +146,57 @@ class ParquetStructuredSink(StructuredSink):
 
         return _iter
 
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Iterate over structured rows in raw-entry order.
+
+        The parquet dataset is partitioned by entity buckets, so this merges the
+        bucket-local scans by `line_order` to recover the original raw-entry
+        chronology without materialising the entire dataset in memory.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields structured rows ordered by `line_order`.
+        """
+
+        def _iter() -> Iterator[StructuredLine]:
+            buckets = sorted(self._iter_buckets())
+            buckets_with_null = [*buckets, None]
+            bucket_iters: list[Iterator[StructuredLine]] = []
+            for bucket in buckets_with_null:
+                if bucket is None:
+                    expr = ds.field(ENTITY_BUCKET_FIELD).is_null()
+                else:
+                    expr = ds.field(ENTITY_BUCKET_FIELD) == bucket
+                bucket_iters.append(
+                    self.iter_structured_lines(
+                        batch_size=self._DEFAULT_BATCH_SIZE,
+                        filter_expr=expr,
+                    )(),
+                )
+
+            heap: list[tuple[int, int, StructuredLine, Iterator[StructuredLine]]] = []
+            for idx, it in enumerate(bucket_iters):
+                try:
+                    first = next(it)
+                except StopIteration:
+                    continue
+                heap.append((int(first.line_order), idx, first, it))
+
+            heapq.heapify(heap)
+
+            while heap:
+                _, idx, row, it = heapq.heappop(heap)
+                yield row
+                try:
+                    nxt = next(it)
+                except StopIteration:
+                    continue
+                heapq.heappush(heap, (int(nxt.line_order), idx, nxt, it))
+
+        return _iter
+
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         """Load sparse inline labels directly from parquet batches.
 

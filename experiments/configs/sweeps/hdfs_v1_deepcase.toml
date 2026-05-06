@@ -1,8 +1,0 @@
-name = "hdfs_v1_deepcase"
-dataset = "hdfs_v1_entity_chronological"
-model = "deepcase_default"
-description = "HDFS v1 DeepCASE sweep over the fixed chronological train fraction."
-
-[[axes]]
-path = "dataset.sequence.train_fraction"
-values = [0.01, 0.1, 0.2]

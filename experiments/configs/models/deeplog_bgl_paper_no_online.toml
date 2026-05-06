@@ -1,0 +1,6 @@
+name = "deeplog_bgl_paper_no_online"
+detector = "deeplog"
+history_size = 3
+top_g = 6
+num_layers = 1
+hidden_size = 256

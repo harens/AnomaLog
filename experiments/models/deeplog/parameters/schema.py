@@ -26,6 +26,7 @@ from experiments.models.deeplog.shared import (
     NormalisationStats,
     ParameterFeatureSchema,
     ParameterModelState,
+    training_event_index_mask,
 )
 
 if TYPE_CHECKING:
@@ -241,7 +242,12 @@ def parameter_covered_event_count(
     """
     covered_event_count = 0
     for sequence in sequences:
-        for template, parameters, dt_prev_ms in sequence.events:
+        eligible_target_indexes = set(training_event_index_mask(sequence))
+        for event_index, (template, parameters, dt_prev_ms) in enumerate(
+            sequence.events,
+        ):
+            if event_index not in eligible_target_indexes:
+                continue
             state = parameter_models.get(template)
             if state is None:
                 continue

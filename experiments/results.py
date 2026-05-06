@@ -182,6 +182,7 @@ def build_dataset_manifest(
         sequences,
         sequence_summary=sequence_summary,
     )
+    raw_entry_split_summary = sequences.build_raw_entry_split_summary()
     return {
         "run_fingerprint": result_paths.run_fingerprint,
         "dataset_fingerprint": dataset_fingerprint,
@@ -205,6 +206,11 @@ def build_dataset_manifest(
         },
         "sequence_config": serialise_config(bundle.dataset.sequence),
         "sequence_split_summary": split_summary.as_dict(),
+        **(
+            {"raw_entry_split_summary": raw_entry_split_summary.as_dict()}
+            if raw_entry_split_summary is not None
+            else {}
+        ),
         "sequence_count": sequence_summary.sequence_count,
         "sequence_split_counts": {
             "train": sequence_summary.train_sequence_count,

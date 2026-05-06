@@ -1,3 +1,4 @@
+# ruff: noqa: PLR0913, PLR2004
 """Tests for the scoped DeepLog experiment implementation."""
 
 from __future__ import annotations
@@ -82,6 +83,9 @@ def _sequence(
     dts_by_event: list[int | None] | None = None,
     label: int = 0,
     split_label: SplitLabel = SplitLabel.TEST,
+    event_labels: tuple[int | None, ...] | None = None,
+    training_event_mask: tuple[bool, ...] | None = None,
+    evaluation_event_mask: tuple[bool, ...] | None = None,
 ) -> TemplateSequence:
     resolved_params = params_by_event or [[] for _ in templates]
     resolved_dts = dts_by_event or [None for _ in templates]
@@ -99,6 +103,9 @@ def _sequence(
         entity_ids=["entity-1"],
         window_id=0,
         split_label=split_label,
+        event_labels=event_labels,
+        training_event_mask=training_event_mask,
+        evaluation_event_mask=evaluation_event_mask,
     )
 
 
@@ -261,6 +268,36 @@ def test_iter_key_examples_skips_sequences_shorter_than_history_window() -> None
     )
 
     assert examples == []
+
+
+def test_iter_key_examples_respects_eligible_target_indexes() -> None:
+    """Training eligibility should filter key-model targets without breaking context."""
+    examples = list(
+        iter_key_examples(
+            sequences=[
+                TemplateSequence(
+                    events=[
+                        ("A", [], None),
+                        ("B", [], None),
+                        ("C", [], None),
+                        ("D", [], None),
+                    ],
+                    label=1,
+                    entity_ids=["entity-1"],
+                    window_id=0,
+                    split_label=SplitLabel.TRAIN,
+                    training_event_mask=(False, True, True, False),
+                ),
+            ],
+            template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
+            history_size=2,
+            eligible_target_indexes={1, 2},
+        ),
+    )
+
+    assert examples == [
+        ([0, 1], 2),
+    ]
 
 
 def test_fit_key_model_reports_example_preparation_progress(
@@ -717,6 +754,100 @@ def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> No
     }
 
 
+def test_deeplog_event_level_metrics_follow_event_labels() -> None:
+    """DeepLog should report event-level precision and recall from line labels."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    sequence = _sequence(
+        templates=["A", "B", "C", "D"],
+        event_labels=(0, 0, 0, 1),
+    )
+
+    detector.predict(sequence)
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    event_metrics = metrics.event_level_detection
+
+    assert event_metrics is not None
+    assert event_metrics.task == "event_level_detection"
+    assert event_metrics.events_seen == 2
+    assert event_metrics.events_eligible == 2
+    assert event_metrics.tp == 1
+    assert event_metrics.tn == 1
+    assert event_metrics.fp == 0
+    assert event_metrics.fn == 0
+    assert event_metrics.precision == pytest.approx(1.0)
+    assert event_metrics.recall == pytest.approx(1.0)
+    assert event_metrics.f1 == pytest.approx(1.0)
+
+
+def test_deeplog_event_level_metrics_use_event_masks_not_chunk_labels() -> None:
+    """DeepLog should score mixed chunks by event mask, not by chunk label."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[3.0, 2.0, 1.0, 0.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    sequence = _sequence(
+        templates=["A", "B", "C", "D"],
+        split_label=SplitLabel.TRAIN,
+        event_labels=(0, 0, 0, 1),
+        training_event_mask=(True, True, True, False),
+        evaluation_event_mask=(False, False, False, True),
+    )
+
+    detector.predict(sequence)
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    event_metrics = metrics.event_level_detection
+
+    assert event_metrics is not None
+    assert detector.test_event_count == 1
+    assert event_metrics.events_seen == 1
+    assert event_metrics.events_eligible == 1
+    assert event_metrics.tp == 1
+    assert event_metrics.tn == 0
+    assert event_metrics.fp == 0
+    assert event_metrics.fn == 0
+
+
 def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() -> None:
     """Next-event diagnostics should aggregate macro, weighted, and top-k metrics."""
     state = NextEventPredictionState(
@@ -1131,11 +1262,39 @@ def test_fit_rejects_train_sets_without_normal_sequences() -> None:
     )
 
     progress = Progress(disable=True)
-    with pytest.raises(ValueError, match="normal training sequence"), progress:
+    with pytest.raises(ValueError, match="eligible training target"), progress:
         detector.fit(
             [_sequence(templates=["A", "B", "C"], label=1)],
             progress=progress,
         )
+
+
+def test_build_normal_training_corpus_keeps_eligible_targets_from_mixed_chunks() -> (
+    None
+):
+    """Mixed chronological chunks should still expose normal training targets."""
+    progress = Progress(disable=True)
+    sequence = TemplateSequence(
+        events=[
+            ("A", [], None),
+            ("B", [], None),
+            ("C", [], None),
+            ("D", [], None),
+        ],
+        label=1,
+        entity_ids=["entity-1"],
+        window_id=0,
+        split_label=SplitLabel.TRAIN,
+        event_labels=(1, 0, 0, 1),
+        training_event_mask=(False, True, True, False),
+    )
+
+    corpus = build_normal_training_corpus([sequence], progress=progress)
+    expected_event_count = 2
+
+    assert corpus.event_count == expected_event_count
+    assert corpus.templates == ("A", "B", "C", "D")
+    assert corpus.sequences == (sequence,)
 
 
 def test_build_normal_training_corpus_rejects_multi_entity_sequences() -> None:

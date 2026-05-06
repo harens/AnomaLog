@@ -1,3 +1,4 @@
+# ruff: noqa: D101
 """DeepLog detector orchestration and manifest reporting."""
 
 from __future__ import annotations
@@ -35,11 +36,13 @@ from experiments.models.deeplog.shared import (
     DeepLogEventFinding,
     DeepLogKeyFinding,
     DeepLogManifest,
+    DeepLogParameterFinding,
     KeyLSTM,
     ParameterModelManifestEntry,
     ParameterModelState,
     SkippedParameterModelEntry,
     build_normal_training_corpus,
+    evaluation_event_index_mask,
 )
 from experiments.models.next_event_metrics import (
     NextEventPredictionDiagnostics,
@@ -89,9 +92,40 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
     Attributes:
         next_event_prediction (NextEventPredictionDiagnostics | None): Latest
             key-model next-event diagnostics.
+        event_level_detection (DeepLogEventLevelDetectionDiagnostics | None):
+            Event-level anomaly metrics derived from labelled log entries.
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
+    event_level_detection: DeepLogEventLevelDetectionDiagnostics | None
+
+
+class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
+    """Event-level DeepLog metrics derived from labelled log entries.
+
+    Attributes:
+        task (str): Stable task label for downstream reporting.
+        events_seen (int): Labelled events encountered in the scored split.
+        events_eligible (int): Labelled events with a full history window.
+        tp (int): True positives at the event level.
+        tn (int): True negatives at the event level.
+        fp (int): False positives at the event level.
+        fn (int): False negatives at the event level.
+        precision (float): Event-level precision.
+        recall (float): Event-level recall.
+        f1 (float): Event-level F1 score.
+    """
+
+    task: str
+    events_seen: int
+    events_eligible: int
+    tp: int
+    tn: int
+    fp: int
+    fn: int
+    precision: float
+    recall: float
+    f1: float
 
 
 class DeepLogModelConfig(
@@ -99,8 +133,6 @@ class DeepLogModelConfig(
     tag="deeplog",
     frozen=True,
 ):
-    """Config for the scoped DeepLog reimplementation."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
-
     history_size: Annotated[
         PositiveInt,
         msgspec.Meta(
@@ -254,6 +286,12 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         default=None,
         repr=False,
     )
+    _event_level_events_seen: int = field(default=0, init=False, repr=False)
+    _event_level_events_eligible: int = field(default=0, init=False, repr=False)
+    _event_level_tp: int = field(default=0, init=False, repr=False)
+    _event_level_tn: int = field(default=0, init=False, repr=False)
+    _event_level_fp: int = field(default=0, init=False, repr=False)
+    _event_level_fn: int = field(default=0, init=False, repr=False)
 
     def fit(
         self,
@@ -305,6 +343,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self.train_event_count = train_event_count
         self.train_parameter_covered_event_count = train_parameter_covered_event_count
         self._reset_next_event_prediction_state()
+        self._reset_event_level_state()
         self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> DeepLogPredictionOutcome:
@@ -328,7 +367,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         key_triggered = False
         parameter_triggered = False
         scores: list[float] = []
-        self.test_event_count += len(sequence.events)
+        evaluation_event_indexes = set(evaluation_event_index_mask(sequence))
+        self.test_event_count += len(evaluation_event_indexes)
 
         # DeepLog makes one decision per event after the initial warm-up
         # window. First it asks whether the next log key itself looks normal.
@@ -345,6 +385,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._record_next_event_predictions(
             sequence=sequence,
             key_findings=key_findings,
+            evaluation_event_indexes=evaluation_event_indexes,
         )
         # The paper's inference path is "key first, parameters second". We
         # therefore only pay the parameter-model cost for events whose key
@@ -352,7 +393,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         parameter_eligible_event_indexes = {
             event_index
             for event_index, key_finding in key_findings.items()
-            if not key_finding.is_anomalous
+            if not key_finding.is_anomalous and event_index in evaluation_event_indexes
         }
         parameter_findings = score_parameter_sequence(
             sequence=sequence,
@@ -361,7 +402,9 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             eligible_event_indexes=parameter_eligible_event_indexes,
         )
 
-        event_indexes = sorted(set(key_findings) | set(parameter_findings))
+        event_indexes = sorted(
+            (set(key_findings) | set(parameter_findings)) & evaluation_event_indexes,
+        )
         for event_index in event_indexes:
             key_finding = key_findings.get(event_index)
             parameter_finding = parameter_findings.get(event_index)
@@ -387,6 +430,12 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                     key_model_finding=key_finding,
                     parameter_model_finding=parameter_finding,
                 ),
+            )
+            self._record_event_level_decision(
+                sequence=sequence,
+                event_index=event_index,
+                key_finding=key_finding,
+                parameter_finding=parameter_finding,
             )
 
         # An AnomaLog run still needs one sequence-level label and score, so we
@@ -486,17 +535,25 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         """
         del run_metrics
         next_event_prediction = self._next_event_prediction_state_snapshot()
+        event_level_detection = self._event_level_state_snapshot()
         self._reset_next_event_prediction_state()
-        return DeepLogRunMetrics(next_event_prediction=next_event_prediction)
+        self._reset_event_level_state()
+        return DeepLogRunMetrics(
+            next_event_prediction=next_event_prediction,
+            event_level_detection=event_level_detection,
+        )
 
     def _record_next_event_predictions(
         self,
         *,
         sequence: TemplateSequence,
         key_findings: dict[int, DeepLogKeyFinding],
+        evaluation_event_indexes: set[int],
     ) -> None:
         state = self._ensure_next_event_prediction_state()
         for event_index, template in enumerate(sequence.templates):
+            if event_index not in evaluation_event_indexes:
+                continue
             if event_index < self.config.history_size:
                 state.record_exclusion(
                     NextEventPredictionExclusionReason.INSUFFICIENT_HISTORY,
@@ -534,6 +591,14 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             vocabulary_policy=self.config.vocabulary_policy,
         )
 
+    def _reset_event_level_state(self) -> None:
+        self._event_level_events_seen = 0
+        self._event_level_events_eligible = 0
+        self._event_level_tp = 0
+        self._event_level_tn = 0
+        self._event_level_fp = 0
+        self._event_level_fn = 0
+
     def _next_event_prediction_state_snapshot(
         self,
     ) -> NextEventPredictionDiagnostics | None:
@@ -547,6 +612,71 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         if state is None:
             return None
         return state.snapshot()
+
+    def _event_level_state_snapshot(
+        self,
+    ) -> DeepLogEventLevelDetectionDiagnostics | None:
+        if self._event_level_events_seen <= 0:
+            return None
+        precision = (
+            self._event_level_tp / (self._event_level_tp + self._event_level_fp)
+            if (self._event_level_tp + self._event_level_fp)
+            else 0.0
+        )
+        recall = (
+            self._event_level_tp / (self._event_level_tp + self._event_level_fn)
+            if (self._event_level_tp + self._event_level_fn)
+            else 0.0
+        )
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall)
+            else 0.0
+        )
+        return DeepLogEventLevelDetectionDiagnostics(
+            task="event_level_detection",
+            events_seen=self._event_level_events_seen,
+            events_eligible=self._event_level_events_eligible,
+            tp=self._event_level_tp,
+            tn=self._event_level_tn,
+            fp=self._event_level_fp,
+            fn=self._event_level_fn,
+            precision=round(precision, 8),
+            recall=round(recall, 8),
+            f1=round(f1, 8),
+        )
+
+    def _record_event_level_decision(
+        self,
+        *,
+        sequence: TemplateSequence,
+        event_index: int,
+        key_finding: DeepLogKeyFinding | None,
+        parameter_finding: DeepLogParameterFinding | None,
+    ) -> None:
+        if sequence.event_labels is None:
+            return
+        if event_index >= len(sequence.event_labels):
+            return
+        actual_label = sequence.event_labels[event_index]
+        if actual_label is None:
+            return
+        self._event_level_events_seen += 1
+        if key_finding is None and parameter_finding is None:
+            return
+        self._event_level_events_eligible += 1
+        actual_is_anomalous = actual_label != 0
+        predicted_is_anomalous = (
+            key_finding is not None and key_finding.is_anomalous
+        ) or (parameter_finding is not None and parameter_finding.is_anomalous)
+        if actual_is_anomalous and predicted_is_anomalous:
+            self._event_level_tp += 1
+        elif not actual_is_anomalous and not predicted_is_anomalous:
+            self._event_level_tn += 1
+        elif not actual_is_anomalous and predicted_is_anomalous:
+            self._event_level_fp += 1
+        else:
+            self._event_level_fn += 1
 
 
 def _fraction(numerator: int, denominator: int) -> float:

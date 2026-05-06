@@ -1,0 +1,4 @@
+name = "bgl_deeplog_paper_1pct_normal_entry_stream_no_online"
+dataset = "bgl_deeplog_paper_1pct_normal_entry_stream_no_online"
+model = "deeplog_bgl_paper_no_online"
+description = "DeepLog BGL paper reproduction for the 1% normal entry-stream setting without online update."

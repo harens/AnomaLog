@@ -92,8 +92,11 @@ def _assert_deepcase_metrics(
     assert "abstained_anomalous_label_count" in metrics
     assert "abstained_normal_label_count" in metrics
     assert "parent_sequence_fallback_count" in metrics
+    assert "random_seed" in metrics
     assert "counted_predictions" in metrics
     assert "next_event_prediction" in metrics
+    assert "manual_workload_reduction" in metrics
+    assert "semi_automatic_workload_reduction" in metrics
     assert metrics["sequence_count"] == (
         metrics["train_sequence_count"]
         + metrics["test_sequence_count"]
@@ -119,6 +122,13 @@ def _assert_deepcase_metrics(
     next_event_prediction = metrics["next_event_prediction"]
     assert isinstance(next_event_prediction, dict)
     assert next_event_prediction["task"] == "next_event_prediction"
+    assert "table_iv_prediction_metrics" in next_event_prediction
+    manual_workload_reduction = metrics["manual_workload_reduction"]
+    semi_automatic_workload_reduction = metrics["semi_automatic_workload_reduction"]
+    assert isinstance(manual_workload_reduction, dict)
+    assert isinstance(semi_automatic_workload_reduction, dict)
+    assert manual_workload_reduction["mode"] == "manual"
+    assert semi_automatic_workload_reduction["mode"] == "semi_automatic"
 
 
 def _assert_deepcase_prediction_diagnostics(
@@ -199,6 +209,7 @@ def _assert_deepcase_model_manifest(
     assert "known_benign_cluster_count" in model_manifest
     assert "known_malicious_cluster_count" in model_manifest
     assert "unknown_cluster_score_count" in model_manifest
+    assert "random_seed" in model_manifest
     assert sequence_split_summary["train_on_normal_entities_only"] is False
     assert sequence_config["train_fraction"] == pytest.approx(
         sequence_split_summary["requested_train_fraction"],

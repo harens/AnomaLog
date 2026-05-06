@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, runtime_checkab
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredSink
 from anomalog.sequences import (
+    ChronologicalStreamSequenceBuilder,
     EntitySequenceBuilder,
     FixedSequenceBuilder,
     TimeSequenceBuilder,
@@ -102,6 +103,26 @@ class TemplatedDataset:
             EntitySequenceBuilder: Entity-grouped sequence view.
         """
         return self.sequences()
+
+    def group_by_chronological_stream(
+        self,
+        *,
+        chunk_size: int = 100_000,
+    ) -> ChronologicalStreamSequenceBuilder:
+        """Group sequences into deterministic chronological stream chunks.
+
+        Args:
+            chunk_size (int): Maximum number of raw entries per emitted chunk.
+
+        Returns:
+            ChronologicalStreamSequenceBuilder: Chronological stream view.
+        """
+        return ChronologicalStreamSequenceBuilder(
+            sink=self.sink,
+            infer_template=self.template_parser.inference,
+            label_for_group=self.anomaly_labels.label_for_group,
+            chunk_size=chunk_size,
+        )
 
     def group_by_fixed_window(
         self,

@@ -1,0 +1,21 @@
+name = "bgl_deeplog_paper_1pct_normal_entry_stream_no_online"
+dataset_name = "BGL"
+preset = "bgl"
+template_parser = "drain3"
+description = "DeepLog BGL paper-reproduction config: first 1% normal raw entries, chronological stream grouping, and no online update."
+
+[sequence]
+grouping = "chronological_stream"
+chunk_size = 100000
+train_fraction = 0.01
+test_fraction = 0.99
+
+[sequence.split]
+mode = "raw_entry_prefix_normal_fraction"
+train_normal_entry_fraction = 0.01
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[cache_paths]
+data_root = "data/bgl_entity"
+cache_root = ".cache/bgl_entity"

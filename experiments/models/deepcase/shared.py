@@ -121,6 +121,64 @@ class DeepCaseEventDecisionMetrics(msgspec.Struct, frozen=True):
     event_true_anomalous_count: int
 
 
+class DeepCaseWorkloadMode(str, Enum):
+    """Paper workload-reduction modes supported by DeepCASE audits.
+
+    Attributes:
+        MANUAL: Operator samples clusters directly during manual review.
+        SEMI_AUTOMATIC: Operator only reviews unmatched or abstained cases.
+    """
+
+    MANUAL = "manual"
+    SEMI_AUTOMATIC = "semi_automatic"
+
+
+@dataclass(frozen=True, slots=True)
+class DeepCaseWorkloadAlertSampling:
+    """Manual-mode alert sampling for DeepCASE workload calculations.
+
+    Attributes:
+        cluster_count (int): Number of learned clusters.
+        alerts_per_cluster (int): Number of alerts sampled per cluster.
+    """
+
+    cluster_count: int
+    alerts_per_cluster: int = 10
+
+
+class DeepCaseWorkloadReductionMetrics(msgspec.Struct, frozen=True):
+    """Paper-style DeepCASE workload-reduction metrics.
+
+    Attributes:
+        mode (DeepCaseWorkloadMode): Manual or semi-automatic workload mode.
+        total_contextual_sequence_count (int): Total contextual sequences
+            considered in the workload calculation.
+        covered_contextual_sequence_count (int): Sequences handled by the
+            detector or cluster database.
+        uncovered_contextual_sequence_count (int): Sequences that still need
+            manual inspection.
+        cluster_count (int | None): Number of learned clusters when alerts
+            are sampled from clusters in manual mode.
+        alerts_per_cluster (int | None): Samples shown per cluster.
+        alert_count (int | None): Total operator-facing alerts, if applicable.
+        coverage (float): Covered sequences divided by total sequences.
+        reduction (float): Manual workload reduction fraction.
+        overall (float): Overall reduction after accounting for uncovered
+            sequences.
+    """
+
+    mode: DeepCaseWorkloadMode
+    total_contextual_sequence_count: int
+    covered_contextual_sequence_count: int
+    uncovered_contextual_sequence_count: int
+    cluster_count: int | None
+    alerts_per_cluster: int | None
+    alert_count: int | None
+    coverage: float
+    reduction: float
+    overall: float
+
+
 # Sentinel scores emitted by the DeepCase library for non-cluster outcomes.
 SPECIAL_SCORE_REASONS: dict[float, ScoreReason] = {
     -1.0: ScoreReason.NOT_CONFIDENT_ENOUGH,
@@ -533,6 +591,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         cluster_score_strategy (str): Cluster score aggregation strategy.
         no_score (int): Special no-score value passed to DeepCASE.
         device (str): Resolved runtime torch device.
+        random_seed (int): Configured random seed used for the run.
         train_event_vocabulary_size (int): Number of train templates mapped to
             contiguous DeepCASE ids.
         train_sample_count (int): Number of event-centered training samples.
@@ -572,6 +631,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     cluster_score_strategy: str
     no_score: int
     device: str
+    random_seed: int
     train_event_vocabulary_size: int
     train_sample_count: int
     clustered_sample_count: int
@@ -625,6 +685,7 @@ def build_sample_batch(
             )
             for template in templates
         ]
+        sample_indexes = _deepcase_prediction_sample_indexes(sequence)
         sequence_batch = _SequenceBatchData(
             sequence=sequence,
             templates=templates,
@@ -633,6 +694,7 @@ def build_sample_batch(
                 event_id_map.template_to_event_id.get(template)
                 for template in templates
             ],
+            sample_indexes=sample_indexes,
         )
         _append_sequence_samples(
             sequence_batch=sequence_batch,
@@ -693,6 +755,7 @@ def build_training_batch(
                 template_to_event_id.setdefault(template, len(template_to_event_id))
                 for template in templates
             ]
+            sample_indexes = _deepcase_training_sample_indexes(sequence)
             sequence_batch = _SequenceBatchData(
                 sequence=sequence,
                 templates=templates,
@@ -700,6 +763,7 @@ def build_training_batch(
                 original_event_ids=[
                     template_to_event_id.get(template) for template in templates
                 ],
+                sample_indexes=sample_indexes,
             )
             _append_sequence_samples(
                 sequence_batch=sequence_batch,
@@ -759,6 +823,76 @@ def finding_reason_for_score(raw_score: float) -> ScoreReason:
     if raw_score > 0:
         return ScoreReason.KNOWN_MALICIOUS_CLUSTER
     return ScoreReason.KNOWN_BENIGN_CLUSTER
+
+
+def build_workload_reduction_metrics(
+    *,
+    mode: DeepCaseWorkloadMode,
+    total_contextual_sequence_count: int,
+    covered_contextual_sequence_count: int,
+    uncovered_contextual_sequence_count: int,
+    alert_sampling: DeepCaseWorkloadAlertSampling | None = None,
+) -> DeepCaseWorkloadReductionMetrics:
+    """Build DeepCASE paper-style workload metrics from aggregate counts.
+
+    Args:
+        mode (DeepCaseWorkloadMode): Manual or semi-automatic workload mode.
+        total_contextual_sequence_count (int): Total sequences considered.
+        covered_contextual_sequence_count (int): Sequences handled
+            automatically or by a learned cluster database.
+        uncovered_contextual_sequence_count (int): Sequences that still need
+            manual inspection.
+        alert_sampling (DeepCaseWorkloadAlertSampling | None): Manual-mode
+            alert sampling details. This is ignored for semi-automatic mode.
+
+    Returns:
+        DeepCaseWorkloadReductionMetrics: Paper-style workload summary.
+    """
+    coverage = (
+        covered_contextual_sequence_count / total_contextual_sequence_count
+        if total_contextual_sequence_count
+        else 0.0
+    )
+    if mode is DeepCaseWorkloadMode.MANUAL:
+        cluster_count = None if alert_sampling is None else alert_sampling.cluster_count
+        alerts_per_cluster = (
+            None if alert_sampling is None else alert_sampling.alerts_per_cluster
+        )
+        alert_count = (
+            None
+            if alert_sampling is None
+            else alert_sampling.cluster_count * alert_sampling.alerts_per_cluster
+        )
+        reduction = (
+            1.0 - (alert_count / covered_contextual_sequence_count)
+            if alert_count is not None and covered_contextual_sequence_count
+            else 0.0
+        )
+        overall = (
+            1.0
+            - ((alert_count or 0) + uncovered_contextual_sequence_count)
+            / total_contextual_sequence_count
+            if total_contextual_sequence_count
+            else 0.0
+        )
+    else:
+        cluster_count = None if alert_sampling is None else alert_sampling.cluster_count
+        alerts_per_cluster = None
+        alert_count = None
+        reduction = 1.0 if total_contextual_sequence_count else 0.0
+        overall = coverage
+    return DeepCaseWorkloadReductionMetrics(
+        mode=mode,
+        total_contextual_sequence_count=total_contextual_sequence_count,
+        covered_contextual_sequence_count=covered_contextual_sequence_count,
+        uncovered_contextual_sequence_count=uncovered_contextual_sequence_count,
+        cluster_count=cluster_count,
+        alerts_per_cluster=alerts_per_cluster,
+        alert_count=alert_count,
+        coverage=coverage,
+        reduction=reduction,
+        overall=overall,
+    )
 
 
 def decision_label_for_score(raw_score: float) -> int:
@@ -848,6 +982,7 @@ def _context_for_target(
         ...         templates=sequence.templates,
         ...         sequence_event_ids=[10, 11, 12],
         ...         original_event_ids=[10, 11, 12],
+        ...         sample_indexes=[2],
         ...     ),
         ...     target_index=2,
         ...     context_policy=ContextWindowPolicy(
@@ -951,12 +1086,15 @@ class _SequenceBatchData:
             ``templates``.
         original_event_ids (Sequence[int | None]): Original train-vocabulary
             ids aligned with ``templates``.
+        sample_indexes (Sequence[int]): Event indexes selected for the current
+            sampling mode.
     """
 
     sequence: TemplateSequence
     templates: Sequence[str]
     sequence_event_ids: Sequence[int]
     original_event_ids: Sequence[int | None]
+    sample_indexes: Sequence[int]
 
 
 @dataclass(slots=True)
@@ -1074,9 +1212,9 @@ def _append_sequence_samples(
     sequence_event_ids = sequence_batch.sequence_event_ids
     parent_sample_label = int(is_anomalous_label(sequence.label))
     event_labels = sequence.event_labels
-    for target_index, (template, event_id) in enumerate(
-        zip(templates, sequence_event_ids, strict=True),
-    ):
+    for target_index in sequence_batch.sample_indexes:
+        template = templates[target_index]
+        event_id = sequence_event_ids[target_index]
         target_event_label = (
             None if event_labels is None else event_labels[target_index]
         )
@@ -1101,3 +1239,44 @@ def _append_sequence_samples(
         batch_columns.original_event_ids.append(
             sequence_batch.original_event_ids[target_index],
         )
+
+
+def _deepcase_training_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    """Return train-time sample indexes for one DeepCASE sequence.
+
+    Explicit per-event masks take precedence so event-level extension
+    configurations can preserve chronological split boundaries without changing
+    the default whole-sequence behaviour used by the existing entity-grouped
+    benchmarks.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being sampled.
+
+    Returns:
+        list[int]: Event indexes selected for training.
+    """
+    if sequence.training_event_mask is not None:
+        return [
+            event_index
+            for event_index, is_eligible in enumerate(sequence.training_event_mask)
+            if is_eligible
+        ]
+    return list(range(len(sequence.events)))
+
+
+def _deepcase_prediction_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    """Return prediction-time sample indexes for one DeepCASE sequence.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being sampled.
+
+    Returns:
+        list[int]: Event indexes selected for scoring.
+    """
+    if sequence.evaluation_event_mask is not None:
+        return [
+            event_index
+            for event_index, is_eligible in enumerate(sequence.evaluation_event_mask)
+            if is_eligible
+        ]
+    return list(range(len(sequence.events)))

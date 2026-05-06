@@ -1,0 +1,4 @@
+name = "bgl_deeplog_paper_10pct_entry_stream_no_online"
+dataset = "bgl_deeplog_paper_10pct_entry_stream_no_online"
+model = "deeplog_bgl_paper_no_online"
+description = "DeepLog BGL paper reproduction for the 10% raw entry-stream setting without online update."

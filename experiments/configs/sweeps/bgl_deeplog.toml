@@ -1,8 +1,0 @@
-name = "bgl_deeplog"
-dataset = "bgl_entity"
-model = "deeplog_default"
-description = "BGL DeepLog sweep over the fixed chronological train fraction."
-
-[[axes]]
-path = "dataset.sequence.train_fraction"
-values = [0.01, 0.1, 0.2]

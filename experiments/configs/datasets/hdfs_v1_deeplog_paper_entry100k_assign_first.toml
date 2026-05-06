@@ -1,0 +1,21 @@
+name = "hdfs_v1_deeplog_paper_entry100k_assign_first"
+dataset_name = "HDFS_V1"
+preset = "hdfs_v1"
+template_parser = "drain3"
+description = "DeepLog HDFS paper-reproduction ablation: first 100k raw entries with assign-by-first-event straddler handling and normal-only entity training."
+
+[sequence]
+grouping = "entity"
+train_fraction = 0.01
+test_fraction = 0.99
+train_on_normal_entities_only = true
+
+[sequence.split]
+mode = "raw_entry_prefix_count"
+train_entry_count = 100000
+application_order = "before_grouping"
+straddling_group_policy = "assign_by_first_event"
+
+[cache_paths]
+data_root = "data/hdfs_entity"
+cache_root = ".cache/hdfs_entity"

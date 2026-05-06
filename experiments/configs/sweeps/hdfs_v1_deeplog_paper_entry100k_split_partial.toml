@@ -1,0 +1,4 @@
+name = "hdfs_v1_deeplog_paper_entry100k_split_partial"
+dataset = "hdfs_v1_deeplog_paper_entry100k_split_partial"
+model = "deeplog_default"
+description = "DeepLog HDFS paper reproduction with split-partial straddler handling."

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeVar
 
@@ -9,6 +10,11 @@ import msgspec
 
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader
+from anomalog.sequences import (
+    RawEntrySplitMode,
+    SplitApplicationOrder,
+    StraddlingGroupPolicy,
+)
 from anomalog.sources import (
     DatasetSource,
     LocalDirSource,
@@ -288,6 +294,80 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
         )
 
 
+class RawEntrySplitConfigBase(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    forbid_unknown_fields=True,
+    tag_field="mode",
+):
+    """Shared configuration for raw-entry chronological split modes.
+
+    Attributes:
+        application_order (SplitApplicationOrder): When to apply the split
+            relative to grouping.
+        straddling_group_policy (StraddlingGroupPolicy): How to handle groups
+            that cross the raw-entry split boundary.
+    """
+
+    application_order: SplitApplicationOrder = SplitApplicationOrder.BEFORE_GROUPING
+    straddling_group_policy: StraddlingGroupPolicy = (
+        StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+    )
+
+
+class RawEntryPrefixCountSplitConfig(
+    RawEntrySplitConfigBase,
+    tag="raw_entry_prefix_count",
+    frozen=True,
+):
+    """Split by the first N raw entries in chronological order.
+
+    Attributes:
+        train_entry_count (int): Number of raw entries to keep in the train
+            prefix.
+    """
+
+    train_entry_count: int
+
+
+class RawEntryPrefixFractionSplitConfig(
+    RawEntrySplitConfigBase,
+    tag="raw_entry_prefix_fraction",
+    frozen=True,
+):
+    """Split by the first p fraction of raw entries in chronological order.
+
+    Attributes:
+        train_entry_fraction (Annotated[float, msgspec.Meta(gt=0.0, le=1.0)]):
+            Fraction of raw entries to keep in the train prefix.
+    """
+
+    train_entry_fraction: Annotated[float, msgspec.Meta(gt=0.0, le=1.0)]
+
+
+class RawEntryPrefixNormalFractionSplitConfig(
+    RawEntrySplitConfigBase,
+    tag="raw_entry_prefix_normal_fraction",
+    frozen=True,
+):
+    """Split by the first p fraction of normal raw entries in chronological order.
+
+    Attributes:
+        train_normal_entry_fraction (Annotated[float, msgspec.Meta(gt=0.0, le=1.0)]):
+            Fraction of normal raw entries to keep in the train prefix.
+    """
+
+    train_normal_entry_fraction: Annotated[float, msgspec.Meta(gt=0.0, le=1.0)]
+
+
+RawEntrySplitConfig: TypeAlias = (
+    RawEntryPrefixCountSplitConfig
+    | RawEntryPrefixFractionSplitConfig
+    | RawEntryPrefixNormalFractionSplitConfig
+)
+
+
 SweepOverrideValues = Annotated[list[Any], msgspec.Meta(min_length=1)]
 TrainFraction = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
 TestFraction = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
@@ -306,6 +386,8 @@ class SequenceConfigBase(
     """Shared sequence-generation settings for a dataset variant.
 
     Attributes:
+        split (RawEntrySplitConfig | None): Optional raw-entry split mode to
+            apply before grouping.
         step (int | None): Grouping-specific step between windows. `None`
             delegates to the grouping mode's default.
         train_fraction (TrainFraction): Requested training fraction for the
@@ -313,6 +395,7 @@ class SequenceConfigBase(
         test_fraction (TestFraction): Fixed test suffix fraction.
     """
 
+    split: RawEntrySplitConfig | None = None
     step: int | None = None
     train_fraction: TrainFraction = 0.2
     test_fraction: TestFraction = 0.8
@@ -325,10 +408,17 @@ class SequenceConfigBase(
                 room for the train prefix.
         """
         try:
-            validate_split_fractions(
-                train_frac=self.train_fraction,
-                test_frac=self.test_fraction,
-            )
+            if self.split is None:
+                validate_split_fractions(
+                    train_frac=self.train_fraction,
+                    test_frac=self.test_fraction,
+                )
+            elif self.split.application_order == SplitApplicationOrder.AFTER_GROUPING:
+                msg = (
+                    "raw-entry split modes must use "
+                    'split.application_order = "before_grouping".'
+                )
+                raise ConfigError(msg)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
 
@@ -375,11 +465,51 @@ class SequenceConfigBase(
         Returns:
             TSequenceBuilder: Grouped sequence builder with shared split
                 settings applied.
+
+        Raises:
+            ConfigError: If the configured raw-entry split is unsupported.
         """
-        return sequences.with_split_fractions(
+        sequences = sequences.with_split_fractions(
             self.train_fraction,
             self.test_fraction,
         )
+        if self.split is None:
+            return sequences
+        split = self.split
+        if isinstance(split, RawEntryPrefixCountSplitConfig):
+            split_mode = RawEntrySplitMode.PREFIX_COUNT
+            split_application_order = split.application_order
+            straddling_group_policy = split.straddling_group_policy
+            split_kwargs: dict[str, object] = {
+                "split_mode": split_mode,
+                "split_application_order": split_application_order,
+                "straddling_group_policy": straddling_group_policy,
+                "train_entry_count": split.train_entry_count,
+            }
+        elif isinstance(split, RawEntryPrefixFractionSplitConfig):
+            split_mode = RawEntrySplitMode.PREFIX_FRACTION
+            split_application_order = split.application_order
+            straddling_group_policy = split.straddling_group_policy
+            split_kwargs = {
+                "split_mode": split_mode,
+                "split_application_order": split_application_order,
+                "straddling_group_policy": straddling_group_policy,
+                "train_entry_fraction": split.train_entry_fraction,
+            }
+        elif isinstance(split, RawEntryPrefixNormalFractionSplitConfig):
+            split_mode = RawEntrySplitMode.PREFIX_NORMAL_FRACTION
+            split_application_order = split.application_order
+            straddling_group_policy = StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+            split_kwargs = {
+                "split_mode": split_mode,
+                "split_application_order": split_application_order,
+                "straddling_group_policy": straddling_group_policy,
+                "train_normal_entry_fraction": split.train_normal_entry_fraction,
+            }
+        else:
+            msg = f"Unsupported raw-entry split config: {type(split).__name__}"
+            raise ConfigError(msg)
+        return replace(sequences, **split_kwargs)
 
 
 class EntitySequenceConfig(
@@ -481,8 +611,50 @@ class TimeSequenceConfig(
         return templated.group_by_time_window(self.time_span_ms, step_span_ms=self.step)
 
 
+class ChronologicalStreamSequenceConfig(
+    SequenceConfigBase,
+    tag="chronological_stream",
+    frozen=True,
+    kw_only=True,
+):
+    """Chronological raw-entry stream grouping configuration.
+
+    Attributes:
+        chunk_size (int): Maximum number of raw entries per emitted chunk.
+    """
+
+    chunk_size: int = 100_000
+
+    def __post_init__(self) -> None:
+        """Validate the chunk size and shared split settings.
+
+        Raises:
+            ConfigError: If the chunk size is not positive or the shared split
+                settings are invalid.
+        """
+        if self.chunk_size <= 0:
+            msg = "chunk_size must be a positive integer."
+            raise ConfigError(msg)
+        super().__post_init__()
+
+    def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
+        """Apply chronological stream grouping.
+
+        Args:
+            templated (TemplatedDataset): Built dataset to group into
+                chronological stream chunks.
+
+        Returns:
+            SequenceBuilder: Chronological stream sequence builder.
+        """
+        return templated.group_by_chronological_stream(chunk_size=self.chunk_size)
+
+
 SequenceConfig: TypeAlias = (
-    EntitySequenceConfig | FixedSequenceConfig | TimeSequenceConfig
+    EntitySequenceConfig
+    | FixedSequenceConfig
+    | TimeSequenceConfig
+    | ChronologicalStreamSequenceConfig
 )
 
 

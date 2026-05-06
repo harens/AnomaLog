@@ -168,6 +168,21 @@ class InMemoryStructuredSink(StructuredSink):
 
         return _iter
 
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Yield stored rows ordered by their raw line order.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields stored rows ordered by `line_order`.
+        """
+
+        def _iter() -> Iterator[StructuredLine]:
+            yield from sorted(self.rows, key=lambda row: row.line_order)
+
+        return _iter
+
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         """Build sparse inline label lookups from the stored rows.
 
