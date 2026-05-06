@@ -498,7 +498,7 @@ class ParquetStructuredSink(StructuredSink):
             (
                 self._entity_group_for_rows(
                     entity_id,
-                    rows,
+                    sorted(rows, key=lambda row: row.line_order),
                     chronology_index=chronology_index,
                 )
                 for entity_id, rows in by_entity.items()

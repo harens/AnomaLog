@@ -438,6 +438,73 @@ def test_sink_entity_grouping_merges_buckets_chronologically(
     ]
 
 
+def test_sink_entity_grouping_sorts_rows_within_each_entity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entity grouping should preserve source line order inside a session.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the
+            grouping logic can be exercised without a real parquet scan.
+    """
+    sink = _make_sink(tmp_path)
+
+    def _iter_buckets(_self: ParquetStructuredSink) -> set[int]:
+        return {0}
+
+    def _iter_structured_lines(
+        _self: ParquetStructuredSink,
+        columns: list[str] | None = None,
+        *,
+        filter_expr: ds.Expression | None = None,
+        batch_size: int | None = None,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        del columns, filter_expr, batch_size
+        return lambda: iter(
+            [
+                structured_line(
+                    line_order=9,
+                    timestamp_unix_ms=900,
+                    entity_id="node-a",
+                    untemplated_message_text="third",
+                    anomalous=0,
+                ),
+                structured_line(
+                    line_order=1,
+                    timestamp_unix_ms=100,
+                    entity_id="node-a",
+                    untemplated_message_text="first",
+                    anomalous=0,
+                ),
+                structured_line(
+                    line_order=5,
+                    timestamp_unix_ms=500,
+                    entity_id="node-a",
+                    untemplated_message_text="second",
+                    anomalous=0,
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(ParquetStructuredSink, "_iter_buckets", _iter_buckets)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "iter_structured_lines",
+        _iter_structured_lines,
+    )
+
+    sequences = list(sink.iter_entity_sequences()())
+
+    assert [row.line_order for row in sequences[0]] == [1, 5, 9]
+    assert [row.untemplated_message_text for row in sequences[0]] == [
+        "first",
+        "second",
+        "third",
+    ]
+
+
 def test_sink_entity_grouping_skips_null_entity_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -271,6 +271,27 @@ def test_iter_key_examples_yields_sliding_windows_per_sequence() -> None:
     ]
 
 
+def test_iter_key_examples_starts_target_at_history_boundary() -> None:
+    """The first DeepLog target should be the event immediately after history."""
+    sequence = _sequence(
+        templates=[f"T{i}" for i in range(11)],
+        split_label=SplitLabel.TRAIN,
+    )
+    template_to_index = {f"T{i}": i for i in range(11)}
+
+    examples = list(
+        iter_key_examples(
+            sequences=[sequence],
+            template_to_index=template_to_index,
+            history_size=10,
+        ),
+    )
+
+    assert examples == [
+        ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 10),
+    ]
+
+
 def test_iter_key_examples_skips_sequences_shorter_than_history_window() -> None:
     """Sequences without a full history-target pair should yield no examples."""
     examples = list(
