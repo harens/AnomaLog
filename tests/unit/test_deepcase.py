@@ -1126,7 +1126,7 @@ def _assert_next_event_prediction_metrics(
     exclusions = next_event_prediction.exclusions
     macro = next_event_prediction.classification_top1_macro
     weighted = next_event_prediction.classification_top1_weighted
-    table_iv = next_event_prediction.table_iv_prediction_metrics
+    comparison = next_event_prediction.classification_top1_weighted
     assert totals.events_seen == expected_events_seen
     assert totals.events_eligible == expected_eligible_events
     assert totals.coverage == pytest.approx(1.0)
@@ -1151,10 +1151,10 @@ def _assert_next_event_prediction_metrics(
     assert weighted.recall == pytest.approx(2 / 3)
     assert weighted.f1 == pytest.approx(2 / 3)
     assert weighted.accuracy == pytest.approx(2 / 3)
-    assert table_iv.precision == pytest.approx(weighted.precision)
-    assert table_iv.recall == pytest.approx(weighted.recall)
-    assert table_iv.f1 == pytest.approx(weighted.f1)
-    assert table_iv.accuracy == pytest.approx(weighted.accuracy)
+    assert comparison.precision == pytest.approx(weighted.precision)
+    assert comparison.recall == pytest.approx(weighted.recall)
+    assert comparison.f1 == pytest.approx(weighted.f1)
+    assert comparison.accuracy == pytest.approx(weighted.accuracy)
     assert exclusions.insufficient_history == 0
     assert exclusions.unknown_history == 0
     assert exclusions.unknown_target == 0

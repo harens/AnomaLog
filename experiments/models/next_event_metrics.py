@@ -130,10 +130,6 @@ class NextEventPredictionDiagnostics(msgspec.Struct, frozen=True):
             averaged top-1 classification metrics.
         classification_top1_weighted (NextEventPredictionWeightedMetrics):
             Weighted top-1 classification metrics.
-        table_iv_prediction_metrics (NextEventPredictionWeightedMetrics):
-            Explicit Table IV comparison block. This mirrors the weighted
-            top-1 metrics because the paper reports weighted multi-class
-            next-event scores over a 20/80 chronological split.
         exclusions (NextEventPredictionExclusions): Exclusion counts by
             reason.
         vocabulary_policy (VocabularyPolicy): Stable vocabulary policy label
@@ -145,7 +141,6 @@ class NextEventPredictionDiagnostics(msgspec.Struct, frozen=True):
     top_k: NextEventPredictionTopK
     classification_top1_macro: NextEventPredictionMacroMetrics
     classification_top1_weighted: NextEventPredictionWeightedMetrics
-    table_iv_prediction_metrics: NextEventPredictionWeightedMetrics
     exclusions: NextEventPredictionExclusions
     vocabulary_policy: VocabularyPolicy
 
@@ -340,12 +335,6 @@ class NextEventPredictionState:
                 accuracy=_fraction(total_correct, total_support),
             ),
             classification_top1_weighted=NextEventPredictionWeightedMetrics(
-                precision=weighted_precision,
-                recall=weighted_recall,
-                f1=weighted_f1,
-                accuracy=_fraction(total_correct, total_support),
-            ),
-            table_iv_prediction_metrics=NextEventPredictionWeightedMetrics(
                 precision=weighted_precision,
                 recall=weighted_recall,
                 f1=weighted_f1,

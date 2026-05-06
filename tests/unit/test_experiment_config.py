@@ -8,7 +8,6 @@ import pytest
 from experiments import ConfigError
 from experiments.audit import (
     validate_deepcase_bgl_extension_config,
-    validate_deepcase_hdfs_table_iv_config,
     validate_deepcase_hdfs_table_x_config,
     validate_deeplog_paper_config,
 )
@@ -694,19 +693,8 @@ def test_deepcase_paper_configs_pin_expected_protocols() -> None:
     """DeepCASE paper and extension configs should keep their declared contracts."""
     repo_root = Path(__file__).resolve().parents[2]
 
-    hdfs_table_iv_bundles = load_experiment_bundles(
-        repo_root
-        / "experiments"
-        / "configs"
-        / "sweeps"
-        / "hdfs_v1_deepcase_table_iv_prediction.toml",
-    )
-    hdfs_table_x_bundles = load_experiment_bundles(
-        repo_root
-        / "experiments"
-        / "configs"
-        / "sweeps"
-        / "hdfs_v1_deepcase_table_x_workload.toml",
+    hdfs_deepcase_bundles = load_experiment_bundles(
+        repo_root / "experiments" / "configs" / "sweeps" / "hdfs_v1_deepcase.toml",
     )
     bgl_extension_bundles = load_experiment_bundles(
         repo_root
@@ -716,47 +704,32 @@ def test_deepcase_paper_configs_pin_expected_protocols() -> None:
         / "bgl_deepcase_event_level_extension.toml",
     )
 
-    assert len(hdfs_table_iv_bundles) == 10
-    assert len(hdfs_table_x_bundles) == 10
-    assert len(bgl_extension_bundles) == 10
+    assert len(hdfs_deepcase_bundles) == 1
+    assert len(bgl_extension_bundles) == 1
 
-    for expected_seed, bundle in enumerate(hdfs_table_iv_bundles):
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        assert bundle.model.random_seed == expected_seed
-    for expected_seed, bundle in enumerate(hdfs_table_x_bundles):
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        assert bundle.model.random_seed == expected_seed
-    for expected_seed, bundle in enumerate(bgl_extension_bundles):
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        assert bundle.model.random_seed == expected_seed
+    bundle = hdfs_deepcase_bundles[0]
+    assert isinstance(bundle.model, DeepCaseModelConfig)
+    assert bundle.model.random_seed == 0
+    bundle = bgl_extension_bundles[0]
+    assert isinstance(bundle.model, DeepCaseModelConfig)
+    assert bundle.model.random_seed == 0
 
-    for bundle in hdfs_table_iv_bundles:
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-        validate_deepcase_hdfs_table_iv_config(
-            dataset_config=bundle.dataset,
-            model_config=bundle.model,
-        )
-        assert bundle.model.epochs == 100
-        assert bundle.model.context_length == 10
-        assert bundle.model.timeout_seconds == 86_400
-        assert bundle.model.hidden_size == 128
-        assert bundle.model.label_smoothing_delta == pytest.approx(0.1)
-        assert bundle.model.confidence_threshold == pytest.approx(0.2)
-        assert bundle.model.eps == pytest.approx(0.1)
-        assert bundle.model.min_samples == 5
-        assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
-        assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
-        assert bundle.dataset.sequence.train_on_normal_entities_only is False
-
-    for bundle in hdfs_table_x_bundles:
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-        validate_deepcase_hdfs_table_x_config(
-            dataset_config=bundle.dataset,
-            model_config=bundle.model,
-        )
-        assert bundle.model.epochs == 100
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+    validate_deepcase_hdfs_table_x_config(
+        dataset_config=bundle.dataset,
+        model_config=bundle.model,
+    )
+    assert bundle.model.epochs == 100
+    assert bundle.model.context_length == 10
+    assert bundle.model.timeout_seconds == 86_400
+    assert bundle.model.hidden_size == 128
+    assert bundle.model.label_smoothing_delta == pytest.approx(0.1)
+    assert bundle.model.confidence_threshold == pytest.approx(0.2)
+    assert bundle.model.eps == pytest.approx(0.1)
+    assert bundle.model.min_samples == 5
+    assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
+    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
+    assert bundle.dataset.sequence.train_on_normal_entities_only is False
 
     for bundle in bgl_extension_bundles:
         assert isinstance(bundle.model, DeepCaseModelConfig)

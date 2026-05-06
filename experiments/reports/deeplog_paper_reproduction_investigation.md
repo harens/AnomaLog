@@ -36,6 +36,10 @@ means ignored anomalies do not count as false negatives.
 The current HDFS bundle still differs from the paper's cited raw-entry and
 session counts, but the split protocol is now expressible. The detailed counts
 and split variants remain as recorded in the previous investigation pass.
+The HDFS paper benchmark itself is now represented by a key-only DeepLog
+config; parameter-value detection remains available for the OpenStack-style
+diagnostic path, but the HDFS table in the paper reports the next-key detector
+only.
 
 ## BGL
 
@@ -108,6 +112,9 @@ boundaries. No post-cutoff events are being dropped by chunk/context handling.
 - HDFS:
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
+  - `experiments/configs/models/deeplog_hdfs_paper_key_only.toml`
+  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first_full.toml`
+  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml`
 - BGL:
   - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
   - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`

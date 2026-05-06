@@ -271,6 +271,8 @@ class DeepLogManifest(ModelManifest, frozen=True):
         learning_rate (float): Optimiser learning rate.
         validation_fraction (float): Fraction reserved for validation.
         gaussian_confidence (float): Confidence level used for Gaussian bounds.
+        parameter_detection_enabled (bool): Whether the parameter branch was
+            fitted and applied during the run.
         include_elapsed_time (bool): Whether elapsed time is modeled as a
             parameter feature.
         train_key_vocabulary_size (int): Key-model vocabulary size from training.
@@ -304,6 +306,7 @@ class DeepLogManifest(ModelManifest, frozen=True):
     learning_rate: float
     validation_fraction: float
     gaussian_confidence: float
+    parameter_detection_enabled: bool
     include_elapsed_time: bool
     train_key_vocabulary_size: int
     trained_parameter_model_count: int

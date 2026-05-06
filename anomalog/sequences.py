@@ -1727,7 +1727,7 @@ class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
         if self.chunk_size <= 0:
             msg = "chunk_size must be a positive integer."
             raise ValueError(msg)
-        super().__post_init__()
+        SequenceBuilder.__post_init__(self)
 
     @override
     def train_sequence_count_unit_hint(self) -> str:

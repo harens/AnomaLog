@@ -1,4 +1,4 @@
 name = "hdfs_v1_deeplog_paper_entry100k_assign_first"
 dataset = "hdfs_v1_deeplog_paper_entry100k_assign_first"
-model = "deeplog_default"
-description = "DeepLog HDFS paper reproduction with assign-by-first-event straddler handling."
+model = "deeplog_hdfs_paper_key_only"
+description = "DeepLog HDFS paper reproduction with assign-by-first-event straddler handling and key-only anomaly detection."

@@ -67,8 +67,8 @@ view over sequence decisions. They are useful for compatibility with the
 shared experiment contract, but they are not the primary paper-comparison
 target for HDFS.
 
-The paper-comparison block for HDFS Table IV is exposed explicitly as
-`next_event_prediction.table_iv_prediction_metrics`. It mirrors the weighted
+The paper-comparison block for HDFS Table IV uses
+`next_event_prediction.classification_top1_weighted`. It mirrors the weighted
 multi-class next-event metrics and is the block that should be compared to the
 paper's prediction table.
 

@@ -635,7 +635,7 @@ class ChronologicalStreamSequenceConfig(
         if self.chunk_size <= 0:
             msg = "chunk_size must be a positive integer."
             raise ConfigError(msg)
-        super().__post_init__()
+        SequenceConfigBase.__post_init__(self)
 
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Apply chronological stream grouping.

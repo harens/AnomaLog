@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 import msgspec
 import torch
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -94,10 +95,13 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
             key-model next-event diagnostics.
         event_level_detection (DeepLogEventLevelDetectionDiagnostics | None):
             Event-level anomaly metrics derived from labelled log entries.
+        sequence_trigger_breakdown (DeepLogSequenceTriggerBreakdown | None):
+            Sequence-level trigger source counts split by actual label.
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
     event_level_detection: DeepLogEventLevelDetectionDiagnostics | None
+    sequence_trigger_breakdown: DeepLogSequenceTriggerBreakdown | None
 
 
 class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
@@ -126,6 +130,39 @@ class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
     precision: float
     recall: float
     f1: float
+
+
+class DeepLogSequenceTriggerBreakdown(msgspec.Struct, frozen=True):
+    """Sequence-level trigger source counts split by ground-truth label.
+
+    Attributes:
+        total_sequences (int): Number of scored test sequences.
+        normal_sequences (int): Number of scored normal test sequences.
+        anomalous_sequences (int): Number of scored anomalous test sequences.
+        key_only_normal_sequences (int): Normal sequences flagged only by the key model.
+        key_only_anomalous_sequences (int): Anomalous sequences flagged only
+            by the key model.
+        parameter_only_normal_sequences (int): Normal sequences flagged only
+            by the parameter model.
+        parameter_only_anomalous_sequences (int): Anomalous sequences flagged
+            only by the parameter model.
+        both_normal_sequences (int): Normal sequences flagged by both models.
+        both_anomalous_sequences (int): Anomalous sequences flagged by both models.
+        neither_normal_sequences (int): Normal sequences flagged by neither model.
+        neither_anomalous_sequences (int): Anomalous sequences flagged by neither model.
+    """
+
+    total_sequences: int
+    normal_sequences: int
+    anomalous_sequences: int
+    key_only_normal_sequences: int
+    key_only_anomalous_sequences: int
+    parameter_only_normal_sequences: int
+    parameter_only_anomalous_sequences: int
+    both_normal_sequences: int
+    both_anomalous_sequences: int
+    neither_normal_sequences: int
+    neither_anomalous_sequences: int
 
 
 class DeepLogModelConfig(
@@ -205,6 +242,17 @@ class DeepLogModelConfig(
             "98%, 99%, 99.9%.",
         ),
     ] = 0.99
+    parameter_detection_enabled: Annotated[
+        bool,
+        msgspec.Meta(
+            description=(
+                "Whether to fit and apply the per-template parameter anomaly "
+                "models. The HDFS DeepLog paper benchmark reports the key "
+                "model only, while parameter-value detection is evaluated "
+                "separately on OpenStack."
+            ),
+        ),
+    ] = True
     include_elapsed_time: Annotated[
         bool,
         msgspec.Meta(
@@ -292,6 +340,33 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     _event_level_tn: int = field(default=0, init=False, repr=False)
     _event_level_fp: int = field(default=0, init=False, repr=False)
     _event_level_fn: int = field(default=0, init=False, repr=False)
+    _sequence_total_count: int = field(default=0, init=False, repr=False)
+    _sequence_normal_count: int = field(default=0, init=False, repr=False)
+    _sequence_anomalous_count: int = field(default=0, init=False, repr=False)
+    _sequence_key_only_normal_count: int = field(default=0, init=False, repr=False)
+    _sequence_key_only_anomalous_count: int = field(
+        default=0,
+        init=False,
+        repr=False,
+    )
+    _sequence_parameter_only_normal_count: int = field(
+        default=0,
+        init=False,
+        repr=False,
+    )
+    _sequence_parameter_only_anomalous_count: int = field(
+        default=0,
+        init=False,
+        repr=False,
+    )
+    _sequence_both_normal_count: int = field(default=0, init=False, repr=False)
+    _sequence_both_anomalous_count: int = field(default=0, init=False, repr=False)
+    _sequence_neither_normal_count: int = field(default=0, init=False, repr=False)
+    _sequence_neither_anomalous_count: int = field(
+        default=0,
+        init=False,
+        repr=False,
+    )
 
     def fit(
         self,
@@ -323,16 +398,24 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             device=device,
             progress=progress,
         )
-        parameter_models, skipped_parameter_models = fit_parameter_models(
-            training_corpus=training_corpus,
-            config=self.config,
-            device=device,
-            progress=progress,
-        )
+        if self.config.parameter_detection_enabled:
+            parameter_models, skipped_parameter_models = fit_parameter_models(
+                training_corpus=training_corpus,
+                config=self.config,
+                device=device,
+                progress=progress,
+            )
+        else:
+            parameter_models = {}
+            skipped_parameter_models = {}
         train_event_count = training_corpus.event_count
-        train_parameter_covered_event_count = parameter_covered_event_count(
-            sequences=training_corpus.sequences,
-            parameter_models=parameter_models,
+        train_parameter_covered_event_count = (
+            parameter_covered_event_count(
+                sequences=training_corpus.sequences,
+                parameter_models=parameter_models,
+            )
+            if self.config.parameter_detection_enabled
+            else 0
         )
         self.device = device
         self.key_model = key_model
@@ -390,17 +473,23 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         # The paper's inference path is "key first, parameters second". We
         # therefore only pay the parameter-model cost for events whose key
         # history was accepted as normal by the key model.
-        parameter_eligible_event_indexes = {
-            event_index
-            for event_index, key_finding in key_findings.items()
-            if not key_finding.is_anomalous and event_index in evaluation_event_indexes
-        }
-        parameter_findings = score_parameter_sequence(
-            sequence=sequence,
-            parameter_models=self.parameter_models,
-            history_size=self.config.history_size,
-            eligible_event_indexes=parameter_eligible_event_indexes,
-        )
+        if self.config.parameter_detection_enabled:
+            parameter_eligible_event_indexes = {
+                event_index
+                for event_index, key_finding in key_findings.items()
+                if (
+                    not key_finding.is_anomalous
+                    and event_index in evaluation_event_indexes
+                )
+            }
+            parameter_findings = score_parameter_sequence(
+                sequence=sequence,
+                parameter_models=self.parameter_models,
+                history_size=self.config.history_size,
+                eligible_event_indexes=parameter_eligible_event_indexes,
+            )
+        else:
+            parameter_findings = {}
 
         event_indexes = sorted(
             (set(key_findings) | set(parameter_findings)) & evaluation_event_indexes,
@@ -444,6 +533,11 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         # - the sequence is anomalous if any event was anomalous
         # - the sequence score is the strongest event-level anomaly signal
         predicted_label = int(key_triggered or parameter_triggered)
+        self._record_sequence_trigger_breakdown(
+            actual_is_anomalous=is_anomalous_label(sequence.label),
+            key_triggered=key_triggered,
+            parameter_triggered=parameter_triggered,
+        )
         return DeepLogPredictionOutcome(
             predicted_label=predicted_label,
             score=max(scores, default=0.0),
@@ -468,13 +562,22 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             sequence_summary=sequence_summary,
             implementation_scope="Scoped DeepLog core v1",
             parameter_schema_policy=(
-                "strict: include only template parameter positions that are "
-                "always numeric in normal training data"
+                "disabled for this reproduction"
+                if not self.config.parameter_detection_enabled
+                else (
+                    "strict: include only template parameter positions that are "
+                    "always numeric in normal training data"
+                )
             ),
             parameter_validation_policy=(
-                "per-template temporal tail split over history-target pairs; "
-                "Gaussian residuals come from held-out validation pairs scored "
-                "after training on each series prefix"
+                "not applicable: HDFS paper reproduction uses key-only anomaly "
+                "detection"
+                if not self.config.parameter_detection_enabled
+                else (
+                    "per-template temporal tail split over history-target pairs; "
+                    "Gaussian residuals come from held-out validation pairs "
+                    "scored after training on each series prefix"
+                )
             ),
             history_size=self.config.history_size,
             top_g=self.config.top_g,
@@ -485,6 +588,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             learning_rate=self.config.learning_rate,
             validation_fraction=self.config.validation_fraction,
             gaussian_confidence=self.config.gaussian_confidence,
+            parameter_detection_enabled=self.config.parameter_detection_enabled,
             include_elapsed_time=self.config.include_elapsed_time,
             train_key_vocabulary_size=len(self.template_to_index),
             trained_parameter_model_count=len(self.parameter_models),
@@ -536,11 +640,14 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         del run_metrics
         next_event_prediction = self._next_event_prediction_state_snapshot()
         event_level_detection = self._event_level_state_snapshot()
+        sequence_trigger_breakdown = self._sequence_trigger_breakdown_snapshot()
         self._reset_next_event_prediction_state()
         self._reset_event_level_state()
+        self._reset_sequence_trigger_breakdown()
         return DeepLogRunMetrics(
             next_event_prediction=next_event_prediction,
             event_level_detection=event_level_detection,
+            sequence_trigger_breakdown=sequence_trigger_breakdown,
         )
 
     def _record_next_event_predictions(
@@ -646,6 +753,54 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             f1=round(f1, 8),
         )
 
+    def _sequence_trigger_breakdown_snapshot(
+        self,
+    ) -> DeepLogSequenceTriggerBreakdown | None:
+        if self._sequence_total_count <= 0:
+            return None
+        return DeepLogSequenceTriggerBreakdown(
+            total_sequences=self._sequence_total_count,
+            normal_sequences=self._sequence_normal_count,
+            anomalous_sequences=self._sequence_anomalous_count,
+            key_only_normal_sequences=self._sequence_key_only_normal_count,
+            key_only_anomalous_sequences=self._sequence_key_only_anomalous_count,
+            parameter_only_normal_sequences=self._sequence_parameter_only_normal_count,
+            parameter_only_anomalous_sequences=self._sequence_parameter_only_anomalous_count,
+            both_normal_sequences=self._sequence_both_normal_count,
+            both_anomalous_sequences=self._sequence_both_anomalous_count,
+            neither_normal_sequences=self._sequence_neither_normal_count,
+            neither_anomalous_sequences=self._sequence_neither_anomalous_count,
+        )
+
+    def _reset_sequence_trigger_breakdown(self) -> None:
+        self._sequence_total_count = 0
+        self._sequence_normal_count = 0
+        self._sequence_anomalous_count = 0
+        self._sequence_key_only_normal_count = 0
+        self._sequence_key_only_anomalous_count = 0
+        self._sequence_parameter_only_normal_count = 0
+        self._sequence_parameter_only_anomalous_count = 0
+        self._sequence_both_normal_count = 0
+        self._sequence_both_anomalous_count = 0
+        self._sequence_neither_normal_count = 0
+        self._sequence_neither_anomalous_count = 0
+
+    def _record_sequence_trigger_breakdown(
+        self,
+        *,
+        actual_is_anomalous: bool,
+        key_triggered: bool,
+        parameter_triggered: bool,
+    ) -> None:
+        self._sequence_total_count += 1
+        label_attr = _SEQUENCE_LABEL_COUNT_ATTRS[int(actual_is_anomalous)]
+        trigger_attr = _SEQUENCE_TRIGGER_COUNT_ATTRS[
+            key_triggered,
+            parameter_triggered,
+        ][int(actual_is_anomalous)]
+        setattr(self, label_attr, getattr(self, label_attr) + 1)
+        setattr(self, trigger_attr, getattr(self, trigger_attr) + 1)
+
     def _record_event_level_decision(
         self,
         *,
@@ -665,7 +820,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         if key_finding is None and parameter_finding is None:
             return
         self._event_level_events_eligible += 1
-        actual_is_anomalous = actual_label != 0
+        actual_is_anomalous = is_anomalous_label(actual_label)
         predicted_is_anomalous = (
             key_finding is not None and key_finding.is_anomalous
         ) or (parameter_finding is not None and parameter_finding.is_anomalous)
@@ -704,3 +859,30 @@ def _next_event_k_values(top_g: int) -> tuple[int, ...]:
         tuple[int, ...]: Ordered top-k cut-offs up to `top_g`.
     """
     return tuple(sorted({k for k in (1, 2, 3, 5, top_g) if 0 < k <= top_g}))
+
+
+_SEQUENCE_LABEL_COUNT_ATTRS: tuple[str, str] = (
+    "_sequence_normal_count",
+    "_sequence_anomalous_count",
+)
+_SEQUENCE_TRIGGER_COUNT_ATTRS: dict[
+    tuple[bool, bool],
+    tuple[str, str],
+] = {
+    (False, False): (
+        "_sequence_neither_normal_count",
+        "_sequence_neither_anomalous_count",
+    ),
+    (True, False): (
+        "_sequence_key_only_normal_count",
+        "_sequence_key_only_anomalous_count",
+    ),
+    (False, True): (
+        "_sequence_parameter_only_normal_count",
+        "_sequence_parameter_only_anomalous_count",
+    ),
+    (True, True): (
+        "_sequence_both_normal_count",
+        "_sequence_both_anomalous_count",
+    ),
+}

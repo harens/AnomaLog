@@ -1,13 +1,18 @@
 """Tests for public `SequenceBuilder` behavior."""
 
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
+from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredLine
 from anomalog.parsers.template.dataset import (
     ExtractedParameters,
     LogTemplate,
+    TemplatedDataset,
     UntemplatedText,
 )
 from anomalog.sequences import (
@@ -27,6 +32,7 @@ from experiments.models.base import SequenceSummary
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
+    label_lookup,
     structured_line,
 )
 
@@ -1050,6 +1056,59 @@ def test_chronological_stream_grouping_preserves_source_order_and_event_labels()
         (0, 1),
         (0,),
     ]
+
+
+def test_templated_dataset_chronological_stream_view_is_constructible() -> None:
+    """Dataset views should build chronological stream builders without crashing."""
+
+    @dataclass(frozen=True)
+    class _TemplateParser:
+        name: ClassVar[str] = "test"
+        dataset_name: str | None = "demo"
+
+        @staticmethod
+        def inference(
+            unstructured_text: UntemplatedText,
+        ) -> tuple[LogTemplate, ExtractedParameters]:
+            return unstructured_text.upper(), []
+
+        @staticmethod
+        def train(
+            untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        ) -> None:
+            del untemplated_text_iterator
+
+    sink = _sink(
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="second",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="first",
+            anomalous=0,
+        ),
+    )
+    dataset = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("demo-data"),
+            cache_root=Path("demo-cache"),
+        ),
+        template_parser=_TemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+
+    builder = dataset.group_by_chronological_stream(chunk_size=1)
+
+    assert isinstance(builder, ChronologicalStreamSequenceBuilder)
+    assert builder.chunk_size == 1
+    assert [sequence.templates for sequence in builder] == [["FIRST"], ["SECOND"]]
 
 
 def test_entity_sequences_before_grouping_assign_by_first_event_uses_group_head() -> (

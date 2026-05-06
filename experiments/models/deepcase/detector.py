@@ -175,7 +175,7 @@ class DeepCaseModelConfig(
         no_score (int): Special no-score sentinel value.
         device (TorchDeviceName): Requested Torch device policy.
         random_seed (int): Deterministic random seed.
-    """
+    """  # noqa: DOC605
 
     # Sequencing events subsystem (Section D-A)
 

@@ -43,21 +43,25 @@ The checked-in sweep set is split by detector family:
   the chronological dataset variants
 - `configs/models/deepcase_paper.toml` is the paper-aligned DeepCASE model
   config used by the dedicated reproduction sweeps
-- `hdfs_v1_deepcase_table_iv_prediction.toml`,
-  `hdfs_v1_deepcase_table_x_workload.toml`, and
-  `bgl_deepcase_event_level_extension.toml` are explicit DeepCASE paper / 
-  extension probes. They reuse the paper-aligned `deepcase_paper.toml` model
-  config and fan out over `model.random_seed` for 10-run reporting.
+- `bgl_deepcase_event_level_extension.toml` is an explicit DeepCASE extension
+  probe. It reuses the paper-aligned `deepcase_paper.toml` model config. The
+  repository's `hdfs_v1_deepcase.toml` remains the canonical HDFS DeepCASE
+  config for the same model family.
 - `hdfs_v1_deeplog_paper_entry100k_split_partial.toml`,
   `hdfs_v1_deeplog_paper_entry100k_assign_first.toml`,
+  `hdfs_v1_deeplog_paper_entry100k_assign_first_full.toml`,
+  `hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml`,
   `bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`, and
   `bgl_deeplog_paper_10pct_entry_stream_no_online.toml` are explicit DeepLog
-  paper-reproduction probes. They use the generic raw-entry split modes and
-  chronological-stream grouping added for paper-faithful reproduction. For the
-  BGL chronological stream probes, the stream chunks stay intact and the
-  training corpus uses an explicit per-event eligibility mask so normal target
-  events can train even when a chunk also contains anomalies or post-cutoff
-  context.
+  paper-reproduction probes. The HDFS paper benchmark uses the key-only
+  `deeplog_hdfs_paper_key_only` model config because the paper's HDFS table
+  reports the next-key detector only; the parameter branch remains available in
+  `deeplog_default` and is used for OpenStack-style diagnostics. These sweeps
+  use the generic raw-entry split modes and chronological-stream grouping
+  added for paper-faithful reproduction. For the BGL chronological stream
+  probes, the stream chunks stay intact and the training corpus uses an
+  explicit per-event eligibility mask so normal target events can train even
+  when a chunk also contains anomalies or post-cutoff context.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix, whereas DeepCASE-style

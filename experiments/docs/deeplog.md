@@ -36,6 +36,8 @@ extensions:
   findings.
 - Manifest reporting for parameter-model coverage and per-template feature
   counts.
+- Explicit key-only HDFS reproduction support via
+  `parameter_detection_enabled = false` on the paper-reproduction model config.
 - Detector-owned next-event diagnostics derived from the key model's ranked
   predictions. These diagnostics are separate from anomaly scoring and are
   exposed in run metrics for the full test scoring pass.
@@ -115,7 +117,7 @@ history-target pairs, not from a global pooled slice across templates.
 | Missingness handling | Represent missing parameter values without training or scoring against invented zeros | `experiments/models/deeplog/`: `raw_parameter_vector_for_event`, `_normalize_vector`, `masked_regression_loss`, `_score_parameter_sequence` | implemented | Missing positions are zero-filled for shape stability but masked out of normalisation, loss, and residual MSE. |
 | Residual scoring | Compare predicted and observed parameter vectors with MSE | `experiments/models/deeplog/`: `_MaskedRegressionLoss`, `_masked_mse`, `_parameter_pair_residual`, `_score_parameter_sequence` | implemented | Both training loss and calibration/inference residuals use the same target mask semantics. |
 | Gaussian calibration | Model validation residuals with a Gaussian and threshold anomalies by confidence bounds | `experiments/models/deeplog/`: `GaussianThreshold`, `fit_gaussian_threshold`, `build_parameter_datasets`, `_fit_parameter_models` | implemented | Residuals come from per-series temporal validation tails; the exact calibration mechanics are repository-defined. |
-| Sequence anomaly decision | Flag an event when either the key model or parameter model fires | `experiments/models/deeplog/`: `DeepLogDetector.predict`, `parameter_anomaly_score` | implemented | Follows the paper's detection order: check the key model first, then score parameters only for events whose key is accepted as normal. |
+| Sequence anomaly decision | Flag an event when either the key model or parameter model fires | `experiments/models/deeplog/`: `DeepLogDetector.predict`, `parameter_anomaly_score` | implemented | Follows the paper's detection order: check the key model first, then score parameters only for events whose key is accepted as normal. The HDFS paper-reproduction config disables parameter detection entirely because the paper's HDFS benchmark reports the key model only. |
 | Diagnosis output | Explain anomalies with workflow-aware diagnosis | `experiments/models/deeplog/`: `DeepLogEventFinding`, `DeepLogPredictionOutcome` | partial | The repo exposes event-level triggers, not the paper's workflow diagnosis system. |
 | Workflow construction / diagnosis | Separate tasks and construct workflows or FSAs for diagnosis | not implemented | not implemented | Explicitly out of scope for this pass. |
 | Online false-positive updates | Incrementally adapt the model after false positives | not implemented | not implemented | Explicitly out of scope for this pass. |
@@ -152,6 +154,8 @@ This section keeps the short version in the main DeepLog note:
 - HDFS:
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
+  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first_full.toml`
+  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml`
 - BGL:
   - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
   - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`

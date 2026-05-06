@@ -76,6 +76,23 @@ def test_deeplog_model_config_accepts_full_dataset_next_event_policy() -> None:
     assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
 
 
+def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
+    """DeepLog should enable parameter scoring by default."""
+    config = _deep_log_config(name="deeplog")
+
+    assert config.parameter_detection_enabled is True
+
+
+def test_deeplog_model_config_accepts_parameter_detection_disabled() -> None:
+    """DeepLog should decode explicit key-only HDFS reproduction configs."""
+    config = _deep_log_config(
+        name="deeplog",
+        parameter_detection_enabled=False,
+    )
+
+    assert config.parameter_detection_enabled is False
+
+
 def _sequence(
     *,
     templates: list[str],
@@ -652,6 +669,62 @@ def test_predict_flags_key_model_anomalies() -> None:
     assert metrics.next_event_prediction is not None
 
 
+def test_predict_ignores_parameter_models_when_key_only_reproduction_is_disabled() -> (
+    None
+):
+    """Key-only HDFS reproduction should not surface parameter-triggered anomalies."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            parameter_detection_enabled=False,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    key_context = _key_context(model=detector.key_model, top_g=1)
+    detector.template_to_index = key_context.template_to_index
+    detector.index_to_template = key_context.index_to_template
+    detector.parameter_models["D"] = ParameterModelState(
+        template="D",
+        schema=ParameterFeatureSchema(
+            feature_names=["param_0"],
+            numeric_parameter_positions=[0],
+            include_elapsed_time=False,
+            dropped_parameter_positions=[],
+        ),
+        normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+        gaussian=GaussianThreshold(
+            mean=0.1,
+            stddev=0.01,
+            lower_bound=0.0,
+            upper_bound=1.0,
+        ),
+        model=_StaticParameterModel(output_vector=[100.0]),
+    )
+
+    outcome = detector.predict(_sequence(templates=["A", "B", "D"]))
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+
+    assert outcome.predicted_label == 1
+    assert outcome.triggered_by_key_model is True
+    assert outcome.triggered_by_parameter_model is False
+    assert all(finding.parameter_model_finding is None for finding in outcome.findings)
+    assert metrics.sequence_trigger_breakdown is not None
+    assert metrics.sequence_trigger_breakdown.total_sequences == 1
+    assert metrics.sequence_trigger_breakdown.normal_sequences == 1
+    assert metrics.sequence_trigger_breakdown.anomalous_sequences == 0
+    assert metrics.sequence_trigger_breakdown.key_only_normal_sequences == 1
+    assert metrics.sequence_trigger_breakdown.parameter_only_normal_sequences == 0
+    assert metrics.sequence_trigger_breakdown.both_normal_sequences == 0
+    assert metrics.sequence_trigger_breakdown.neither_normal_sequences == 0
+
+
 def test_predict_excludes_unknown_targets_under_train_only_policy() -> None:
     """Train-only next-event diagnostics should exclude unseen target templates."""
     expected_events_seen = 3
@@ -694,6 +767,98 @@ def test_predict_excludes_unknown_targets_under_train_only_policy() -> None:
     assert next_event_prediction.exclusions.unknown_target == expected_unknown_target
     assert next_event_prediction.exclusions.unknown_history == 0
     assert next_event_prediction.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
+
+
+def test_deeplog_sequence_trigger_breakdown_counts_source_combinations() -> None:
+    """DeepLog should report whether anomalies came from key, parameter, or both."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.parameter_models["T"] = ParameterModelState(
+        template="T",
+        schema=ParameterFeatureSchema(
+            feature_names=["param_0"],
+            numeric_parameter_positions=[0],
+            include_elapsed_time=False,
+            dropped_parameter_positions=[],
+        ),
+        normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+        gaussian=GaussianThreshold(
+            mean=0.1,
+            stddev=0.01,
+            lower_bound=0.0,
+            upper_bound=1.0,
+        ),
+        model=_StaticParameterModel(output_vector=[0.0]),
+    )
+
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+    detector.predict(_sequence(templates=["A", "B", "D"], label=0))
+
+    detector.key_model = _StaticKeyModel(logits=[5.0])
+    detector.template_to_index = {"T": 0}
+    detector.index_to_template = {0: "T"}
+    detector.predict(
+        _sequence(
+            templates=["T", "T", "T", "T"],
+            params_by_event=[["10.0"], ["10.0"], ["10.0"], ["10.0"]],
+            label=1,
+        ),
+    )
+
+    detector.key_model = _StaticKeyModel(logits=[1.0, 0.0, 5.0, 4.0])
+    detector.template_to_index = {"A": 0, "B": 1, "T": 2, "D": 3}
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+    detector.predict(
+        _sequence(
+            templates=["A", "B", "T", "T", "T", "D"],
+            params_by_event=[
+                ["0.0"],
+                ["0.0"],
+                ["10.0"],
+                ["10.0"],
+                ["10.0"],
+                ["0.0"],
+            ],
+            label=1,
+        ),
+    )
+
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 3})
+    breakdown = metrics.sequence_trigger_breakdown
+
+    assert breakdown is not None
+    assert breakdown.total_sequences == 3
+    assert breakdown.normal_sequences == 1
+    assert breakdown.anomalous_sequences == 2
+    assert breakdown.key_only_normal_sequences == 1
+    assert breakdown.key_only_anomalous_sequences == 0
+    assert breakdown.parameter_only_normal_sequences == 0
+    assert breakdown.parameter_only_anomalous_sequences == 1
+    assert breakdown.both_normal_sequences == 0
+    assert breakdown.both_anomalous_sequences == 1
+    assert breakdown.neither_normal_sequences == 0
+    assert breakdown.neither_anomalous_sequences == 0
 
 
 def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> None:
@@ -1562,6 +1727,7 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
     assert manifest.implementation_scope == "Scoped DeepLog core v1"
     assert manifest.parameter_schema_policy.startswith("strict:")
     assert manifest.parameter_validation_policy.startswith("per-template temporal")
+    assert manifest.parameter_detection_enabled is True
     assert manifest.history_size == detector.config.history_size
     assert manifest.trained_parameter_model_count == 1
     assert manifest.skipped_parameter_model_count == 1

@@ -15,7 +15,7 @@ Paper target:
 
 Current AnomaLog equivalent:
 
-- `metrics.next_event_prediction.table_iv_prediction_metrics`
+- `metrics.next_event_prediction.classification_top1_weighted`
 - The block mirrors the weighted top-1 multi-class next-event metrics and is
   the right comparison target for Table IV.
 - The run also records `metrics.next_event_prediction.totals`,
@@ -126,4 +126,3 @@ Readiness:
 - The only HDFS file discovered under `notes/deepcase/` is the example
   `notes/deepcase/example/data/hdfs/hdfs_test_normal` fixture used for the
   bundled documentation example.
-

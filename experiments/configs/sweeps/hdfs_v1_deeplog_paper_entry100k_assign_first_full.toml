@@ -1,0 +1,4 @@
+name = "hdfs_v1_deeplog_paper_entry100k_assign_first_full"
+dataset = "hdfs_v1_deeplog_paper_entry100k_assign_first"
+model = "deeplog_default"
+description = "DeepLog HDFS paper reproduction diagnostic with assign-by-first-event straddler handling and parameter detection enabled."

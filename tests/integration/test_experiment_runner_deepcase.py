@@ -122,7 +122,7 @@ def _assert_deepcase_metrics(
     next_event_prediction = metrics["next_event_prediction"]
     assert isinstance(next_event_prediction, dict)
     assert next_event_prediction["task"] == "next_event_prediction"
-    assert "table_iv_prediction_metrics" in next_event_prediction
+    assert "classification_top1_weighted" in next_event_prediction
     manual_workload_reduction = metrics["manual_workload_reduction"]
     semi_automatic_workload_reduction = metrics["semi_automatic_workload_reduction"]
     assert isinstance(manual_workload_reduction, dict)

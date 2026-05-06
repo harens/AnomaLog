@@ -1,0 +1,4 @@
+name = "hdfs_v1_deeplog_paper_entry100k_split_partial_key_only"
+dataset = "hdfs_v1_deeplog_paper_entry100k_split_partial"
+model = "deeplog_hdfs_paper_key_only"
+description = "DeepLog HDFS paper reproduction diagnostic with split-partial straddler handling and key-only anomaly detection."
