@@ -281,6 +281,8 @@ class TemplateSequence:
             eligibility mask for scoring targets. This is used when a
             preserved chronological chunk must stay intact even though only a
             subset of its events belong to the evaluation split.
+        continuous_context (bool): Whether adjacent sequences should be treated
+            as a single chronological stream for model state carryover.
     """
 
     events: list[
@@ -293,6 +295,7 @@ class TemplateSequence:
     event_labels: tuple[int | None, ...] | None = None
     training_event_mask: tuple[bool, ...] | None = None
     evaluation_event_mask: tuple[bool, ...] | None = None
+    continuous_context: bool = False
 
     def __post_init__(self) -> None:
         """Validate that any event labels stay aligned with the events.
@@ -945,15 +948,17 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """
         ...
 
-    def _build_sequence(  # noqa: PLR0913, PLR0917
+    def _build_sequence(  # noqa: PLR0913
         self,
         window_id: int,
         rows: Collection[StructuredLine],
         infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
         label_for_group: Callable[[str], int | None],
         split_label: SplitLabel,
+        *,
         training_event_mask: tuple[bool, ...] | None = None,
         evaluation_event_mask: tuple[bool, ...] | None = None,
+        continuous_context: bool = False,
     ) -> TemplateSequence | None:
         """Convert a non-empty row window into a labelled template sequence.
 
@@ -973,6 +978,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             evaluation_event_mask (tuple[bool, ...] | None): Optional per-event
                 scoring-target eligibility mask for preserved chronological
                 chunks.
+            continuous_context (bool): Whether the emitted sequence belongs to a
+                stream that should carry context across chunk boundaries.
 
         Returns:
             TemplateSequence | None: Built sequence, or `None` for empty
@@ -1021,6 +1028,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             ),
             training_event_mask=training_event_mask,
             evaluation_event_mask=evaluation_event_mask,
+            continuous_context=continuous_context,
         )
 
     def _build_sequences_for_group(  # noqa: C901, PLR0912, PLR0913
@@ -1812,6 +1820,7 @@ class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
                 split_label=split_label,
                 training_event_mask=training_event_mask,
                 evaluation_event_mask=evaluation_event_mask,
+                continuous_context=True,
             )
             if sequence is not None:
                 yield sequence

@@ -261,20 +261,32 @@ def score_key_sequence(
     *,
     sequence: TemplateSequence,
     context: KeyScoringContext,
+    prefix_templates: list[str] | None = None,
 ) -> dict[int, DeepLogKeyFinding]:
     """Score one sequence with the DeepLog key model.
 
     Args:
         sequence (TemplateSequence): Sequence to score.
         context (KeyScoringContext): Fitted key-model state and settings.
+        prefix_templates (list[str] | None): Optional templates from the
+            immediately preceding chronological context.
 
     Returns:
         dict[int, DeepLogKeyFinding]: Event index to key-model finding.
     """
     findings: dict[int, DeepLogKeyFinding] = {}
     templates = sequence.templates
+    prefix_templates = [] if prefix_templates is None else prefix_templates
+    combined_templates = prefix_templates + templates
+    prefix_length = len(prefix_templates)
     if len(templates) <= context.history_size:
-        return findings
+        if len(combined_templates) <= context.history_size:
+            return findings
+        templates = combined_templates
+        prefix_length = len(prefix_templates)
+    elif prefix_templates:
+        templates = combined_templates
+        prefix_length = len(prefix_templates)
 
     known_history_indexes: list[list[int]] = []
     known_target_indexes: list[int] = []
@@ -282,6 +294,9 @@ def score_key_sequence(
         history_templates = templates[
             target_index - context.history_size : target_index
         ]
+        if target_index < prefix_length:
+            continue
+        local_target_index = target_index - prefix_length
         unknown_history_templates = [
             template
             for template in history_templates
@@ -302,7 +317,7 @@ def score_key_sequence(
                 top_predictions=[],
             )
             continue
-        known_target_indexes.append(target_index)
+        known_target_indexes.append(local_target_index)
         known_history_indexes.append(
             [context.template_to_index[template] for template in history_templates],
         )
@@ -331,6 +346,7 @@ def score_key_sequence(
             target_index=target_index,
             probabilities=probabilities,
             context=context,
+            prefix_length=prefix_length,
         )
     return findings
 
@@ -341,6 +357,7 @@ def _score_key_event(
     target_index: int,
     probabilities: torch.Tensor,
     context: KeyScoringContext,
+    prefix_length: int = 0,
 ) -> DeepLogKeyFinding:
     """Build one key-model finding from predicted next-key probabilities.
 
@@ -350,17 +367,21 @@ def _score_key_event(
         probabilities (torch.Tensor): Model probabilities for the next-key
             vocabulary at this target position.
         context (KeyScoringContext): Fitted key-model state and settings.
+        prefix_length (int): Number of carried-over prefix templates.
 
     Returns:
         DeepLogKeyFinding: Serialised decision payload for one target event.
     """
-    history_templates = templates[target_index - context.history_size : target_index]
+    absolute_target_index = target_index + prefix_length
+    history_templates = templates[
+        absolute_target_index - context.history_size : absolute_target_index
+    ]
     unknown_history_templates = [
         template
         for template in history_templates
         if template not in context.template_to_index
     ]
-    actual_template = templates[target_index]
+    actual_template = templates[absolute_target_index]
     actual_index = context.template_to_index.get(actual_template)
     top_probabilities, top_indexes = _top_key_predictions(
         probabilities=probabilities,

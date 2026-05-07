@@ -847,6 +847,7 @@ def test_chronological_stream_training_mask_aligns_with_target_events() -> None:
         True,
     )
     assert sequence.event_labels == (0, 0, 1, 0, 1, 0)
+    assert sequence.continuous_context is True
     assert sequence.split_label is SplitLabel.TRAIN
 
 
@@ -1108,7 +1109,9 @@ def test_templated_dataset_chronological_stream_view_is_constructible() -> None:
 
     assert isinstance(builder, ChronologicalStreamSequenceBuilder)
     assert builder.chunk_size == 1
-    assert [sequence.templates for sequence in builder] == [["FIRST"], ["SECOND"]]
+    sequences = list(builder)
+
+    assert [sequence.templates for sequence in sequences] == [["FIRST"], ["SECOND"]]
 
 
 def test_entity_sequences_before_grouping_assign_by_first_event_uses_group_head() -> (

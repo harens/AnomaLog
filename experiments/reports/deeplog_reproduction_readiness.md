@@ -21,21 +21,23 @@ The checks below are intentionally conservative:
   over log entries rather than aggregated sessions.
 - The current reproduction now exposes an event-level DeepLog evaluation path
   via `DeepLogRunMetrics.event_level_detection`, while keeping the existing
-  sequence/chunk metrics as diagnostics.
+  sequence metrics as diagnostics.
 - The checked-in paper configs use:
   - `grouping = "chronological_stream"`
   - `split.application_order = "before_grouping"`
   - raw-entry prefix split modes
   - `h = 3`, `g = 6`, `L = 1`, `hidden = 256`
   - online update disabled
-- Chunking is now a memory container, not the split unit. Event-level masks
-  decide which targets train and which targets score, so post-cutoff events in
-  the first chronological chunk are no longer dropped just because they share
-  a container with training context.
+- Internal batching is now a memory container, not the split unit.
+  Chronological stream sequences are treated as continuous internally, so
+  DeepLog carries history across batch boundaries without any configuration
+  toggle. Event-level masks decide which targets train and which targets score,
+  so post-cutoff events in the first chronological batch are no longer dropped
+  just because they share a container with training context.
 
 ### Current paper configs
 
-| Config | Chunk count | Train chunk / ignored / test chunk | Eligible training targets | Event-level evaluation available? |
+| Config | Batch count | Train batch / ignored / test batch | Eligible training targets | Event-level evaluation available? |
 | --- | ---: | --- | ---: | --- |
 | `bgl_deeplog_paper_1pct_normal_entry_stream_no_online` | 48 | 1 / 0 / 47 | 43,996 | yes |
 | `bgl_deeplog_paper_10pct_entry_stream_no_online` | 48 | 5 / 0 / 43 | 281,950 | yes |
@@ -50,25 +52,25 @@ collapsed together:
 - non-anomalous post-cutoff context excluded from training: `53,395`
 
 The `2,609` value is larger than the `2,322` pre-cutoff anomaly count because
-the preserved first chronological chunk also contains `287` anomalous entries
+the preserved first chronological batch also contains `287` anomalous entries
 that occur after the normal cutoff. Those entries are still inside the train
-chunk context, but they are masked out as training targets.
+batch context, but they are masked out as training targets.
 
-### Chunk-size sensitivity
+### Batch-size sensitivity
 
 This is a data-construction audit only. It does not run the full detector.
 
-| Chunk size | Sequence count | Eligible training targets | Event-level evaluation count | Anomalous evaluation targets | Normal evaluation targets | Insufficient-history count | Warm-up loss | Post-cutoff events excluded |
+| Batch size | Sequence count | Eligible training targets | Event-level evaluation count | Anomalous evaluation targets | Normal evaluation targets | Insufficient-history count | Warm-up loss | Post-cutoff events excluded |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 50,000 | 95 | 43,996 | 4,701,363 | 346,120 | 4,355,243 | 282 | 282 | 0 |
 | 100,000 | 48 | 43,996 | 4,701,504 | 346,129 | 4,355,375 | 141 | 141 | 0 |
 | 200,000 | 24 | 43,996 | 4,701,576 | 346,138 | 4,355,438 | 69 | 69 | 0 |
 
-The event-level denominator is now stable across chunk sizes apart from the
-expected warm-up loss at chunk boundaries. The first chronological chunk still
-contains `53,395` post-cutoff normal events and `2,609` anomalous events in
-context, but those post-cutoff events are explicitly retained for evaluation
-by the per-event split mask.
+The event-level denominator is now stable across internal batch sizes, and the
+continuous-stream baseline removes the remaining warm-up loss altogether. The
+first chronological batch still contains `53,395` post-cutoff normal events
+and `2,609` anomalous events in context, but those post-cutoff events are
+explicitly retained for evaluation by the per-event split mask.
 
 ### Readiness
 
@@ -76,7 +78,7 @@ by the per-event split mask.
 - Sequence-level metrics remain available for diagnostics.
 - Event-level precision/recall/F1 should be used for paper reporting.
 - The 1% normal split now has a stable event-level denominator regardless of
-  chunk size.
+  internal batch size.
 
 ## HDFS
 
@@ -133,6 +135,7 @@ counts by a wide margin.
 ## Final Verdict
 
 - BGL: protocol closed enough for no-online paper runs, with event-level paper
-  metrics available and chunking documented as an approximation.
+  metrics available and chronological stream carryover handled internally by
+  default.
 - HDFS: protocol expressible, but not exact; the available data prevents exact
   recovery of the cited paper counts.

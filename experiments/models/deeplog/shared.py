@@ -15,7 +15,7 @@ paper-to-code mapping easier to follow.
 
 from __future__ import annotations
 
-from collections.abc import Sized
+from collections.abc import Callable, Sized
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -507,12 +507,16 @@ def build_normal_training_corpus(
     train_sequences: Iterable[TemplateSequence],
     *,
     progress: Progress,
+    observe_sequence: Callable[[TemplateSequence], None] | None = None,
 ) -> NormalTrainingCorpus:
     """Collect replayable normal-target training state for offline DeepLog.
 
     Args:
         train_sequences (Iterable[TemplateSequence]): Train-split sequences.
         progress (Progress): Progress reporter.
+        observe_sequence (Callable[[TemplateSequence], None] | None): Optional
+            callback invoked for every observed training sequence before target
+            filtering is applied.
 
     Returns:
         NormalTrainingCorpus: Cached training state for replay.
@@ -521,7 +525,7 @@ def build_normal_training_corpus(
         ValueError: If no normal sequences are available for training.
     """
     # The paper trains DeepLog from normal execution only. For raw-entry
-    # chronological streams we preserve mixed chunks as context but filter
+    # chronological streams we preserve mixed batches as context but filter
     # training targets at the event level, so we materialise the replayable
     # corpus once and let the model-specific builders consume the eligibility
     # mask for each event.
@@ -535,6 +539,8 @@ def build_normal_training_corpus(
     event_count = 0
     try:
         for sequence in train_sequences:
+            if observe_sequence is not None:
+                observe_sequence(sequence)
             eligible_indexes = training_event_index_mask(sequence)
             if not eligible_indexes:
                 progress.advance(prepare_task)

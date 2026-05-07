@@ -163,6 +163,8 @@ class BGLChunkSensitivitySummary:
             unchunked stream.
         post_cutoff_events_excluded (int): Post-cutoff events lost to chunk
             handling rather than the evaluation mask.
+        lost_event_line_orders (list[int]): Raw line orders of the events lost
+            to warm-up in this chunking mode.
     """
 
     chunk_size: int
@@ -174,6 +176,7 @@ class BGLChunkSensitivitySummary:
     insufficient_history: int
     warmup_loss: int
     post_cutoff_events_excluded: int
+    lost_event_line_orders: list[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +191,8 @@ class EvaluationWarmupSummary:
         normal_events (int): Eligible evaluation targets labelled normal.
         post_cutoff_events_excluded (int): Evaluation-target events lost to
             chunk/context handling rather than the evaluation mask.
+        lost_event_line_orders (list[int]): Raw line orders of the events lost
+            to warm-up under the requested stream semantics.
     """
 
     events_eligible: int
@@ -195,6 +200,7 @@ class EvaluationWarmupSummary:
     anomalous_events: int
     normal_events: int
     post_cutoff_events_excluded: int
+    lost_event_line_orders: list[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -909,6 +915,7 @@ def audit_bgl_chunk_size_sensitivity(
         evaluation_summary = _evaluation_warmup_from_sequences(
             sequences=chunk_config.sequence.apply(templated),
             history_size=history_size,
+            carry_context=False,
         )
         summaries.append(
             BGLChunkSensitivitySummary(
@@ -925,9 +932,37 @@ def audit_bgl_chunk_size_sensitivity(
                 post_cutoff_events_excluded=(
                     evaluation_summary.post_cutoff_events_excluded
                 ),
+                lost_event_line_orders=evaluation_summary.lost_event_line_orders,
             ),
         )
     return summaries
+
+
+def audit_bgl_continuous_stream_warmup(
+    *,
+    config: DatasetVariantConfig,
+    repo_root: Path,
+    history_size: int,
+) -> EvaluationWarmupSummary:
+    """Measure warm-up accounting when the stream carries context forward.
+
+    Args:
+        config (DatasetVariantConfig): BGL paper dataset config to audit.
+        repo_root (Path): Repository root used to resolve the config.
+        history_size (int): DeepLog history length used for warm-up counting.
+
+    Returns:
+        EvaluationWarmupSummary: Event-level warm-up totals for the continuous
+        stream baseline.
+    """
+    validate_deeplog_paper_config(dataset_config=config)
+    dataset_spec = build_dataset_spec(config, repo_root=repo_root)
+    templated = dataset_spec.build()
+    return _evaluation_warmup_from_sequences(
+        sequences=config.sequence.apply(templated),
+        history_size=history_size,
+        carry_context=True,
+    )
 
 
 def audit_hdfs_first_100k_policies(
@@ -1153,6 +1188,7 @@ def _evaluation_warmup_from_sequences(
     *,
     sequences: Iterable[TemplateSequence],
     history_size: int,
+    carry_context: bool,
 ) -> EvaluationWarmupSummary:
     """Count event-level evaluation membership across preserved chunks.
 
@@ -1160,6 +1196,8 @@ def _evaluation_warmup_from_sequences(
         sequences (Iterable[TemplateSequence]): Chronological sequences to
             inspect.
         history_size (int): DeepLog history length used for warm-up counting.
+        carry_context (bool): Whether to retain the full chronological history
+            across sequence boundaries.
 
     Returns:
         EvaluationWarmupSummary: Stable evaluation counts for the stream.
@@ -1168,30 +1206,37 @@ def _evaluation_warmup_from_sequences(
     insufficient_history = 0
     anomalous_events = 0
     normal_events = 0
+    lost_event_line_orders: list[int] = []
+    global_event_index = 0
     for sequence in sequences:
         evaluation_mask = evaluation_event_mask_for_sequence(sequence)
         for event_index, is_evaluation_target in enumerate(evaluation_mask):
             if not is_evaluation_target:
+                global_event_index += 1
                 continue
             raw_label = (
                 sequence.event_labels[event_index]
                 if sequence.event_labels is not None
                 else sequence.label
             )
-            if event_index < history_size:
+            if (global_event_index if carry_context else event_index) < history_size:
                 insufficient_history += 1
+                lost_event_line_orders.append(global_event_index)
+                global_event_index += 1
                 continue
             events_eligible += 1
             if is_anomalous_label(raw_label):
                 anomalous_events += 1
             else:
                 normal_events += 1
+            global_event_index += 1
     return EvaluationWarmupSummary(
         events_eligible=events_eligible,
         insufficient_history=insufficient_history,
         anomalous_events=anomalous_events,
         normal_events=normal_events,
         post_cutoff_events_excluded=0,
+        lost_event_line_orders=lost_event_line_orders,
     )
 
 

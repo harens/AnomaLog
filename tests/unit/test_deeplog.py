@@ -26,6 +26,7 @@ from experiments.models.deeplog.parameters import (
     masked_mse,
     masked_regression_loss,
     raw_parameter_vector_for_event,
+    score_parameter_sequence,
 )
 from experiments.models.deeplog.shared import (
     DeepLogManifest,
@@ -103,6 +104,7 @@ def _sequence(
     event_labels: tuple[int | None, ...] | None = None,
     training_event_mask: tuple[bool, ...] | None = None,
     evaluation_event_mask: tuple[bool, ...] | None = None,
+    continuous_context: bool = False,
 ) -> TemplateSequence:
     resolved_params = params_by_event or [[] for _ in templates]
     resolved_dts = dts_by_event or [None for _ in templates]
@@ -123,6 +125,7 @@ def _sequence(
         event_labels=event_labels,
         training_event_mask=training_event_mask,
         evaluation_event_mask=evaluation_event_mask,
+        continuous_context=continuous_context,
     )
 
 
@@ -249,6 +252,61 @@ def test_score_key_sequence_records_oov_history_templates() -> None:
     assert finding.unknown_history_templates == ["UNSEEN"]
     assert finding.actual_probability is None
     assert finding.top_predictions == []
+
+
+def test_score_key_sequence_carries_prefix_history_across_chunks() -> None:
+    """Continuous stream scoring should reuse the prior chunk's key history."""
+    sequence = _sequence(templates=["C"])
+    model = _StaticKeyModel(logits=[-5.0, -5.0, 3.0, -5.0])
+
+    finding = score_key_sequence(
+        sequence=sequence,
+        context=_key_context(model=model, top_g=1),
+        prefix_templates=["A", "B"],
+    )[0]
+
+    assert finding.history_templates == ["A", "B"]
+    assert finding.actual_template == "C"
+    assert finding.is_anomalous is False
+
+
+def test_score_parameter_sequence_carries_prefix_history_across_chunks() -> None:
+    """Continuous stream scoring should reuse the prior chunk's parameter history."""
+    schema = ParameterFeatureSchema(
+        feature_names=["param_0"],
+        numeric_parameter_positions=[0],
+        include_elapsed_time=False,
+        dropped_parameter_positions=[],
+    )
+    state = ParameterModelState(
+        template="T",
+        schema=schema,
+        normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+        gaussian=GaussianThreshold(
+            mean=0.0,
+            stddev=1.0,
+            lower_bound=0.0,
+            upper_bound=10.0,
+        ),
+        model=_StaticParameterModel(output_vector=[1.0]),
+    )
+
+    findings = score_parameter_sequence(
+        sequence=_sequence(
+            templates=["T"],
+            params_by_event=[["1.0"]],
+            split_label=SplitLabel.TEST,
+        ),
+        parameter_models={"T": state},
+        history_size=2,
+        eligible_event_indexes={0},
+        prefix_events_by_template={"T": [(["1.0"], None), (["1.0"], None)]},
+    )
+
+    assert 0 in findings
+    finding = findings[0]
+    assert finding.observed_vector == [1.0]
+    assert finding.is_anomalous is False
 
 
 def test_iter_key_examples_yields_sliding_windows_per_sequence() -> None:
@@ -919,6 +977,44 @@ def test_deeplog_sequence_trigger_breakdown_counts_source_combinations() -> None
     assert breakdown.both_anomalous_sequences == 1
     assert breakdown.neither_normal_sequences == 0
     assert breakdown.neither_anomalous_sequences == 0
+
+
+def test_deeplog_sequence_trigger_breakdown_is_disabled_for_stream_batches() -> None:
+    """Continuous stream batches should not produce sequence-level aggregation."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "D": 2,
+        "T": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    detector.predict(
+        _sequence(
+            templates=["A", "B", "D"],
+            label=0,
+            continuous_context=True,
+        ),
+    )
+
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+
+    assert metrics.sequence_trigger_breakdown is None
 
 
 def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> None:

@@ -86,6 +86,7 @@ def _assert_deepcase_metrics(
     assert metrics["test_sequence_count"] >= 0
     assert metrics["ignored_sequence_count"] >= 0
     assert "auto_decision_count" in metrics
+    assert "counted_predictions" in metrics
     assert "abstained_prediction_count" in metrics
     assert "auto_coverage" in metrics
     assert "abstain_rate" in metrics
@@ -93,7 +94,6 @@ def _assert_deepcase_metrics(
     assert "abstained_normal_label_count" in metrics
     assert "parent_sequence_fallback_count" in metrics
     assert "random_seed" in metrics
-    assert "counted_predictions" in metrics
     assert "next_event_prediction" in metrics
     assert "manual_workload_reduction" in metrics
     assert "semi_automatic_workload_reduction" in metrics

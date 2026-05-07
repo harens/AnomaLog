@@ -52,23 +52,27 @@ Current data and paper counts:
 
 The new BGL reproduction configs use `grouping = "chronological_stream"` with a
 fixed `chunk_size = 100000`. That is a deterministic memory-bound container for
-the raw-entry stream, not the split unit. The emitted sequence count is chunk
-dependent, but train/test membership is now driven by explicit per-event masks:
+the raw-entry stream, not the split unit. Chronological stream sequences are
+marked as continuous by default, so DeepLog carries key and parameter context
+across batch boundaries without a user-facing switch. The emitted sequence count
+is batch dependent, but train/test membership is now driven by explicit
+per-event masks:
 
 - `training_event_mask` selects the normal targets eligible for fitting;
 - `evaluation_event_mask` selects the targets eligible for scoring;
-- the chronological chunk is kept intact for context, but it no longer decides
+- the chronological batch is kept intact for context, but it no longer decides
   which post-cutoff events are lost.
 
 The earlier 585-sequence result came from `split_partial_sequences` fragmenting
-the 48 chronological chunks at raw-entry label boundaries. In the 1% normal
-config, the first chunk was being split repeatedly as the normal quota was
-reached mid-stream. The fixed policy keeps each chronological chunk intact and
+the 48 chronological batches at raw-entry label boundaries. In the 1% normal
+config, the first batch was being split repeatedly as the normal quota was
+reached mid-stream. The fixed policy keeps each chronological batch intact and
 attaches explicit event masks instead.
 
-Early anomalies before the normal quota cutoff remain in the chunk context but
-are excluded from training targets. Post-cutoff events inside the first chunk
-are now retained for evaluation instead of being lost to chunk boundaries.
+Early anomalies before the normal quota cutoff remain in the batch context but
+are excluded from training targets. Post-cutoff events inside the first batch
+are retained for evaluation, and all later boundaries are treated as internal
+batching only.
 
 | Config | train raw | train normal | train anomalous | test raw | test normal | test anomalous | sequence count | train / ignored / test | train targets | excluded anomalies | excluded context |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
@@ -76,27 +80,30 @@ are now retained for evaluation instead of being lost to chunk boundaries.
 | `10pct_entry_stream_no_online` | 474,797 | 281,950 | 192,847 | 4,273,166 | 4,117,553 | 155,613 | 48 | 5 / 0 / 43 | 281,950 | 206,847 | 11,203 |
 
 The 1% normal-entry split reaches the 43,996th normal raw entry after skipping
-2,322 anomalous entries before the cutoff. The resulting train chunk still has
+2,322 anomalous entries before the cutoff. The resulting train batch still has
 53,395 post-cutoff normal events and 2,609 anomalous events in context, but
 only the 43,996 normal target events are eligible for fitting. Those
 post-cutoff events are also retained for evaluation through the explicit
-evaluation mask, so chunk size no longer suppresses the test population.
+evaluation mask, so batch size no longer suppresses the test population.
 
-The 10% raw-entry split keeps the first five chronological chunks in the train
-prefix. Those chunks still contain 206,847 anomalous events and 11,203
+The 10% raw-entry split keeps the first five chronological batches in the train
+prefix. Those batches still contain 206,847 anomalous events and 11,203
 post-cutoff context events that are excluded from training targets, while
 281,950 normal raw entries remain eligible for DeepLog fitting.
 
-### Event-level chunk audit
+### Event-level boundary audit
 
-| Chunk size | Sequence count | Eligible training targets | Event-level evaluation count | Anomalous evaluation targets | Normal evaluation targets | Insufficient-history count | Warm-up loss | Post-cutoff events excluded |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 50,000 | 95 | 43,996 | 4,701,363 | 346,120 | 4,355,243 | 282 | 282 | 0 |
-| 100,000 | 48 | 43,996 | 4,701,504 | 346,129 | 4,355,375 | 141 | 141 | 0 |
-| 200,000 | 24 | 43,996 | 4,701,576 | 346,138 | 4,355,438 | 69 | 69 | 0 |
+| Mode | Sequence count | Eligible training targets | Event-level evaluation count | Anomalous evaluation targets | Normal evaluation targets | Insufficient-history count | Warm-up loss | Lost warm-up events |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `batch_size = 50,000` | 95 | 43,996 | 4,701,363 | 346,120 | 4,355,243 | 282 | 282 | First three evaluation targets in each post-cutoff batch: `50,000-50,002`, `100,000-100,002`, ..., `4,700,000-4,700,002`. |
+| `batch_size = 100,000` | 48 | 43,996 | 4,701,504 | 346,129 | 4,355,375 | 141 | 141 | First three evaluation targets in each post-cutoff batch: `100,000-100,002`, `200,000-200,002`, ..., `4,700,000-4,700,002`. |
+| `batch_size = 200,000` | 24 | 43,996 | 4,701,576 | 346,138 | 4,355,438 | 69 | 69 | First three evaluation targets in each post-cutoff batch: `200,000-200,002`, `400,000-400,002`, ..., `4,600,000-4,600,002`. |
+| continuous stream | 48 | 43,996 | 4,701,645 | 346,138 | 4,355,507 | 0 | 0 | No batch-boundary warm-up loss. Context carries across the entire stream, so the warm-up loss is eliminated rather than repeated at each artificial boundary. |
 
-The only remaining chunk-size effect is the expected warm-up loss at chunk
-boundaries. No post-cutoff events are being dropped by chunk/context handling.
+The event-level denominator now stays fixed across all batch sizes, and the
+continuous-stream mode removes the artificial boundary losses entirely. The
+audit helper records the raw `lost_event_line_orders` list for each mode so the
+boundary losses remain inspectable in machine-readable form.
 
 ## Verdict
 

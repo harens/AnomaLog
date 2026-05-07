@@ -8,6 +8,7 @@ from experiments.audit.deepcase_audit import (
 from experiments.audit.deeplog_data_audit import (
     aggregate_warmup_accounting,
     audit_bgl_chunk_size_sensitivity,
+    audit_bgl_continuous_stream_warmup,
     audit_dataset_for_deeplog,
     audit_hdfs_first_100k_policies,
     validate_deeplog_paper_config,
@@ -17,6 +18,7 @@ from experiments.audit.deeplog_data_audit import (
 __all__ = [
     "aggregate_warmup_accounting",
     "audit_bgl_chunk_size_sensitivity",
+    "audit_bgl_continuous_stream_warmup",
     "audit_dataset_for_deeplog",
     "audit_hdfs_first_100k_policies",
     "validate_deepcase_bgl_extension_config",

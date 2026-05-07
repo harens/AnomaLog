@@ -95,7 +95,9 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
         event_level_detection (DeepLogEventLevelDetectionDiagnostics | None):
             Event-level anomaly metrics derived from labelled log entries.
         sequence_trigger_breakdown (DeepLogSequenceTriggerBreakdown | None):
-            Sequence-level trigger source counts split by actual label.
+            Sequence-level trigger source counts split by actual label. This
+            remains meaningful for session-based runs, but is suppressed for
+            continuous stream batches where sequence boundaries are internal.
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
@@ -162,6 +164,25 @@ class DeepLogSequenceTriggerBreakdown(msgspec.Struct, frozen=True):
     both_anomalous_sequences: int
     neither_normal_sequences: int
     neither_anomalous_sequences: int
+
+
+@dataclass(slots=True)
+class DeepLogStreamContext:
+    """Cached history carried between chronological stream boundaries.
+
+    Attributes:
+        key_templates (list[str]): Tail of observed template names carried
+            across chronological batch boundaries.
+        parameter_events_by_template (dict[str, list[tuple[list[str], int | None]]]):
+            Per-template tails of observed parameter events carried across
+            chronological batch boundaries.
+    """
+
+    key_templates: list[str] = field(default_factory=list)
+    parameter_events_by_template: dict[
+        str,
+        list[tuple[list[str], int | None]],
+    ] = field(default_factory=dict)
 
 
 class DeepLogModelConfig(
@@ -366,6 +387,16 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         init=False,
         repr=False,
     )
+    _stream_context: DeepLogStreamContext | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _sequence_trigger_breakdown_applicable: bool = field(
+        default=True,
+        init=False,
+        repr=False,
+    )
 
     def fit(
         self,
@@ -382,10 +413,23 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             logger (logging.Logger | None): Optional logger for fit diagnostics.
         """
         self._ensure_unfit(detector_name=self.detector_name)
+        stream_context = DeepLogStreamContext()
+        stream_context_enabled = False
+
+        def observe_sequence(sequence: TemplateSequence) -> None:
+            nonlocal stream_context_enabled
+            if not sequence.continuous_context:
+                return
+            stream_context_enabled = True
+            self._update_stream_context(
+                sequence=sequence,
+                stream_context=stream_context,
+            )
 
         training_corpus = build_normal_training_corpus(
             train_sequences,
             progress=progress,
+            observe_sequence=observe_sequence,
         )
         set_torch_seed(self.config.random_seed)
         device = resolve_torch_device(self.config.device)
@@ -424,6 +468,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self.skipped_parameter_models = skipped_parameter_models
         self.train_event_count = train_event_count
         self.train_parameter_covered_event_count = train_parameter_covered_event_count
+        self._stream_context = stream_context if stream_context_enabled else None
+        self._sequence_trigger_breakdown_applicable = True
         self._reset_next_event_prediction_state()
         self._reset_event_level_state()
         self._mark_fit_complete()
@@ -462,6 +508,11 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 history_size=self.config.history_size,
                 top_g=self.config.top_g,
             ),
+            prefix_templates=(
+                None
+                if self._stream_context is None
+                else self._stream_context.key_templates
+            ),
         )
         self._record_next_event_predictions(
             sequence=sequence,
@@ -485,6 +536,11 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 parameter_models=self.parameter_models,
                 history_size=self.config.history_size,
                 eligible_event_indexes=parameter_eligible_event_indexes,
+                prefix_events_by_template=(
+                    None
+                    if self._stream_context is None
+                    else self._stream_context.parameter_events_by_template
+                ),
             )
         else:
             parameter_findings = {}
@@ -525,17 +581,26 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 parameter_finding=parameter_finding,
             )
 
+        if self._stream_context is not None:
+            self._update_stream_context(
+                sequence=sequence,
+                stream_context=self._stream_context,
+            )
+
         # An AnomaLog run still needs one sequence-level label and score, so we
         # aggregate the paper's event-level decisions here:
         #
         # - the sequence is anomalous if any event was anomalous
         # - the sequence score is the strongest event-level anomaly signal
         predicted_label = int(key_triggered or parameter_triggered)
-        self._record_sequence_trigger_breakdown(
-            actual_is_anomalous=is_anomalous_label(sequence.label),
-            key_triggered=key_triggered,
-            parameter_triggered=parameter_triggered,
-        )
+        if sequence.continuous_context:
+            self._sequence_trigger_breakdown_applicable = False
+        else:
+            self._record_sequence_trigger_breakdown(
+                actual_is_anomalous=is_anomalous_label(sequence.label),
+                key_triggered=key_triggered,
+                parameter_triggered=parameter_triggered,
+            )
         return DeepLogPredictionOutcome(
             predicted_label=predicted_label,
             score=max(scores, default=0.0),
@@ -638,10 +703,16 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         del run_metrics
         next_event_prediction = self._next_event_prediction_state_snapshot()
         event_level_detection = self._event_level_state_snapshot()
-        sequence_trigger_breakdown = self._sequence_trigger_breakdown_snapshot()
+        sequence_trigger_breakdown = (
+            self._sequence_trigger_breakdown_snapshot()
+            if self._sequence_trigger_breakdown_applicable
+            else None
+        )
+        self._stream_context = None
         self._reset_next_event_prediction_state()
         self._reset_event_level_state()
         self._reset_sequence_trigger_breakdown()
+        self._sequence_trigger_breakdown_applicable = True
         return DeepLogRunMetrics(
             next_event_prediction=next_event_prediction,
             event_level_detection=event_level_detection,
@@ -782,6 +853,35 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._sequence_both_anomalous_count = 0
         self._sequence_neither_normal_count = 0
         self._sequence_neither_anomalous_count = 0
+
+    def _update_stream_context(
+        self,
+        *,
+        sequence: TemplateSequence,
+        stream_context: DeepLogStreamContext,
+    ) -> None:
+        """Advance the cached stream history with one chronological batch.
+
+        Args:
+            sequence (TemplateSequence): Newly scored chronological batch.
+            stream_context (DeepLogStreamContext): Mutable cache carrying the
+                prior stream tail.
+        """
+        stream_context.key_templates.extend(sequence.templates)
+        if len(stream_context.key_templates) > self.config.history_size:
+            stream_context.key_templates = stream_context.key_templates[
+                -self.config.history_size :
+            ]
+        for template, parameters, dt_prev_ms in sequence.events:
+            history = stream_context.parameter_events_by_template.setdefault(
+                template,
+                [],
+            )
+            history.append((parameters, dt_prev_ms))
+            if len(history) > self.config.history_size:
+                stream_context.parameter_events_by_template[template] = history[
+                    -self.config.history_size :
+                ]
 
     def _record_sequence_trigger_breakdown(
         self,
