@@ -68,7 +68,10 @@ extensions:
   default to `full_dataset` so the diagnostic output is directly comparable
   with DeepCASE. The diagnostic vocabulary policy is configurable on
   `DeepLogModelConfig`; `train_only` remains available when you want the
-  report restricted to the training vocabulary used by the key scorer.
+  report restricted to the training vocabulary used by the key scorer. The
+  run-level payload also includes `segment_diagnostics`, which summarises the
+  effective prediction segments, their warm-up cost, and a small segment
+  length histogram so stream-boundary resets are visible in `metrics.json`.
 - Missing or non-numeric parameter values:
   positions not admitted by the strict schema are never modeled. For admitted
   positions, missing values are padded with `0.0` internally but masked out of

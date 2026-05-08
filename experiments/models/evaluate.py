@@ -254,6 +254,17 @@ def run_model(
     metrics = accumulator.metrics()
     extra_metrics = detector.run_metrics(run_metrics=metrics)
     if extra_metrics is not None:
+        next_event_prediction = getattr(extra_metrics, "next_event_prediction", None)
+        if (
+            next_event_prediction is not None
+            and getattr(next_event_prediction, "segment_diagnostics", None) is not None
+        ):
+            logger.info(
+                "DeepLog next-event segment diagnostics: %s",
+                msgspec.to_builtins(
+                    next_event_prediction.segment_diagnostics,
+                ),
+            )
         metrics = {**metrics, **msgspec.to_builtins(extra_metrics)}
     return ModelRunSummary(
         metrics=metrics,

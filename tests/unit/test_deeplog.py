@@ -1212,6 +1212,88 @@ def test_next_event_prediction_state_computes_weighted_metrics_and_exclusions() 
     assert snapshot.vocabulary_policy is VocabularyPolicy.TRAIN_ONLY
 
 
+def _deeplog_next_event_detector(*, history_size: int) -> DeepLogDetector:
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=history_size,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[3.0, 2.0, 1.0])
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+    return detector
+
+
+def test_deeplog_next_event_prediction_counts_warmup_for_one_continuous_stream() -> (
+    None
+):
+    """One continuous stream should incur a single history warm-up window."""
+    detector = _deeplog_next_event_detector(history_size=10)
+
+    detector.predict(
+        _sequence(
+            templates=["A"] * 100,
+            label=0,
+            continuous_context=True,
+        ),
+    )
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+    next_event_prediction = metrics.next_event_prediction
+
+    assert next_event_prediction is not None
+    assert next_event_prediction.totals.events_seen == 100
+    assert next_event_prediction.totals.events_eligible == 90
+    assert next_event_prediction.totals.coverage == pytest.approx(0.9)
+    assert next_event_prediction.exclusions.insufficient_history == 10
+    assert next_event_prediction.segment_diagnostics is not None
+    assert next_event_prediction.segment_diagnostics.segment_count == 1
+    assert (
+        next_event_prediction.segment_diagnostics.expected_insufficient_history_from_segments
+        == 10
+    )
+
+
+def test_deeplog_next_event_prediction_counts_independent_segments() -> None:
+    """Independent segments should each pay their own DeepLog warm-up cost."""
+    detector = _deeplog_next_event_detector(history_size=10)
+
+    for length in [100, 50, 5]:
+        detector.predict(
+            _sequence(
+                templates=["A"] * length,
+                label=0,
+                continuous_context=False,
+            ),
+        )
+
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 3})
+    next_event_prediction = metrics.next_event_prediction
+
+    assert next_event_prediction is not None
+    assert next_event_prediction.totals.events_seen == 155
+    assert next_event_prediction.totals.events_eligible == 130
+    assert next_event_prediction.totals.coverage == pytest.approx(130 / 155)
+    assert next_event_prediction.exclusions.insufficient_history == 25
+    assert next_event_prediction.segment_diagnostics is not None
+    assert next_event_prediction.segment_diagnostics.segment_count == 3
+    assert (
+        next_event_prediction.segment_diagnostics.expected_insufficient_history_from_segments
+        == 25
+    )
+
+
 def test_next_event_prediction_state_top_k_is_monotonic() -> None:
     """Top-k hit counts should never decrease as k grows."""
     state = NextEventPredictionState(

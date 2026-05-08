@@ -128,6 +128,11 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     totals = _object_dict(next_event_prediction["totals"])
     top_k = _object_dict(next_event_prediction["top_k"])
     exclusions = _object_dict(next_event_prediction["exclusions"])
+    segment_diagnostics_raw = next_event_prediction["segment_diagnostics"]
+    assert isinstance(segment_diagnostics_raw, dict)
+    segment_diagnostics = {
+        str(key): value for key, value in segment_diagnostics_raw.items()
+    }
     hit_count = _object_dict(top_k["hit_count"])
     accuracy = _object_dict(top_k["accuracy"])
     assert _int_value(totals, "events_seen") >= _int_value(
@@ -145,6 +150,15 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert _int_value(exclusions, "unknown_history") >= 0
     assert _int_value(exclusions, "unknown_target") >= 0
     assert next_event_prediction["vocabulary_policy"] == "full_dataset"
+    assert _int_value(segment_diagnostics, "segment_count") >= 1
+    assert _int_value(segment_diagnostics, "history_size") > 0
+    assert (
+        _int_value(
+            segment_diagnostics,
+            "expected_insufficient_history_from_segments",
+        )
+        >= 0
+    )
 
     event_level_detection_raw = metrics["event_level_detection"]
     if event_level_detection_raw is not None:

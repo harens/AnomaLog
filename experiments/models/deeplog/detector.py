@@ -47,6 +47,10 @@ from experiments.models.deeplog.shared import (
 from experiments.models.next_event_metrics import (
     NextEventPredictionDiagnostics,
     NextEventPredictionExclusionReason,
+    NextEventPredictionSegmentBoundaryReason,
+    NextEventPredictionSegmentDiagnostics,
+    NextEventPredictionSegmentSourceType,
+    NextEventPredictionSegmentSummary,
     NextEventPredictionState,
     VocabularyPolicy,
 )
@@ -183,6 +187,159 @@ class DeepLogStreamContext:
         str,
         list[tuple[list[str], int | None]],
     ] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _NextEventPredictionSegmentState:
+    """Track segment-level next-event warm-up across streamed sequences.
+
+    Attributes:
+        history_size (int): DeepLog history length used for scoring.
+        segment_id (int): Monotonic segment identifier within the run.
+        active (bool): Whether a segment is currently open.
+        warmup_remaining (int): Remaining warm-up events for the active
+            segment.
+        current_length (int): Number of scored events in the active segment.
+        current_insufficient_history (int): Number of events excluded from the
+            active segment because the carried history was insufficient.
+        current_continuous_context (bool): Whether the active segment should
+            continue across the next sequence boundary.
+        current_boundary_reason (NextEventPredictionSegmentBoundaryReason):
+            Why the active segment started.
+        current_source_object_type (NextEventPredictionSegmentSourceType):
+            Best-effort source-object label for the active segment.
+        summaries (list[NextEventPredictionSegmentSummary]): Finalised segment
+            summaries for the run.
+    """
+
+    history_size: int
+    segment_id: int = 0
+    active: bool = False
+    warmup_remaining: int = 0
+    current_length: int = 0
+    current_insufficient_history: int = 0
+    current_continuous_context: bool = False
+    current_boundary_reason: NextEventPredictionSegmentBoundaryReason = (
+        NextEventPredictionSegmentBoundaryReason.UNKNOWN
+    )
+    current_source_object_type: NextEventPredictionSegmentSourceType = (
+        NextEventPredictionSegmentSourceType.UNKNOWN
+    )
+    summaries: list[NextEventPredictionSegmentSummary] = field(
+        default_factory=list,
+    )
+
+    def start_segment(
+        self,
+        *,
+        prefix_length: int,
+        continuous_context: bool,
+        boundary_reason: NextEventPredictionSegmentBoundaryReason,
+        source_object_type: NextEventPredictionSegmentSourceType,
+    ) -> None:
+        """Begin a fresh prediction segment.
+
+        Args:
+            prefix_length (int): Number of carried templates already available
+                before the active segment starts.
+            continuous_context (bool): Whether the segment should continue
+                across later sequence boundaries.
+            boundary_reason (NextEventPredictionSegmentBoundaryReason): Why the
+                segment starts.
+            source_object_type (NextEventPredictionSegmentSourceType): Best-
+                effort source-object label for the segment.
+        """
+        if self.active:
+            self.finalise_segment()
+        self.segment_id += 1
+        self.active = True
+        self.warmup_remaining = max(0, self.history_size - prefix_length)
+        self.current_length = 0
+        self.current_insufficient_history = 0
+        self.current_continuous_context = continuous_context
+        self.current_boundary_reason = boundary_reason
+        self.current_source_object_type = source_object_type
+
+    def record_event(self, *, has_history: bool) -> bool:
+        """Advance the current segment by one scored event.
+
+        Args:
+            has_history (bool): Whether the event already has enough carried
+                context to be scored normally.
+
+        Returns:
+            bool: True when the event contributes to the insufficient-history
+            count.
+
+        Raises:
+            RuntimeError: If the segment has not been started.
+        """
+        if not self.active:
+            msg = "prediction segment state must be started before recording events."
+            raise RuntimeError(msg)
+        self.current_length += 1
+        if has_history:
+            return False
+        self.current_insufficient_history += 1
+        if self.warmup_remaining > 0:
+            self.warmup_remaining -= 1
+        return True
+
+    def finalise_segment(self) -> None:
+        """Persist the active segment summary, if any."""
+        if not self.active:
+            return
+        self.summaries.append(
+            NextEventPredictionSegmentSummary(
+                segment_id=self.segment_id,
+                length=self.current_length,
+                insufficient_history=self.current_insufficient_history,
+                boundary_reason=self.current_boundary_reason,
+                source_object_type=self.current_source_object_type,
+            ),
+        )
+        self.active = False
+        self.warmup_remaining = 0
+        self.current_length = 0
+        self.current_insufficient_history = 0
+        self.current_continuous_context = False
+        self.current_boundary_reason = NextEventPredictionSegmentBoundaryReason.UNKNOWN
+        self.current_source_object_type = NextEventPredictionSegmentSourceType.UNKNOWN
+
+    def snapshot(self) -> NextEventPredictionSegmentDiagnostics | None:
+        """Return an aggregate view of the recorded segments.
+
+        Returns:
+            NextEventPredictionSegmentDiagnostics | None: Segment-level
+            diagnostics for the run, or `None` when no segments were recorded.
+        """
+        if self.active:
+            self.finalise_segment()
+        if not self.summaries:
+            return None
+        sorted_by_length = sorted(
+            self.summaries,
+            key=lambda item: (item.length, item.segment_id),
+        )
+        largest_segments = sorted(
+            self.summaries,
+            key=lambda item: (item.length, item.segment_id),
+            reverse=True,
+        )[:5]
+        histogram: dict[str, int] = {}
+        for summary in self.summaries:
+            key = str(summary.length)
+            histogram[key] = histogram.get(key, 0) + 1
+        return NextEventPredictionSegmentDiagnostics(
+            segment_count=len(self.summaries),
+            history_size=self.history_size,
+            expected_insufficient_history_from_segments=sum(
+                summary.insufficient_history for summary in self.summaries
+            ),
+            largest_segments=largest_segments,
+            smallest_segments=sorted_by_length[:5],
+            segment_length_histogram=histogram,
+        )
 
 
 class DeepLogModelConfig(
@@ -392,6 +549,13 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         init=False,
         repr=False,
     )
+    _next_event_prediction_segment_state: _NextEventPredictionSegmentState | None = (
+        field(
+            default=None,
+            init=False,
+            repr=False,
+        )
+    )
     _sequence_trigger_breakdown_applicable: bool = field(
         default=True,
         init=False,
@@ -496,6 +660,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         scores: list[float] = []
         evaluation_event_indexes = set(evaluation_event_index_mask(sequence))
         self.test_event_count += len(evaluation_event_indexes)
+        self._prepare_next_event_prediction_segment(
+            sequence=sequence,
+            prefix_length=self._prediction_prefix_length(sequence),
+        )
 
         # DeepLog makes one decision per event after the initial warm-up
         # window. First it asks whether the next log key itself looks normal.
@@ -508,16 +676,13 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 history_size=self.config.history_size,
                 top_g=self.config.top_g,
             ),
-            prefix_templates=(
-                None
-                if self._stream_context is None
-                else self._stream_context.key_templates
-            ),
+            prefix_templates=self._prediction_prefix_templates(sequence),
         )
         self._record_next_event_predictions(
             sequence=sequence,
             key_findings=key_findings,
             evaluation_event_indexes=evaluation_event_indexes,
+            segment_state=self._next_event_prediction_segment_state,
         )
         # The paper's inference path is "key first, parameters second". We
         # therefore only pay the parameter-model cost for events whose key
@@ -538,7 +703,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 eligible_event_indexes=parameter_eligible_event_indexes,
                 prefix_events_by_template=(
                     None
-                    if self._stream_context is None
+                    if not sequence.continuous_context or self._stream_context is None
                     else self._stream_context.parameter_events_by_template
                 ),
             )
@@ -601,6 +766,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 key_triggered=key_triggered,
                 parameter_triggered=parameter_triggered,
             )
+            self._finalise_next_event_prediction_segment()
         return DeepLogPredictionOutcome(
             predicted_label=predicted_label,
             score=max(scores, default=0.0),
@@ -701,7 +867,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             run.
         """
         del run_metrics
-        next_event_prediction = self._next_event_prediction_state_snapshot()
+        segment_diagnostics = self._next_event_prediction_segment_snapshot()
+        next_event_prediction = self._next_event_prediction_state_snapshot(
+            segment_diagnostics=segment_diagnostics,
+        )
         event_level_detection = self._event_level_state_snapshot()
         sequence_trigger_breakdown = (
             self._sequence_trigger_breakdown_snapshot()
@@ -712,6 +881,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._reset_next_event_prediction_state()
         self._reset_event_level_state()
         self._reset_sequence_trigger_breakdown()
+        self._reset_next_event_prediction_segment_state()
         self._sequence_trigger_breakdown_applicable = True
         return DeepLogRunMetrics(
             next_event_prediction=next_event_prediction,
@@ -725,22 +895,23 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         sequence: TemplateSequence,
         key_findings: dict[int, DeepLogKeyFinding],
         evaluation_event_indexes: set[int],
+        segment_state: _NextEventPredictionSegmentState | None,
     ) -> None:
         state = self._ensure_next_event_prediction_state()
+        if segment_state is None:
+            msg = "prediction segment state must be initialised before scoring."
+            raise RuntimeError(msg)
         for event_index, template in enumerate(sequence.templates):
             if event_index not in evaluation_event_indexes:
-                continue
-            if event_index < self.config.history_size:
-                state.record_exclusion(
-                    NextEventPredictionExclusionReason.INSUFFICIENT_HISTORY,
-                )
                 continue
             key_finding = key_findings.get(event_index)
             if key_finding is None:
                 state.record_exclusion(
                     NextEventPredictionExclusionReason.INSUFFICIENT_HISTORY,
                 )
+                segment_state.record_event(has_history=False)
                 continue
+            segment_state.record_event(has_history=True)
             state.record_observation(
                 actual_label=template,
                 predicted_labels=[
@@ -767,6 +938,99 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             vocabulary_policy=self.config.vocabulary_policy,
         )
 
+    def _reset_next_event_prediction_segment_state(self) -> None:
+        """Reset segment diagnostics before a fresh scoring run."""
+        self._next_event_prediction_segment_state = None
+
+    def _prepare_next_event_prediction_segment(
+        self,
+        *,
+        sequence: TemplateSequence,
+        prefix_length: int,
+    ) -> None:
+        state = self._next_event_prediction_segment_state
+        source_object_type = _prediction_segment_source_object_type(sequence)
+        if state is None:
+            state = _NextEventPredictionSegmentState(
+                history_size=self.config.history_size,
+            )
+            self._next_event_prediction_segment_state = state
+        if sequence.continuous_context:
+            if state.active:
+                return
+            boundary_reason = (
+                NextEventPredictionSegmentBoundaryReason.STREAM_START
+                if not state.summaries
+                else NextEventPredictionSegmentBoundaryReason.CONTEXT_RESET
+            )
+            state.start_segment(
+                prefix_length=prefix_length,
+                continuous_context=True,
+                boundary_reason=boundary_reason,
+                source_object_type=source_object_type,
+            )
+            return
+        if state.active:
+            state.finalise_segment()
+        state.start_segment(
+            prefix_length=prefix_length,
+            continuous_context=False,
+            boundary_reason=NextEventPredictionSegmentBoundaryReason.STANDALONE_SEQUENCE,
+            source_object_type=source_object_type,
+        )
+
+    def _prediction_prefix_templates(
+        self,
+        sequence: TemplateSequence,
+    ) -> list[str] | None:
+        """Return carried key-history templates for one predicted sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence being scored.
+
+        Returns:
+            list[str] | None: Carried template history, or `None` when the
+            sequence should not inherit previous context.
+        """
+        if not sequence.continuous_context or self._stream_context is None:
+            return None
+        return self._stream_context.key_templates
+
+    def _prediction_prefix_length(self, sequence: TemplateSequence) -> int:
+        """Return the number of carried key-history templates for one sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence being scored.
+
+        Returns:
+            int: Number of carried templates available to the sequence.
+        """
+        prefix_templates = self._prediction_prefix_templates(sequence)
+        if prefix_templates is None:
+            return 0
+        return len(prefix_templates)
+
+    def _finalise_next_event_prediction_segment(self) -> None:
+        state = self._next_event_prediction_segment_state
+        if state is None:
+            return
+        if state.active and not state.current_continuous_context:
+            state.finalise_segment()
+
+    def _next_event_prediction_segment_snapshot(
+        self,
+    ) -> NextEventPredictionSegmentDiagnostics | None:
+        """Return the recorded segment diagnostics for the latest run.
+
+        Returns:
+            NextEventPredictionSegmentDiagnostics | None: Finalised segment
+            diagnostics, or `None` when no scored segments were recorded.
+        """
+        state = self._next_event_prediction_segment_state
+        if state is None:
+            return None
+        return state.snapshot()
+
     def _reset_event_level_state(self) -> None:
         self._event_level_events_seen = 0
         self._event_level_events_eligible = 0
@@ -777,8 +1041,14 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
 
     def _next_event_prediction_state_snapshot(
         self,
+        *,
+        segment_diagnostics: NextEventPredictionSegmentDiagnostics | None = None,
     ) -> NextEventPredictionDiagnostics | None:
         """Return next-event diagnostics for the latest scoring run.
+
+        Args:
+            segment_diagnostics (NextEventPredictionSegmentDiagnostics | None):
+                Optional segment-level diagnostics to attach.
 
         Returns:
             NextEventPredictionDiagnostics | None: Latest next-event
@@ -787,7 +1057,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         state = self._next_event_prediction_state
         if state is None:
             return None
-        return state.snapshot()
+        return state.snapshot(segment_diagnostics=segment_diagnostics)
 
     def _event_level_state_snapshot(
         self,
@@ -930,6 +1200,29 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             self._event_level_fp += 1
         else:
             self._event_level_fn += 1
+
+
+def _prediction_segment_source_object_type(
+    sequence: TemplateSequence,
+) -> NextEventPredictionSegmentSourceType:
+    """Infer a stable source-object label for one prediction segment.
+
+    Args:
+        sequence (TemplateSequence): Sequence being scored.
+
+    Returns:
+        NextEventPredictionSegmentSourceType: Best-effort source-object label
+        for the segment.
+    """
+    if sequence.continuous_context:
+        return NextEventPredictionSegmentSourceType.CHRONOLOGICAL_CHUNK
+    if sequence.sole_entity_id is not None:
+        return NextEventPredictionSegmentSourceType.ENTITY
+    if not sequence.entity_ids:
+        return NextEventPredictionSegmentSourceType.CACHED_SEQUENCE
+    if len(sequence.entity_ids) == 1:
+        return NextEventPredictionSegmentSourceType.FILE_CHUNK
+    return NextEventPredictionSegmentSourceType.STREAM_PARTITION
 
 
 def _fraction(numerator: int, denominator: int) -> float:
