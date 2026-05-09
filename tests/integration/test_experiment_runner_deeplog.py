@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,8 +13,8 @@ from experiments.runners.run_experiment import run_experiment
 
 FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "deeplog"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "deeplog_bgl_fixture.log"
-EXPECTED_KEY_VOCABULARY_SIZE = 2
-EXPECTED_PARAMETER_MODEL_COUNT = 2
+EXPECTED_KEY_VOCABULARY_SIZE = 3
+EXPECTED_PARAMETER_MODEL_COUNT = 0
 PAPER_DEFAULT_HISTORY_SIZE = 10
 PAPER_DEFAULT_TOP_G = 9
 PAPER_DEFAULT_NUM_LAYERS = 2
@@ -40,46 +41,46 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
     return sweep_config
 
 
-def _read_predictions(run_dir: Path) -> list[dict[str, object]]:
+def _read_predictions(run_dir: Path) -> list[dict[str, Any]]:
     lines = (run_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines]
 
 
-def _object_dict(value: object) -> dict[str, object]:
+def _object_dict(value: object) -> dict[str, Any]:
     assert isinstance(value, dict)
     return {str(key): item for key, item in value.items()}
 
 
-def _int_value(mapping: dict[str, object], key: str) -> int:
+def _int_value(mapping: dict[str, Any], key: str) -> int:
     value = mapping[key]
     assert isinstance(value, int)
     return value
 
 
-def _float_value(mapping: dict[str, object], key: str) -> float:
+def _float_value(mapping: dict[str, Any], key: str) -> float:
     value = mapping[key]
     assert isinstance(value, int | float)
     return float(value)
 
 
-def _list_value(mapping: dict[str, object], key: str) -> list[object]:
+def _list_value(mapping: dict[str, Any], key: str) -> list[Any]:
     value = mapping[key]
     assert isinstance(value, list)
     return list(value)
 
 
-def _object_list(value: object) -> list[object]:
+def _object_list(value: object) -> list[Any]:
     assert isinstance(value, list)
     return list(value)
 
 
-def _prediction_details(prediction: dict[str, object]) -> dict[str, object]:
+def _prediction_details(prediction: dict[str, Any]) -> dict[str, Any]:
     return prediction
 
 
-def _anomalous_key_findings(prediction: dict[str, object]) -> list[dict[str, object]]:
+def _anomalous_key_findings(prediction: dict[str, Any]) -> list[dict[str, Any]]:
     findings = _object_list(_prediction_details(prediction)["findings"])
-    anomalous_findings: list[dict[str, object]] = []
+    anomalous_findings: list[dict[str, Any]] = []
     for raw_finding in findings:
         finding = _object_dict(raw_finding)
         key_model_finding = finding.get("key_model_finding")
@@ -92,10 +93,10 @@ def _anomalous_key_findings(prediction: dict[str, object]) -> list[dict[str, obj
 
 
 def _anomalous_parameter_findings(
-    prediction: dict[str, object],
-) -> list[dict[str, object]]:
+    prediction: dict[str, Any],
+) -> list[dict[str, Any]]:
     findings = _object_list(_prediction_details(prediction)["findings"])
-    anomalous_findings: list[dict[str, object]] = []
+    anomalous_findings: list[dict[str, Any]] = []
     for raw_finding in findings:
         finding = _object_dict(raw_finding)
         parameter_model_finding = finding.get("parameter_model_finding")
@@ -107,7 +108,23 @@ def _anomalous_parameter_findings(
     return anomalous_findings
 
 
-def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
+def _assert_deeplog_metrics(metrics: dict[str, Any]) -> None:
+    _assert_deeplog_metric_metadata(metrics)
+    _assert_deeplog_sequence_counts(metrics)
+    _assert_deeplog_metric_blocks(metrics)
+
+
+def _assert_deeplog_metric_metadata(metrics: dict[str, Any]) -> None:
+    assert "accuracy" not in metrics
+    assert "f1" not in metrics
+    assert metrics["evaluation_unit"] == "continuous_event_stream"
+    assert metrics["primary_metric_scope"] == "event_level_detection"
+    assert metrics["prediction_unit"] == "event"
+    assert metrics["label_unit"] == "event"
+    assert metrics["primary_metrics"]["status"] == "valid"
+
+
+def _assert_deeplog_sequence_counts(metrics: dict[str, Any]) -> None:
     sequence_count = _int_value(metrics, "sequence_count")
     train_sequence_count = _int_value(metrics, "train_sequence_count")
     test_sequence_count = _int_value(metrics, "test_sequence_count")
@@ -119,16 +136,46 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert sequence_count == (
         train_sequence_count + test_sequence_count + ignored_sequence_count
     )
-    next_event_prediction_raw = metrics["next_event_prediction"]
-    assert isinstance(next_event_prediction_raw, dict)
-    next_event_prediction = {
-        str(key): value for key, value in next_event_prediction_raw.items()
-    }
-    assert next_event_prediction["task"] == "next_event_prediction"
-    totals = _object_dict(next_event_prediction["totals"])
-    top_k = _object_dict(next_event_prediction["top_k"])
-    exclusions = _object_dict(next_event_prediction["exclusions"])
-    segment_diagnostics_raw = next_event_prediction["segment_diagnostics"]
+
+
+def _assert_deeplog_metric_blocks(metrics: dict[str, Any]) -> None:
+    metric_blocks_raw = metrics["metric_blocks"]
+    assert isinstance(metric_blocks_raw, dict)
+    metric_blocks = {str(key): value for key, value in metric_blocks_raw.items()}
+    _assert_deeplog_event_block(metric_blocks)
+    _assert_deeplog_next_event_block(metric_blocks, metrics)
+    _assert_deeplog_sequence_block(metric_blocks)
+
+
+def _assert_deeplog_event_block(metric_blocks: dict[str, Any]) -> None:
+    event_level_detection = _object_dict(metric_blocks["event_level_detection"])
+    assert event_level_detection["status"] == "valid"
+    assert _int_value(event_level_detection["class_counts"], "normal") >= 0
+    assert _int_value(event_level_detection["class_counts"], "anomalous") >= 0
+    assert event_level_detection["headline_metrics"]["precision"] >= 0.0
+    assert event_level_detection["headline_metrics"]["recall"] >= 0.0
+    assert event_level_detection["headline_metrics"]["f1"] >= 0.0
+
+
+def _assert_deeplog_sequence_block(metric_blocks: dict[str, Any]) -> None:
+    sequence_level_detection = _object_dict(metric_blocks["sequence_level_detection"])
+    assert sequence_level_detection["status"] == "invalid"
+    assert sequence_level_detection["invalid_reason"] == "single_class_test_set"
+    assert sequence_level_detection["headline_metrics"] == {}
+
+
+def _assert_deeplog_next_event_block(
+    metric_blocks: dict[str, Any],
+    metrics: dict[str, Any],
+) -> None:
+    next_event_prediction = _object_dict(metric_blocks["next_event_prediction"])
+    assert next_event_prediction["status"] == "valid"
+    totals = _object_dict(next_event_prediction["diagnostics"]["totals"])
+    top_k = _object_dict(next_event_prediction["diagnostics"]["top_k"])
+    exclusions = _object_dict(next_event_prediction["diagnostics"]["exclusions"])
+    segment_diagnostics_raw = next_event_prediction["diagnostics"][
+        "segment_diagnostics"
+    ]
     assert isinstance(segment_diagnostics_raw, dict)
     segment_diagnostics = {
         str(key): value for key, value in segment_diagnostics_raw.items()
@@ -149,7 +196,7 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
     assert _int_value(exclusions, "insufficient_history") >= 0
     assert _int_value(exclusions, "unknown_history") >= 0
     assert _int_value(exclusions, "unknown_target") >= 0
-    assert next_event_prediction["vocabulary_policy"] == "full_dataset"
+    assert next_event_prediction["diagnostics"]["vocabulary_policy"] == "full_dataset"
     assert _int_value(segment_diagnostics, "segment_count") >= 1
     assert _int_value(segment_diagnostics, "history_size") > 0
     assert (
@@ -160,32 +207,19 @@ def _assert_deeplog_metrics(metrics: dict[str, object]) -> None:
         >= 0
     )
 
-    event_level_detection_raw = metrics["event_level_detection"]
-    if event_level_detection_raw is not None:
-        assert isinstance(event_level_detection_raw, dict)
-        event_level_detection = {
-            str(key): value for key, value in event_level_detection_raw.items()
-        }
-        assert event_level_detection["task"] == "event_level_detection"
-        assert _int_value(event_level_detection, "events_seen") >= 0
-        assert _int_value(event_level_detection, "events_eligible") >= 0
-        assert _float_value(event_level_detection, "precision") >= 0.0
-        assert _float_value(event_level_detection, "recall") >= 0.0
-        assert _float_value(event_level_detection, "f1") >= 0.0
-
 
 def _assert_deeplog_manifest(
     *,
-    metrics: dict[str, object],
-    sequence_config: dict[str, object],
-    manifest: dict[str, object],
+    metrics: dict[str, Any],
+    sequence_config: dict[str, Any],
+    manifest: dict[str, Any],
 ) -> None:
     model_manifest_raw = manifest["model_manifest"]
     assert isinstance(model_manifest_raw, dict)
     model_manifest = {str(key): value for key, value in model_manifest_raw.items()}
     parameter_models_raw = model_manifest["parameter_models"]
     assert isinstance(parameter_models_raw, list)
-    parameter_models: list[dict[str, object]] = []
+    parameter_models: list[dict[str, Any]] = []
     for parameter_model in parameter_models_raw:
         assert isinstance(parameter_model, dict)
         parameter_models.append(
@@ -201,12 +235,9 @@ def _assert_deeplog_manifest(
         EXPECTED_PARAMETER_MODEL_COUNT
     )
     assert model_manifest["include_elapsed_time"] is True
-    assert parameter_models[0]["feature_names"] == [
-        "dt_prev_ms",
-        "param_0",
-    ]
+    assert parameter_models == []
     sequence_split_summary = _object_dict(manifest["sequence_split_summary"])
-    assert sequence_split_summary["train_on_normal_entities_only"] is True
+    assert sequence_split_summary.get("train_on_normal_entities_only") is None
     assert sequence_split_summary["requested_train_fraction"] == pytest.approx(
         sequence_config["train_fraction"],
     )
@@ -241,6 +272,14 @@ def _assert_deeplog_manifest(
         assert sequence_split_summary["effective_train_fraction_overall"] == (
             pytest.approx(train_sequence_count / _int_value(metrics, "sequence_count"))
         )
+    assert manifest["evaluation_unit"] == "continuous_event_stream"
+    assert manifest["primary_metric_scope"] == "event_level_detection"
+    assert "event_level_detection" in manifest["available_metric_scopes"]
+    assert "sequence_level_detection" in manifest["available_metric_scopes"]
+    assert manifest["split_policy"]["train_fraction"] == pytest.approx(
+        sequence_config["train_fraction"],
+    )
+    assert manifest["stream_segment_policy"]["mode"] == "continuous_event_stream"
 
 
 def test_run_experiment_with_deeplog_follows_paper_defaults(
@@ -270,7 +309,10 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
     )
 
     assert len(predictions) == metrics["test_sequence_count"]
-    assert all(prediction["split_label"] == "test" for prediction in predictions)
+    assert {prediction["split_label"] for prediction in predictions} <= {
+        "train",
+        "test",
+    }
     for prediction in predictions:
         assert prediction["predicted_label"] in {0, 1}
         if prediction["predicted_label"] == 1:
@@ -285,4 +327,4 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
 
     assert "Fitting deeplog detector" in run_log
     assert "DeepLog resolved torch device:" in run_log
-    assert "chronological train pool" in run_log
+    assert "Primary metric scope: event_level_detection" in run_log

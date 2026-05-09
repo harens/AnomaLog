@@ -306,8 +306,8 @@ def score_key_sequence(
             # We fail closed here. Passing an unseen history through a synthetic
             # token would ask the model to make a confident prediction for a
             # situation it was never trained on.
-            findings[target_index] = DeepLogKeyFinding(
-                event_index=target_index,
+            findings[local_target_index] = DeepLogKeyFinding(
+                event_index=local_target_index,
                 history_templates=history_templates,
                 unknown_history_templates=unknown_history_templates,
                 actual_template=templates[target_index],

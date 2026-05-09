@@ -163,25 +163,20 @@ class RunMetrics:
         """Return finalised run metrics.
 
         Returns:
-            dict[str, int | float | dict[int, int]]: Aggregate classification
-                and split metrics.
+            dict[str, int | float | dict[int, int]]: Aggregate split counts,
+                label histograms, and raw decision totals for later
+                task-aware metric reporting.
         """
         decision_count = self.tp + self.tn + self.fp + self.fn
         test_count = self.test_sequence_count
-        accuracy = (self.tp + self.tn) / decision_count if decision_count else 0.0
-        precision = self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 0.0
-        recall = self.tp / (self.tp + self.fn) if (self.tp + self.fn) else 0.0
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if (precision + recall)
-            else 0.0
-        )
         mean_test_score = self.test_score_sum / test_count if test_count else 0.0
         metrics: dict[str, int | float | dict[int, int]] = {
             "sequence_count": self.sequence_count,
             "train_sequence_count": self.train_sequence_count,
             "test_sequence_count": self.test_sequence_count,
             "ignored_sequence_count": self.ignored_sequence_count,
+            "train_label_counts": dict(self.train_label_counts),
+            "test_label_counts": dict(self.test_label_counts),
             "ignored_label_counts": dict(self.ignored_label_counts),
             "tp": self.tp,
             "tn": self.tn,
@@ -189,10 +184,6 @@ class RunMetrics:
             "fn": self.fn,
             "counted_predictions": decision_count,
             "abstained_prediction_count": self.abstained_prediction_count,
-            "accuracy": round(accuracy, 8),
-            "precision": round(precision, 8),
-            "recall": round(recall, 8),
-            "f1": round(f1, 8),
             "mean_test_score": round(mean_test_score, 8),
         }
         return metrics

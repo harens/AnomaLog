@@ -10,7 +10,7 @@ import shutil
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from prefect.logging.configuration import (
     DEFAULT_LOGGING_SETTINGS_PATH,
@@ -25,6 +25,7 @@ from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.models.evaluate import PredictionOutputConfig
 from experiments.results import (
+    build_run_metrics_report,
     build_sequence_split_summary,
     prepare_result_paths,
     write_run_outputs,
@@ -243,6 +244,12 @@ def _run_bundle(
                 split_summary.ineligible_train_pool_count,
                 total_sequences,
             )
+        metric_report = build_run_metrics_report(
+            bundle=bundle,
+            sequences=sequences,
+            model_summary=model_summary,
+        )
+        _log_metric_report(logger, metric_report)
         logger.info(
             "Model run complete with %s sequences",
             model_summary.sequence_summary.sequence_count,
@@ -259,6 +266,74 @@ def _run_bundle(
             shlex.quote(str(result_paths.run_dir)),
         )
     return result_paths.run_dir
+
+
+def _log_metric_report(logger: logging.Logger, report: dict[str, Any]) -> None:
+    """Log the selected primary metric scope and notable secondary blocks.
+
+    Args:
+        logger (logging.Logger): Experiment-run logger used for output.
+        report (dict[str, Any]): Serialised metrics report for the run.
+    """
+    _log_primary_metric_report(logger, report)
+    _log_metric_block_warnings(logger, report)
+
+
+def _log_primary_metric_report(
+    logger: logging.Logger,
+    report: dict[str, Any],
+) -> None:
+    """Log the selected primary metric block details.
+
+    Args:
+        logger (logging.Logger): Experiment-run logger used for output.
+        report (dict[str, Any]): Serialised metrics report for the run.
+    """
+    primary_metric_scope = report.get("primary_metric_scope")
+    logger.info("Primary metric scope: %s", primary_metric_scope)
+    primary_metrics = report.get("primary_metrics")
+    if isinstance(primary_metrics, dict):
+        primary_metrics_mapping: dict[str, Any] = primary_metrics
+        status = primary_metrics_mapping.get("status")
+        logger.info("Primary metric status: %s", status)
+        headline_metrics = primary_metrics_mapping.get("headline_metrics")
+        if isinstance(headline_metrics, dict) and headline_metrics:
+            logger.info("Primary headline metrics: %s", headline_metrics)
+        diagnostics = primary_metrics_mapping.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            if "auto_coverage" in diagnostics:
+                logger.info("Primary auto coverage: %s", diagnostics["auto_coverage"])
+            if "abstain_rate" in diagnostics:
+                logger.info("Primary abstain rate: %s", diagnostics["abstain_rate"])
+            top_k = diagnostics.get("top_k")
+            if isinstance(top_k, dict):
+                logger.info("Primary next-event top-k: %s", top_k.get("accuracy"))
+
+
+def _log_metric_block_warnings(
+    logger: logging.Logger,
+    report: dict[str, Any],
+) -> None:
+    """Log warnings for invalid or diagnostic-only metric blocks.
+
+    Args:
+        logger (logging.Logger): Experiment-run logger used for output.
+        report (dict[str, Any]): Serialised metrics report for the run.
+    """
+    metric_blocks = report.get("metric_blocks")
+    if not isinstance(metric_blocks, dict):
+        return
+    for scope, block in metric_blocks.items():
+        if not isinstance(block, dict):
+            continue
+        block_mapping: dict[str, Any] = block
+        status = block_mapping.get("status")
+        if status in {"invalid", "diagnostic_only"}:
+            reason = block_mapping.get("invalid_reason")
+            if reason is not None:
+                logger.warning("Metric block %s is %s: %s", scope, status, reason)
+            else:
+                logger.warning("Metric block %s is %s", scope, status)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

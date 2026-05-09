@@ -62,13 +62,25 @@ The checked-in sweep set is split by detector family:
   probes, the stream chunks stay intact and the training corpus uses an
   explicit per-event eligibility mask so normal target events can train even
   when a chunk also contains anomalies or post-cutoff context.
+- `hdfs_wuyifan18_deeplog_preprocessed.toml` is a file-boundary reproduction
+  probe for the wuyifan18 DeepLog HDFS session files. It keeps the raw-entry
+  split fixed to the full `hdfs_train` prefix and then evaluates both
+  `hdfs_test_normal` and `hdfs_test_abnormal` exactly as they appear in the
+  preprocessed archive.
+- `hdfs_wuyifan18_deepcase.toml` is the matching DeepCASE probe on the same
+  exact-boundary dataset. It reuses the same dataset config and only changes
+  the detector family.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
-`train_on_normal_entities_only` for the training prefix, whereas DeepCASE-style
-runs leave it disabled and only use the chronological prefix/suffix split. If
-those detectors are both benchmarked on the same dataset family, use separate
-sweep variants or fixed overrides rather than letting a shared dataset preset
-imply the wrong training contract.
+`train_on_normal_entities_only` for the training prefix on entity-grouped
+datasets, whereas DeepCASE-style runs leave it disabled and only use the
+chronological prefix/suffix split. The wuyifan18 reproduction dataset is
+intentionally separate from that policy: it reproduces the preprocessed file
+boundary directly, so the full training file and both test files are preserved
+exactly. The matching DeepCASE sweep reuses the same dataset config and only
+changes the detector family. If those detectors are both benchmarked on the
+same dataset family, use separate sweep variants or fixed overrides rather
+than letting a shared dataset preset imply the wrong training contract.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
@@ -171,7 +183,10 @@ Each concrete run writes a deterministic directory under `experiments/results/<c
 - `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, cache roots, sequence settings, and dataset statistics
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
-- `metrics.json`: detector metrics
+- `metrics.json`: task-aware detector metrics, including the selected
+  `primary_metric_scope`, scoped metric blocks, and run-level evaluation
+  metadata such as `evaluation_unit`, `prediction_unit`, `label_unit`, and
+  split policy details
 - `predictions.jsonl`: optional test-sequence outputs, including detector
   scores and any emitted key phrases when `--write-predictions` is supplied
 - `environment.json`: Python, platform, package, and git metadata
@@ -187,7 +202,10 @@ written to the prediction stream unless you explicitly opt in with
 
 To add a preprocessing ablation, create another file in `configs/datasets/`.
 
-For built-in datasets, prefer `preset = "bgl"` or `preset = "hdfs_v1"`.
+For built-in datasets, prefer `preset = "bgl"`, `preset = "hdfs_v1"`, or
+`preset = "hdfs_wuyifan18_deeplog_preprocessed"` depending on whether you want
+the LogHub-style raw HDFS corpus or the preprocessed DeepLog session files
+with the exact `hdfs_train` / `hdfs_test_*` file boundary.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Omit `[cache_paths]` to use AnomaLog's default platformdirs-based cache/data locations.
 
@@ -195,9 +213,11 @@ To add or update an experiment matrix, create another file in `configs/sweeps/`.
 Use `[overrides]` for fixed adjustments such as changing
 `dataset.sequence.train_on_normal_entities_only`, and `[[axes]]` when you want
 Cartesian products across fields such as `sweep.model` or
-`dataset.sequence.train_fraction`. Add `max_workers = 2` or another positive
-integer only when the default `"auto"` parallelism is too aggressive for a
-particular backend or machine.
+`dataset.sequence.train_fraction`. For the wuyifan18 DeepLog probe, keep the
+raw-entry split fixed and vary only values that should not alter the file
+boundary if you want a regression test against accidental split drift. Add
+`max_workers = 2` or another positive integer only when the default `"auto"`
+parallelism is too aggressive for a particular backend or machine.
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.
 

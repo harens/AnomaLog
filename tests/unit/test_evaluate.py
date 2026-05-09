@@ -121,10 +121,8 @@ def test_run_metrics_counts_abstentions_separately() -> None:
     assert metrics.fp == 0
     assert metrics.fn == 0
     assert metrics.abstained_prediction_count == 1
-    assert summary["accuracy"] == pytest.approx(1.0)
-    assert summary["precision"] == pytest.approx(1.0)
-    assert summary["recall"] == pytest.approx(1.0)
-    assert summary["f1"] == pytest.approx(1.0)
+    assert summary["train_label_counts"] == {}
+    assert summary["test_label_counts"] == {0: 1, 1: 2}
     assert summary["mean_test_score"] == pytest.approx(0.5)
     assert summary["counted_predictions"] == expected_counted_predictions
     assert summary["abstained_prediction_count"] == expected_abstained_predictions
@@ -164,6 +162,7 @@ def test_run_metrics_counts_automatic_predictions_by_label(
     assert metrics.tp + metrics.tn + metrics.fp + metrics.fn == 1
     assert summary["counted_predictions"] == 1
     assert summary["abstained_prediction_count"] == 0
+    assert summary["test_label_counts"] == {sequence_label: 1}
 
 
 def test_stream_predictions_counts_deepcase_automatic_decisions(

@@ -4,3 +4,5 @@ history_size = 3
 top_g = 6
 num_layers = 1
 hidden_size = 256
+primary_metric_scope = "event_level_detection"
+secondary_metric_scopes = ["next_event_prediction", "sequence_level_detection"]

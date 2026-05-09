@@ -120,6 +120,8 @@ class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
         tn (int): True negatives at the event level.
         fp (int): False positives at the event level.
         fn (int): False negatives at the event level.
+        normal_event_count (int): Number of normal labelled events seen.
+        anomalous_event_count (int): Number of anomalous labelled events seen.
         precision (float): Event-level precision.
         recall (float): Event-level recall.
         f1 (float): Event-level F1 score.
@@ -132,6 +134,8 @@ class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
     tn: int
     fp: int
     fn: int
+    normal_event_count: int
+    anomalous_event_count: int
     precision: float
     recall: float
     f1: float
@@ -517,6 +521,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     _event_level_tn: int = field(default=0, init=False, repr=False)
     _event_level_fp: int = field(default=0, init=False, repr=False)
     _event_level_fn: int = field(default=0, init=False, repr=False)
+    _event_level_normal_count: int = field(default=0, init=False, repr=False)
+    _event_level_anomalous_count: int = field(default=0, init=False, repr=False)
     _sequence_total_count: int = field(default=0, init=False, repr=False)
     _sequence_normal_count: int = field(default=0, init=False, repr=False)
     _sequence_anomalous_count: int = field(default=0, init=False, repr=False)
@@ -1038,6 +1044,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._event_level_tn = 0
         self._event_level_fp = 0
         self._event_level_fn = 0
+        self._event_level_normal_count = 0
+        self._event_level_anomalous_count = 0
 
     def _next_event_prediction_state_snapshot(
         self,
@@ -1087,6 +1095,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             tn=self._event_level_tn,
             fp=self._event_level_fp,
             fn=self._event_level_fn,
+            normal_event_count=self._event_level_normal_count,
+            anomalous_event_count=self._event_level_anomalous_count,
             precision=round(precision, 8),
             recall=round(recall, 8),
             f1=round(f1, 8),
@@ -1185,10 +1195,14 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         if actual_label is None:
             return
         self._event_level_events_seen += 1
+        actual_is_anomalous = is_anomalous_label(actual_label)
+        if actual_is_anomalous:
+            self._event_level_anomalous_count += 1
+        else:
+            self._event_level_normal_count += 1
         if key_finding is None and parameter_finding is None:
             return
         self._event_level_events_eligible += 1
-        actual_is_anomalous = is_anomalous_label(actual_label)
         predicted_is_anomalous = (
             key_finding is not None and key_finding.is_anomalous
         ) or (parameter_finding is not None and parameter_finding.is_anomalous)

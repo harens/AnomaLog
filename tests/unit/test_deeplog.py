@@ -270,6 +270,25 @@ def test_score_key_sequence_carries_prefix_history_across_chunks() -> None:
     assert finding.is_anomalous is False
 
 
+def test_score_key_sequence_uses_local_indexes_for_unknown_prefix_history() -> None:
+    """Unknown carried history should still be keyed to the local event index."""
+    sequence = _sequence(templates=["C"])
+    model = _StaticKeyModel(logits=[-5.0, -5.0, 3.0, -5.0])
+
+    findings = score_key_sequence(
+        sequence=sequence,
+        context=_key_context(model=model, top_g=1),
+        prefix_templates=["UNSEEN", "B"],
+    )
+
+    assert 0 in findings
+    finding = findings[0]
+    assert finding.event_index == 0
+    assert finding.history_templates == ["UNSEEN", "B"]
+    assert finding.unknown_history_templates == ["UNSEEN"]
+    assert finding.is_anomalous is True
+
+
 def test_score_parameter_sequence_carries_prefix_history_across_chunks() -> None:
     """Continuous stream scoring should reuse the prior chunk's parameter history."""
     schema = ParameterFeatureSchema(

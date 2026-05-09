@@ -23,12 +23,14 @@ from anomalog.sources import (
 )
 from anomalog.split_validation import validate_split_fractions
 from experiments import ConfigError
+from experiments.models.metric_schema import EvaluationUnit
 
 if TYPE_CHECKING:
     from anomalog.labels import AnomalyLabelReader
     from anomalog.parsers.template import TemplatedDataset
     from anomalog.sequences import EntitySequenceBuilder, SequenceBuilder
     from experiments.models import ExperimentModelConfig
+    from experiments.models.metric_schema import EvaluationUnit
 
 
 class DatasetSourceConfig(msgspec.Struct, frozen=True, tag_field="type"):
@@ -170,13 +172,13 @@ class RemoteZipSourceConfig(
 
     Attributes:
         url (str): Absolute URL of the dataset archive.
-        md5_checksum (str): Expected checksum for the archive.
+        md5_checksum (str | None): Optional checksum for the archive.
         raw_logs_relpath (Path | None): Optional raw-log path relative to the
             extracted dataset root.
     """
 
     url: str
-    md5_checksum: str
+    md5_checksum: str | None = None
     raw_logs_relpath: Path | None = None
 
     def build(self, *, repo_root: Path) -> RemoteZipSource:
@@ -670,6 +672,8 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
         template_parser (str): Template parser name.
         label_reader (LabelReaderConfig | None): Optional anomaly label reader config.
         cache_paths (CachePathsConfigModel | None): Optional cache/data root override.
+        evaluation_unit (EvaluationUnit | None): Optional primary evaluation
+            abstraction for the run's headline metrics.
         sequence (SequenceConfigBase): Sequence grouping and split config.
         description (str | None): Optional free-text dataset description.
     """
@@ -682,6 +686,7 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
     template_parser: str = "drain3"
     label_reader: LabelReaderConfig | None = None
     cache_paths: CachePathsConfigModel | None = None
+    evaluation_unit: EvaluationUnit | None = None
     sequence: SequenceConfigBase = EntitySequenceConfig()
     description: str | None = None
 

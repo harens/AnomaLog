@@ -9,12 +9,30 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.config import serialise_config
+from experiments.config_types import (
+    ChronologicalStreamSequenceConfig,
+    DatasetVariantConfig,
+    EntitySequenceConfig,
+    FixedSequenceConfig,
+    TimeSequenceConfig,
+)
 from experiments.datasets import dataset_source_summary
+from experiments.models.metric_reporting import (
+    BinaryMetricBlockRequest,
+    DiagnosticMetricBlockRequest,
+    MetricBlock,
+    build_binary_metric_block,
+    build_diagnostic_metric_block,
+    build_not_applicable_metric_block,
+    select_primary_metric_scope,
+)
+from experiments.models.metric_schema import EvaluationUnit, MetricScope, MetricStatus
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -128,7 +146,14 @@ def write_run_outputs(
             result_paths=result_paths,
         ),
     )
-    _write_json(result_paths.metrics_path, model_summary.metrics)
+    _write_json(
+        result_paths.metrics_path,
+        build_run_metrics_report(
+            bundle=bundle,
+            sequences=sequences,
+            model_summary=model_summary,
+        ),
+    )
     _write_json(
         result_paths.environment_path,
         build_environment_metadata(
@@ -183,6 +208,11 @@ def build_dataset_manifest(
         sequence_summary=sequence_summary,
     )
     raw_entry_split_summary = sequences.build_raw_entry_split_summary()
+    metric_metadata = build_metric_metadata(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
     return {
         "run_fingerprint": result_paths.run_fingerprint,
         "dataset_fingerprint": dataset_fingerprint,
@@ -221,6 +251,7 @@ def build_dataset_manifest(
             "train": sequence_summary.train_label_counts,
             "test": sequence_summary.test_label_counts,
         },
+        **metric_metadata,
         "model_manifest": msgspec.to_builtins(model_summary.model_manifest),
     }
 
@@ -243,6 +274,652 @@ def build_sequence_split_summary(
     return sequences.build_split_summary(
         sequence_summary=sequence_summary,
     )
+
+
+def build_metric_metadata(
+    *,
+    bundle: ExperimentBundle,
+    sequences: SequenceBuilder,
+    model_summary: ModelRunSummary,
+) -> dict[str, object]:
+    """Build the task metadata that accompanies persisted metric blocks.
+
+    Args:
+        bundle (ExperimentBundle): Experiment bundle being evaluated.
+        sequences (SequenceBuilder): Sequence builder used for the run.
+        model_summary (ModelRunSummary): Model-side summary for the run.
+
+    Returns:
+        dict[str, object]: Shared task metadata for the persisted dataset
+            manifest and metrics report.
+    """
+    metric_blocks = _build_metric_blocks(
+        bundle=bundle,
+        model_summary=model_summary,
+    )
+    evaluation_unit = _evaluation_unit_for_dataset(bundle.dataset)
+    primary_scope = select_primary_metric_scope(
+        metric_blocks,
+        requested_primary_scope=bundle.model.primary_metric_scope,
+        evaluation_unit=evaluation_unit,
+    )
+    primary_block = None if primary_scope is None else metric_blocks[primary_scope]
+    split_policy = _build_split_policy(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
+    stream_segment_policy = _build_stream_segment_policy(bundle.dataset)
+    return {
+        "evaluation_unit": evaluation_unit.value,
+        "prediction_unit": (
+            None if primary_block is None else primary_block.prediction_unit.value
+        ),
+        "label_unit": None if primary_block is None else primary_block.label_unit.value,
+        "aggregation_policy": (
+            None
+            if primary_block is None or primary_block.aggregation_policy is None
+            else primary_block.aggregation_policy.value
+        ),
+        "split_policy": split_policy,
+        "stream_segment_policy": stream_segment_policy,
+        "primary_metric_scope": (
+            None if primary_scope is None else primary_scope.value
+        ),
+        "available_metric_scopes": [scope.value for scope in metric_blocks],
+    }
+
+
+def build_run_metrics_report(
+    *,
+    bundle: ExperimentBundle,
+    sequences: SequenceBuilder,
+    model_summary: ModelRunSummary,
+) -> dict[str, object]:
+    """Build the final task-aware metric report written to ``metrics.json``.
+
+    Args:
+        bundle (ExperimentBundle): Experiment bundle being evaluated.
+        sequences (SequenceBuilder): Sequence builder used for the run.
+        model_summary (ModelRunSummary): Model-side summary for the run.
+
+    Returns:
+        dict[str, object]: Serialised task-aware metric report with metadata,
+            metric blocks, and the selected primary metrics.
+    """
+    metric_blocks = _build_metric_blocks(
+        bundle=bundle,
+        model_summary=model_summary,
+    )
+    evaluation_unit = _evaluation_unit_for_dataset(bundle.dataset)
+    primary_scope = select_primary_metric_scope(
+        metric_blocks,
+        requested_primary_scope=bundle.model.primary_metric_scope,
+        evaluation_unit=evaluation_unit,
+    )
+    primary_block = None if primary_scope is None else metric_blocks[primary_scope]
+    metadata = build_metric_metadata(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
+    next_event_prediction = metric_blocks.get(MetricScope.NEXT_EVENT_PREDICTION)
+    run_metrics = model_summary.metrics
+    return {
+        **metadata,
+        "sequence_count": run_metrics.get("sequence_count"),
+        "train_sequence_count": run_metrics.get("train_sequence_count"),
+        "test_sequence_count": run_metrics.get("test_sequence_count"),
+        "ignored_sequence_count": run_metrics.get("ignored_sequence_count"),
+        "train_label_counts": run_metrics.get("train_label_counts"),
+        "test_label_counts": run_metrics.get("test_label_counts"),
+        "ignored_label_counts": run_metrics.get("ignored_label_counts"),
+        "tp": run_metrics.get("tp"),
+        "tn": run_metrics.get("tn"),
+        "fp": run_metrics.get("fp"),
+        "fn": run_metrics.get("fn"),
+        "mean_test_score": run_metrics.get("mean_test_score"),
+        "metric_blocks": {
+            scope.value: msgspec.to_builtins(block)
+            for scope, block in metric_blocks.items()
+        },
+        **(
+            {
+                "next_event_prediction": msgspec.to_builtins(next_event_prediction),
+            }
+            if next_event_prediction is not None
+            else {}
+        ),
+        "primary_metrics": (
+            None if primary_block is None else msgspec.to_builtins(primary_block)
+        ),
+    }
+
+
+def _build_metric_blocks(
+    *,
+    bundle: ExperimentBundle,
+    model_summary: ModelRunSummary,
+) -> dict[MetricScope, MetricBlock]:
+    metrics = _as_metric_mapping(model_summary.metrics)
+    sequence_summary = model_summary.sequence_summary
+    metric_blocks: dict[MetricScope, MetricBlock] = {}
+    evaluation_unit = _evaluation_unit_for_dataset(bundle.dataset)
+    primary_scope = bundle.model.primary_metric_scope
+
+    sequence_block = _build_sequence_level_detection_block(
+        metrics=metrics,
+        sequence_summary=sequence_summary,
+        evaluation_unit=evaluation_unit,
+        primary_scope=primary_scope,
+        allow_single_class_reporting=bundle.model.allow_single_class_reporting,
+    )
+    if sequence_block is not None:
+        metric_blocks[MetricScope.SEQUENCE_LEVEL_DETECTION] = sequence_block
+
+    event_block = _build_event_level_detection_block(
+        metrics=metrics,
+        primary_scope=primary_scope,
+        allow_single_class_reporting=bundle.model.allow_single_class_reporting,
+    )
+    if event_block is not None:
+        metric_blocks[MetricScope.EVENT_LEVEL_DETECTION] = event_block
+
+    next_event_block = _build_next_event_prediction_block(metrics=metrics)
+    if next_event_block is not None:
+        metric_blocks[MetricScope.NEXT_EVENT_PREDICTION] = next_event_block
+
+    manual_block = _build_manual_workload_block(metrics=metrics)
+    if manual_block is not None:
+        metric_blocks[MetricScope.MANUAL_WORKLOAD_REDUCTION] = manual_block
+
+    semi_automatic_block = _build_semi_automatic_workload_block(metrics=metrics)
+    if semi_automatic_block is not None:
+        metric_blocks[MetricScope.SEMI_AUTOMATIC_WORKLOAD_REDUCTION] = (
+            semi_automatic_block
+        )
+
+    if MetricScope.NEXT_EVENT_PREDICTION in metric_blocks:
+        if MetricScope.EVENT_LEVEL_DETECTION not in metric_blocks:
+            metric_blocks[MetricScope.EVENT_LEVEL_DETECTION] = (
+                build_not_applicable_metric_block(
+                    metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
+                    prediction_unit=EvaluationUnit.EVENT,
+                    label_unit=EvaluationUnit.EVENT,
+                    diagnostics={"reason": "no_event_level_labels"},
+                )
+            )
+        if MetricScope.SEQUENCE_LEVEL_DETECTION not in metric_blocks:
+            metric_blocks[MetricScope.SEQUENCE_LEVEL_DETECTION] = (
+                build_not_applicable_metric_block(
+                    metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
+                    prediction_unit=EvaluationUnit.SEQUENCE,
+                    label_unit=EvaluationUnit.SEQUENCE,
+                    diagnostics={"reason": "no_sequence_level_labels"},
+                )
+            )
+
+    return metric_blocks
+
+
+def _build_sequence_level_detection_block(
+    *,
+    metrics: dict[str, object],
+    sequence_summary: SequenceSummary,
+    evaluation_unit: EvaluationUnit,
+    primary_scope: MetricScope | None,
+    allow_single_class_reporting: bool,
+) -> MetricBlock | None:
+    sequence_inputs = _sequence_detection_inputs(metrics)
+    if sequence_inputs is None:
+        return None
+    (
+        tp_value,
+        tn_value,
+        fp_value,
+        fn_value,
+        counted_predictions_value,
+        abstained_prediction_count_value,
+        normal_count,
+        anomalous_count,
+    ) = sequence_inputs
+    sequence_block = build_binary_metric_block(
+        request=BinaryMetricBlockRequest(
+            metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
+            prediction_unit=EvaluationUnit.SEQUENCE,
+            label_unit=EvaluationUnit.SEQUENCE,
+            tp=tp_value,
+            fp=fp_value,
+            tn=tn_value,
+            fn=fn_value,
+            normal_count=normal_count,
+            anomalous_count=anomalous_count,
+            evaluation_unit_count=sequence_summary.test_sequence_count,
+            counted_predictions=counted_predictions_value,
+            abstained_prediction_count=abstained_prediction_count_value,
+            ignored_prediction_count=0,
+            allow_single_class_reporting=allow_single_class_reporting,
+            diagnostic_only=(
+                primary_scope is not MetricScope.SEQUENCE_LEVEL_DETECTION
+                or evaluation_unit
+                in {
+                    EvaluationUnit.CHRONOLOGICAL_EVENT_STREAM,
+                    EvaluationUnit.CONTINUOUS_EVENT_STREAM,
+                    EvaluationUnit.STREAM,
+                }
+            ),
+            diagnostics={
+                "class_counts": {
+                    "normal": normal_count,
+                    "anomalous": anomalous_count,
+                },
+                "auto_coverage": (
+                    counted_predictions_value / sequence_summary.test_sequence_count
+                    if sequence_summary.test_sequence_count
+                    else 0.0
+                ),
+                "abstain_rate": (
+                    abstained_prediction_count_value
+                    / sequence_summary.test_sequence_count
+                    if sequence_summary.test_sequence_count
+                    else 0.0
+                ),
+            },
+        ),
+    )
+    if sequence_block.status is MetricStatus.NOT_APPLICABLE:
+        return None
+    return sequence_block
+
+
+def _sequence_detection_inputs(
+    metrics: dict[str, object],
+) -> tuple[int, int, int, int, int, int, int, int] | None:
+    tp = _metric_count(metrics, "tp")
+    tn = _metric_count(metrics, "tn")
+    fp = _metric_count(metrics, "fp")
+    fn = _metric_count(metrics, "fn")
+    counted_predictions = _metric_count(metrics, "counted_predictions")
+    abstained_prediction_count = _metric_count(metrics, "abstained_prediction_count")
+    test_label_counts = _int_count_map(metrics.get("test_label_counts"))
+    if any(
+        value is None
+        for value in (
+            tp,
+            tn,
+            fp,
+            fn,
+            counted_predictions,
+            abstained_prediction_count,
+            test_label_counts,
+        )
+    ):
+        return None
+    if test_label_counts is None:
+        return None
+    anomalous_count = sum(
+        count for label, count in test_label_counts.items() if is_anomalous_label(label)
+    )
+    normal_count = test_label_counts.get(0, 0)
+    return (
+        _require_int(tp),
+        _require_int(tn),
+        _require_int(fp),
+        _require_int(fn),
+        _require_int(counted_predictions),
+        _require_int(abstained_prediction_count),
+        normal_count,
+        anomalous_count,
+    )
+
+
+def _build_event_level_detection_block(
+    *,
+    metrics: dict[str, object],
+    primary_scope: MetricScope | None,
+    allow_single_class_reporting: bool,
+) -> MetricBlock | None:
+    event_detection = _event_detection_inputs(metrics)
+    if event_detection is None:
+        return None
+    (
+        events_seen,
+        events_eligible,
+        abstained_prediction_count,
+        tp,
+        tn,
+        fp,
+        fn,
+        true_normal,
+        true_anomalous,
+        diagnostics,
+        legacy_stream,
+    ) = event_detection
+    event_block = build_binary_metric_block(
+        request=BinaryMetricBlockRequest(
+            metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
+            prediction_unit=EvaluationUnit.EVENT,
+            label_unit=EvaluationUnit.EVENT,
+            tp=tp,
+            fp=fp,
+            tn=tn,
+            fn=fn,
+            normal_count=true_normal,
+            anomalous_count=true_anomalous,
+            evaluation_unit_count=events_seen,
+            counted_predictions=events_eligible,
+            abstained_prediction_count=abstained_prediction_count,
+            ignored_prediction_count=(
+                events_seen - events_eligible if legacy_stream else 0
+            ),
+            allow_single_class_reporting=allow_single_class_reporting,
+            diagnostic_only=primary_scope is not MetricScope.EVENT_LEVEL_DETECTION,
+            diagnostics=diagnostics,
+        ),
+    )
+    if event_block.status is MetricStatus.NOT_APPLICABLE:
+        return None
+    return event_block
+
+
+def _event_detection_inputs(
+    metrics: dict[str, object],
+) -> tuple[int, int, int, int, int, int, int, int, int, dict[str, Any], bool] | None:
+    event_level_detection = metrics.get("event_level_detection")
+    if isinstance(event_level_detection, dict):
+        return _event_detection_inputs_from_stream(event_level_detection)
+
+    prediction_diagnostics = metrics.get("prediction_diagnostics")
+    if not isinstance(prediction_diagnostics, dict):
+        return None
+    return _event_detection_inputs_from_prediction_diagnostics(prediction_diagnostics)
+
+
+def _event_detection_inputs_from_stream(
+    event_level_detection: Any,  # noqa: ANN401
+) -> tuple[int, int, int, int, int, int, int, int, int, dict[str, Any], bool] | None:
+    event_level_detection_mapping = _as_metric_mapping(event_level_detection)
+    events_seen = _int_value(event_level_detection_mapping, "events_seen")
+    events_eligible = _int_value(event_level_detection_mapping, "events_eligible")
+    tp = _int_value(event_level_detection_mapping, "tp")
+    tn = _int_value(event_level_detection_mapping, "tn")
+    fp = _int_value(event_level_detection_mapping, "fp")
+    fn = _int_value(event_level_detection_mapping, "fn")
+    true_normal = _int_value(
+        event_level_detection_mapping,
+        "normal_event_count",
+        default=0,
+    )
+    true_anomalous = _int_value(
+        event_level_detection_mapping,
+        "anomalous_event_count",
+        default=0,
+    )
+    diagnostics = {
+        "events_seen": events_seen,
+        "events_eligible": events_eligible,
+        "source": "event_level_detection",
+    }
+    return (
+        events_seen,
+        events_eligible,
+        0,
+        tp,
+        tn,
+        fp,
+        fn,
+        true_normal,
+        true_anomalous,
+        diagnostics,
+        True,
+    )
+
+
+def _event_detection_inputs_from_prediction_diagnostics(
+    prediction_diagnostics: Any,  # noqa: ANN401
+) -> tuple[int, int, int, int, int, int, int, int, int, dict[str, Any], bool] | None:
+    prediction_diagnostics_mapping = _as_metric_mapping(prediction_diagnostics)
+    event_decision_metrics = _mapping_value(
+        prediction_diagnostics_mapping,
+        "event_decision_metrics",
+    )
+    if not isinstance(event_decision_metrics, dict):
+        return None
+    event_decision_metrics_mapping = _as_metric_mapping(event_decision_metrics)
+    events_seen = _int_value(event_decision_metrics_mapping, "event_count")
+    events_eligible = _int_value(
+        event_decision_metrics_mapping,
+        "event_auto_decision_count",
+    )
+    abstained_prediction_count = _int_value(
+        event_decision_metrics_mapping,
+        "event_abstained_decision_count",
+    )
+    tp = _int_value(event_decision_metrics_mapping, "event_tp")
+    tn = _int_value(event_decision_metrics_mapping, "event_tn")
+    fp = _int_value(event_decision_metrics_mapping, "event_fp")
+    fn = _int_value(event_decision_metrics_mapping, "event_fn")
+    true_normal = _int_value(event_decision_metrics_mapping, "event_true_normal_count")
+    true_anomalous = _int_value(
+        event_decision_metrics_mapping,
+        "event_true_anomalous_count",
+    )
+    diagnostics = {
+        "events_seen": events_seen,
+        "events_eligible": events_eligible,
+        "event_auto_coverage": _nested_float(
+            event_decision_metrics_mapping,
+            "event_auto_coverage",
+        ),
+        "event_abstain_rate": _nested_float(
+            event_decision_metrics_mapping,
+            "event_abstain_rate",
+        ),
+        "source": "prediction_diagnostics.event_decision_metrics",
+        "prediction_diagnostics": prediction_diagnostics_mapping,
+        "event_decision_metrics": event_decision_metrics_mapping,
+    }
+    return (
+        events_seen,
+        events_eligible,
+        abstained_prediction_count,
+        tp,
+        tn,
+        fp,
+        fn,
+        true_normal,
+        true_anomalous,
+        diagnostics,
+        False,
+    )
+
+
+def _build_next_event_prediction_block(
+    *,
+    metrics: dict[str, object],
+) -> MetricBlock | None:
+    next_event_prediction = metrics.get("next_event_prediction")
+    if not isinstance(next_event_prediction, dict):
+        return None
+    next_event_prediction_mapping = _as_metric_mapping(next_event_prediction)
+    totals = _mapping_value(next_event_prediction_mapping, "totals")
+    coverage = (
+        None if not isinstance(totals, dict) else _nested_float(totals, "coverage")
+    )
+    return build_diagnostic_metric_block(
+        request=DiagnosticMetricBlockRequest(
+            metric_scope=MetricScope.NEXT_EVENT_PREDICTION,
+            prediction_unit=EvaluationUnit.NEXT_EVENT,
+            label_unit=EvaluationUnit.NEXT_EVENT,
+            headline_metrics={} if coverage is None else {"coverage": coverage},
+            diagnostics=next_event_prediction_mapping,
+        ),
+    )
+
+
+def _build_manual_workload_block(
+    *,
+    metrics: dict[str, object],
+) -> MetricBlock | None:
+    manual_workload = metrics.get("manual_workload_reduction")
+    if not isinstance(manual_workload, dict):
+        return None
+    manual_workload_mapping = _as_metric_mapping(manual_workload)
+    return build_diagnostic_metric_block(
+        request=DiagnosticMetricBlockRequest(
+            metric_scope=MetricScope.MANUAL_WORKLOAD_REDUCTION,
+            prediction_unit=EvaluationUnit.CLUSTER,
+            label_unit=EvaluationUnit.CLUSTER,
+            diagnostics=manual_workload_mapping,
+        ),
+    )
+
+
+def _build_semi_automatic_workload_block(
+    *,
+    metrics: dict[str, object],
+) -> MetricBlock | None:
+    semi_automatic_workload = metrics.get("semi_automatic_workload_reduction")
+    if not isinstance(semi_automatic_workload, dict):
+        return None
+    semi_automatic_workload_mapping = _as_metric_mapping(semi_automatic_workload)
+    return build_diagnostic_metric_block(
+        request=DiagnosticMetricBlockRequest(
+            metric_scope=MetricScope.SEMI_AUTOMATIC_WORKLOAD_REDUCTION,
+            prediction_unit=EvaluationUnit.CLUSTER,
+            label_unit=EvaluationUnit.CLUSTER,
+            diagnostics=semi_automatic_workload_mapping,
+        ),
+    )
+
+
+def _evaluation_unit_for_dataset(dataset: DatasetVariantConfig) -> EvaluationUnit:
+    if dataset.evaluation_unit is not None:
+        return dataset.evaluation_unit
+    sequence = dataset.sequence
+    if isinstance(sequence, ChronologicalStreamSequenceConfig):
+        return EvaluationUnit.CONTINUOUS_EVENT_STREAM
+    if isinstance(sequence, EntitySequenceConfig):
+        return EvaluationUnit.SEQUENCE
+    if isinstance(sequence, (FixedSequenceConfig, TimeSequenceConfig)):
+        return EvaluationUnit.WINDOW
+    return EvaluationUnit.SEQUENCE
+
+
+def _build_split_policy(
+    *,
+    bundle: ExperimentBundle,
+    sequences: SequenceBuilder,
+    model_summary: ModelRunSummary,
+) -> dict[str, object]:
+    split_summary = build_sequence_split_summary(
+        sequences,
+        sequence_summary=model_summary.sequence_summary,
+    )
+    policy: dict[str, object] = {
+        "train_fraction": split_summary.requested_train_fraction,
+        "test_fraction": split_summary.requested_test_fraction,
+        "train_on_normal_entities_only": split_summary.train_on_normal_entities_only,
+    }
+    raw_entry_split_summary = sequences.build_raw_entry_split_summary()
+    sequence = bundle.dataset.sequence
+    raw_split = getattr(sequence, "split", None)
+    if raw_split is not None:
+        policy["application_order"] = raw_split.application_order.value
+        policy["straddling_group_policy"] = raw_split.straddling_group_policy.value
+        policy["raw_entry_split"] = serialise_config(raw_split)
+    else:
+        policy["application_order"] = None
+        policy["straddling_group_policy"] = None
+        policy["raw_entry_split"] = None
+    policy["raw_entry_split_summary"] = (
+        None if raw_entry_split_summary is None else raw_entry_split_summary.as_dict()
+    )
+    return policy
+
+
+def _build_stream_segment_policy(dataset: DatasetVariantConfig) -> dict[str, object]:
+    sequence = dataset.sequence
+    if isinstance(sequence, ChronologicalStreamSequenceConfig):
+        return {
+            "mode": "continuous_event_stream",
+            "chunk_size": sequence.chunk_size,
+        }
+    if isinstance(sequence, EntitySequenceConfig):
+        return {
+            "mode": "entity_sequence",
+            "train_on_normal_entities_only": sequence.train_on_normal_entities_only,
+        }
+    if isinstance(sequence, FixedSequenceConfig):
+        return {
+            "mode": "fixed_window",
+            "window_size": sequence.window_size,
+            "step": sequence.step,
+        }
+    if isinstance(sequence, TimeSequenceConfig):
+        return {
+            "mode": "time_window",
+            "time_span_ms": sequence.time_span_ms,
+            "step": sequence.step,
+        }
+    return {"mode": "unknown"}
+
+
+def _metric_count(metrics: dict[str, object], key: str) -> int | None:
+    value = metrics.get(key)
+    return value if isinstance(value, int) else None
+
+
+def _as_metric_mapping(mapping: object) -> Any:  # noqa: ANN401
+    builtins_mapping = msgspec.to_builtins(mapping)
+    if not isinstance(builtins_mapping, dict):
+        msg = "Expected mapping-like metric payload."
+        raise TypeError(msg)
+    return builtins_mapping
+
+
+def _mapping_value(mapping: Any, key: str) -> Any:  # noqa: ANN401
+    return mapping.get(key)
+
+
+def _require_int(value: int | None) -> int:
+    if value is None:
+        msg = "Expected integer metric value."
+        raise TypeError(msg)
+    return value
+
+
+def _int_value(
+    mapping: Any,  # noqa: ANN401
+    key: str,
+    *,
+    default: int | None = None,
+) -> int:
+    value = mapping.get(key)
+    if isinstance(value, int):
+        return value
+    if default is not None:
+        return default
+    msg = f"Expected integer metric value for {key!r}."
+    raise TypeError(msg)
+
+
+def _int_count_map(raw_counts: object | None) -> dict[int, int] | None:
+    if raw_counts is None or not isinstance(raw_counts, dict):
+        return None
+    counts: dict[int, int] = {}
+    for key, value in raw_counts.items():
+        if not isinstance(key, int) or not isinstance(value, int):
+            return None
+        counts[key] = value
+    return counts
+
+
+def _nested_float(mapping: Any, key: str) -> float | None:  # noqa: ANN401
+    if not isinstance(mapping, dict):
+        return None
+    value = mapping.get(key)
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def build_environment_metadata(

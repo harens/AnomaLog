@@ -122,6 +122,63 @@ relative to a simple count-based next-key model. The remaining gap is more
 consistent with a protocol or corpus mismatch than with a purely optimisation-
 driven failure.
 
+## Prefix Diagnostics
+
+I also inspected a scored prefix of the current DeepLog `predictions.jsonl`
+stream while the full replay was still being written. That prefix already
+shows the shape of the failure:
+
+- 97,553 normal sessions had been scored in the prefix
+- 66,314 of them were false positives
+- 66,307 of those first misses were plain rank misses
+- 7 were `unknown_target`
+- 0 were `unknown_history`
+
+So the observed false positives are not being driven by an alignment bug,
+label mapping bug, or history-vocabulary failure. They are mostly normal
+windows where the observed next key is simply not ranked inside DeepLog's
+top-9.
+
+Representative normal false positives from that prefix:
+
+- `blk_-3135291733404498214`, length `20`, `10` eligible windows, first miss
+  at event `14`, true target
+  `INFO dfs.FSNamesystem: BLOCK* NameSystem.delete: blk <:*:> is added to
+  invalidSet of <:IP:>:<:NUM:>`
+- `blk_-1517113990240601367`, length `20`, `10` eligible windows, first miss
+  at event `14`, same delete-tail target shape
+- `blk_8510186228670623537`, length `20`, `10` eligible windows, first miss
+  at event `11`, true target
+  `INFO dfs.FSNamesystem: BLOCK* NameSystem.allocateBlock: <:*:> ...`
+
+The common pattern is late-session normal teardown or allocation behaviour
+after a long prefix of ordinary block-transfer templates. A single miss there
+is enough to flag the whole session anomalous under the paper rule.
+
+## Compounding Effect
+
+The session rule compounds the event-level miss rate very aggressively on this
+corpus.
+
+- normal test sessions: `550,596`
+- mean session length: `19.41` events
+- mean eligible DeepLog windows per normal session: `9.41`
+- observed top-9 next-key accuracy: `0.94924544`
+- observed normal-session false-positive rate:
+  `231,368 / 550,596 = 0.42021373`
+
+If event-level misses were independent, the session rule alone would predict
+about `205,035` false positives, or `0.37238710` of normal sessions. That
+already explains most of the observed `231,368`. The remaining gap is
+consistent with clustering of rank misses on a few hard transitions rather
+than with a fundamental implementation bug.
+
+The data-side reason this happens is that the normal test sessions contain a
+long tail of late transitions that are only sparsely represented in the first
+100k normal training prefix. The current model still has to score them with the
+paper's `any miss => anomalous` rule, so one late miss converts an otherwise
+normal session into a false positive.
+
 ## Interpretation
 
 The current evidence points to a best-effort reproduction rather than an exact
@@ -133,8 +190,11 @@ paper match:
   verified official DeepLog session file;
 - the empirical baseline on the current corpus is already far below the
   paper's HDFS numbers;
-- the exact paper split is therefore likely blocked by a dataset/preprocessing
-  mismatch rather than by a simple implementation bug.
+- the session-level failure is now explained quantitatively by a combination of
+  long sessions, a roughly 5% event miss rate, and the paper's `any miss`
+  session rule;
+- there is no current evidence for a target-alignment, label mapping, or
+  session-concatenation bug.
 
 ## Bug Fixes Applied
 

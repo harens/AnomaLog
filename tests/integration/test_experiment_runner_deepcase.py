@@ -57,6 +57,11 @@ def _read_predictions(run_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in lines]
 
 
+def _object_dict(value: object) -> dict[str, Any]:
+    assert isinstance(value, dict)
+    return {str(key): item for key, item in value.items()}
+
+
 def _assert_deepcase_outputs(
     *,
     metrics: dict[str, Any],
@@ -68,6 +73,7 @@ def _assert_deepcase_outputs(
     sequence_config = manifest["sequence_config"]
     sequence_split_summary = manifest["sequence_split_summary"]
     _assert_deepcase_metrics(metrics, predictions)
+    _assert_deepcase_task_metadata(metrics=metrics, manifest=manifest)
     _assert_deepcase_prediction_diagnostics(prediction_diagnostics, predictions)
     _assert_deepcase_model_manifest(
         model_manifest=model_manifest,
@@ -85,50 +91,81 @@ def _assert_deepcase_metrics(
     assert metrics["train_sequence_count"] >= 0
     assert metrics["test_sequence_count"] >= 0
     assert metrics["ignored_sequence_count"] >= 0
-    assert "auto_decision_count" in metrics
-    assert "counted_predictions" in metrics
-    assert "abstained_prediction_count" in metrics
-    assert "auto_coverage" in metrics
-    assert "abstain_rate" in metrics
-    assert "abstained_anomalous_label_count" in metrics
-    assert "abstained_normal_label_count" in metrics
-    assert "parent_sequence_fallback_count" in metrics
-    assert "random_seed" in metrics
-    assert "next_event_prediction" in metrics
-    assert "manual_workload_reduction" in metrics
-    assert "semi_automatic_workload_reduction" in metrics
+    assert "auto_decision_count" not in metrics
+    assert "counted_predictions" not in metrics
+    assert "abstained_prediction_count" not in metrics
+    assert "auto_coverage" not in metrics
+    assert "abstain_rate" not in metrics
+    assert "abstained_anomalous_label_count" not in metrics
+    assert "abstained_normal_label_count" not in metrics
+    assert "parent_sequence_fallback_count" not in metrics
+    assert "random_seed" not in metrics
+    assert metrics["evaluation_unit"] == "sequence"
+    assert metrics["primary_metric_scope"] == "sequence_level_detection"
+    assert metrics["prediction_unit"] == "sequence"
+    assert metrics["label_unit"] == "sequence"
+    assert metrics["primary_metrics"]["status"] == "valid"
+    metric_blocks = {str(key): value for key, value in metrics["metric_blocks"].items()}
+    sequence_level_detection = _object_dict(
+        metric_blocks["sequence_level_detection"],
+    )
+    event_level_detection = _object_dict(metric_blocks["event_level_detection"])
+    next_event_prediction = _object_dict(metric_blocks["next_event_prediction"])
+    manual_workload_reduction = _object_dict(
+        metric_blocks["manual_workload_reduction"],
+    )
+    semi_automatic_workload_reduction = _object_dict(
+        metric_blocks["semi_automatic_workload_reduction"],
+    )
+    assert sequence_level_detection["status"] == "valid"
+    assert event_level_detection["status"] == "diagnostic_only"
+    assert next_event_prediction["status"] == "valid"
+    assert manual_workload_reduction["status"] == "valid"
+    assert semi_automatic_workload_reduction["status"] == "valid"
+    assert event_level_detection["headline_metrics"]["precision"] >= 0.0
+    assert event_level_detection["headline_metrics"]["recall"] >= 0.0
+    assert event_level_detection["headline_metrics"]["f1"] >= 0.0
+    assert event_level_detection["diagnostics"]["event_auto_coverage"] >= 0.0
+    assert event_level_detection["diagnostics"]["event_abstain_rate"] >= 0.0
     assert metrics["sequence_count"] == (
         metrics["train_sequence_count"]
         + metrics["test_sequence_count"]
         + metrics["ignored_sequence_count"]
     )
-    assert metrics["test_sequence_count"] == (
-        metrics["auto_decision_count"] + metrics["abstained_prediction_count"]
+    assert (
+        sequence_level_detection["counted_predictions"]
+        + sequence_level_detection["abstained_prediction_count"]
+        == metrics["test_sequence_count"]
     )
-    assert metrics["counted_predictions"] == (
-        metrics["tp"] + metrics["tn"] + metrics["fp"] + metrics["fn"]
+    assert sequence_level_detection["counted_predictions"] == (
+        sequence_level_detection["confusion_matrix"]["tp"]
+        + sequence_level_detection["confusion_matrix"]["tn"]
+        + sequence_level_detection["confusion_matrix"]["fp"]
+        + sequence_level_detection["confusion_matrix"]["fn"]
     )
-    assert metrics["auto_decision_count"] == metrics["counted_predictions"]
-    assert metrics["abstained_prediction_count"] == (
-        metrics["abstained_anomalous_label_count"]
-        + metrics["abstained_normal_label_count"]
+    assert sequence_level_detection["diagnostics"]["auto_coverage"] == pytest.approx(
+        sequence_level_detection["counted_predictions"]
+        / metrics["test_sequence_count"],
     )
-    assert metrics["test_sequence_count"] == (
-        metrics["counted_predictions"] + metrics["abstained_prediction_count"]
+    assert sequence_level_detection["diagnostics"]["abstain_rate"] == pytest.approx(
+        sequence_level_detection["abstained_prediction_count"]
+        / metrics["test_sequence_count"],
     )
-    assert 0.0 <= metrics["auto_coverage"] <= 1.0
-    assert 0.0 <= metrics["abstain_rate"] <= 1.0
     assert len(predictions) == metrics["test_sequence_count"]
-    next_event_prediction = metrics["next_event_prediction"]
-    assert isinstance(next_event_prediction, dict)
-    assert next_event_prediction["task"] == "next_event_prediction"
-    assert "classification_top1_weighted" in next_event_prediction
-    manual_workload_reduction = metrics["manual_workload_reduction"]
-    semi_automatic_workload_reduction = metrics["semi_automatic_workload_reduction"]
-    assert isinstance(manual_workload_reduction, dict)
-    assert isinstance(semi_automatic_workload_reduction, dict)
-    assert manual_workload_reduction["mode"] == "manual"
-    assert semi_automatic_workload_reduction["mode"] == "semi_automatic"
+    assert next_event_prediction["diagnostics"]["task"] == "next_event_prediction"
+    assert "classification_top1_weighted" in next_event_prediction["diagnostics"]
+    assert manual_workload_reduction["diagnostics"]["mode"] == "manual"
+    assert semi_automatic_workload_reduction["diagnostics"]["mode"] == "semi_automatic"
+
+
+def _assert_deepcase_task_metadata(
+    *,
+    metrics: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    assert manifest["evaluation_unit"] == metrics["evaluation_unit"]
+    assert manifest["primary_metric_scope"] == metrics["primary_metric_scope"]
+    assert manifest["available_metric_scopes"] == metrics["available_metric_scopes"]
 
 
 def _assert_deepcase_prediction_diagnostics(

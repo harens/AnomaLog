@@ -62,10 +62,12 @@ underlying automatic decisions separately from abstentions.
 
 ### Metric Interpretation
 
-Sequence-level precision, recall, F1, and accuracy remain the shared wrapper
-view over sequence decisions. They are useful for compatibility with the
-shared experiment contract, but they are not the primary paper-comparison
-target for HDFS.
+`metrics.json` now reports scoped blocks with explicit
+`metric_scope`, `prediction_unit`, `label_unit`, and `status` fields. The
+shared sequence-level wrapper remains useful when it is the configured primary
+scope, but it is no longer treated as the universal headline metric.
+DeepCASE runs should foreground the configured `primary_metric_scope` and keep
+sequence-level results separate from the event-level abstention diagnostics.
 
 The paper-comparison block for HDFS Table IV uses
 `next_event_prediction.classification_top1_weighted`. It mirrors the weighted

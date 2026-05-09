@@ -3,6 +3,7 @@ dataset_name = "BGL"
 preset = "bgl"
 template_parser = "drain3"
 description = "DeepLog BGL paper-reproduction config: first 1% normal raw entries, chronological stream grouping, and no online update."
+evaluation_unit = "continuous_event_stream"
 
 [sequence]
 grouping = "chronological_stream"

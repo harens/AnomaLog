@@ -1,5 +1,6 @@
 name = "deepcase"
 detector = "deepcase"
+primary_metric_scope = "sequence_level_detection"
 context_length = 2
 timeout_seconds = 86400
 hidden_size = 8

@@ -17,6 +17,7 @@ from experiments.config_types import (
     DatasetSourceConfig,
     DatasetVariantConfig,
     EntitySequenceConfig,
+    EvaluationUnit,
     ExperimentBundle,
     LabelReaderConfig,
     SequenceConfig,
@@ -168,6 +169,11 @@ def _decode_dataset_config(obj: object) -> DatasetVariantConfig:
                 type=CachePathsConfigModel,
                 dec_hook=_path_dec_hook,
             )
+        ),
+        evaluation_unit=(
+            None
+            if raw_config.get("evaluation_unit") is None
+            else msgspec.convert(raw_config["evaluation_unit"], type=EvaluationUnit)
         ),
         sequence=_decode_sequence_config(raw_config.get("sequence")),
         description=_optional_str(raw_config.get("description")),
