@@ -150,6 +150,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Dataset sourcing, structured parsing, template mining, and other
   preprocessing stages reuse the existing AnomaLog and Prefect-backed caches
   when their inputs and upstream assets have not changed.
+- Local-output materialisation also guards against stale Prefect cache hits
+  that point at an incompatible storage base path, so reruns keep working
+  after a checkout moves or a local storage root changes.
 - Cold dataset builds are serialised per dataset namespace
   (`dataset_name` plus cache roots), so multi-process sweeps do not race while
   materialising the shared AnomaLog dataset cache for the first time.

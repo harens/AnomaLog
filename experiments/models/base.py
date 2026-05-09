@@ -9,6 +9,7 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    ClassVar,
     Protocol,
     TypeVar,
     runtime_checkable,
@@ -521,10 +522,11 @@ class ExperimentDetector(Protocol):
     """Common detector runtime interface.
 
     Attributes:
-        detector_name (str): Stable detector name for manifests and logging.
+        detector_name (ClassVar[str]): Stable detector name for manifests and
+            logging.
     """
 
-    detector_name: str
+    detector_name: ClassVar[str]
 
     def fit(
         self,

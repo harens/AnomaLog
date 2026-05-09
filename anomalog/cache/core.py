@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypedDict, TypeVar
 
 from filelock import FileLock
 from platformdirs import user_cache_dir, user_data_dir
@@ -19,9 +19,6 @@ from typing_extensions import Unpack
 from anomalog.cache.classes import cache_class_key_fn
 
 from .files import _ALLOWED, AssetDepsFingerprintPolicy
-
-if TYPE_CHECKING:
-    from prefect.tasks import TaskOptions
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -44,6 +41,63 @@ class CachePathsConfig:
 
     data_root: Path = field(default_factory=lambda: Path(user_data_dir("anomalog")))
     cache_root: Path = field(default_factory=lambda: Path(user_cache_dir("anomalog")))
+
+
+class MaterializeTaskOptions(TypedDict, total=False):
+    """Task options accepted by the local materialisation helper.
+
+    Attributes:
+        name (str | None): Optional task name.
+        description (str | None): Optional task description.
+        tags (list[str] | None): Optional task tags.
+        version (str | None): Optional task version.
+        cache_key_fn (Any): Optional cache key function override.
+        cache_expiration (Any): Optional cache expiration policy.
+        task_run_name (Any): Optional task run name override.
+        retries (int | None): Retry count.
+        retry_delay_seconds (float | int | list[float] | Any): Retry delay
+            policy.
+        retry_jitter_factor (float | None): Retry jitter factor.
+        result_storage (Any): Result storage override.
+        result_serializer (Any): Result serializer override.
+        result_storage_key (str | None): Result storage key.
+        cache_result_in_memory (bool): Whether to keep cached results in memory.
+        timeout_seconds (int | float | None): Task timeout.
+        log_prints (bool | None): Whether print statements are logged.
+        refresh_cache (bool | None): Whether to ignore cached results.
+        on_completion (Any): Completion hooks.
+        on_failure (Any): Failure hooks.
+        on_running (Any): Running hooks.
+        on_rollback (Any): Rollback hooks.
+        on_commit (Any): Commit hooks.
+        retry_condition_fn (Any): Retry condition callback.
+        viz_return_value (Any): Value surfaced to the visualiser.
+    """
+
+    name: str | None
+    description: str | None
+    tags: list[str] | None
+    version: str | None
+    cache_key_fn: Any
+    cache_expiration: Any
+    task_run_name: Any
+    retries: int | None
+    retry_delay_seconds: float | int | list[float] | Any
+    retry_jitter_factor: float | None
+    result_storage: Any
+    result_serializer: Any
+    result_storage_key: str | None
+    cache_result_in_memory: bool
+    timeout_seconds: int | float | None
+    log_prints: bool | None
+    refresh_cache: bool | None
+    on_completion: Any
+    on_failure: Any
+    on_running: Any
+    on_rollback: Any
+    on_commit: Any
+    retry_condition_fn: Any
+    viz_return_value: Any
 
 
 def _unique_dataset_roots(
@@ -194,27 +248,28 @@ task = partial(_task, persist_result=True, cache_policy=CACHE_POLICY)
 def materialize(
     output_path: Path,
     *,
-    asset_deps: list[Asset] | None = None,
-    **task_kwargs: Unpack["TaskOptions"],
+    asset_deps: list[Asset | str] | None = None,
+    **task_kwargs: Unpack[MaterializeTaskOptions],
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Wrap Prefect materialsation with a local output existence check.
 
     Prefect can reuse a cached completed state without re-checking whether the
     local output path still exists. This helper reruns the wrapped function
     directly if the expected local file or directory is missing after Prefect
-    returns.
+    returns, or if Prefect returns a stale cached result whose stored file
+    path no longer matches the active local storage base.
 
     Args:
         output_path (Path): Local path that must exist after Prefect returns.
-        asset_deps (list[Asset] | None): Upstream asset dependencies for the
-            wrapped task materialisation.
-        **task_kwargs (Unpack[TaskOptions]): Additional Prefect task options
-            forwarded to `prefect.assets.materialise`.
+        asset_deps (list[Asset | str] | None): Upstream asset dependencies for
+            the wrapped task materialisation.
+        **task_kwargs (Unpack[MaterializeTaskOptions]): Additional Prefect task
+            options forwarded to `prefect.assets.materialise`.
 
     Returns:
         Callable[[Callable[P, R]], Callable[P, R]]: Decorator that materialises
             the wrapped function and falls back to rerunning it when the local
-            output path is missing.
+            output path is missing or the cached result is no longer readable.
     """
 
     def _decorate(func: Callable[P, R]) -> Callable[P, R]:
@@ -227,7 +282,12 @@ def materialize(
         )(func)
 
         def _run(*args: P.args, **kwargs: P.kwargs) -> R:
-            result = materialized(*args, **kwargs)
+            try:
+                result = materialized(*args, **kwargs)
+            except ValueError as exc:
+                if not _is_stale_materialize_cache_error(exc):
+                    raise
+                return func(*args, **kwargs)
             if output_path.exists():
                 return result
             return func(*args, **kwargs)
@@ -235,3 +295,20 @@ def materialize(
         return _run
 
     return _decorate
+
+
+def _is_stale_materialize_cache_error(exc: ValueError) -> bool:
+    """Return whether Prefect rejected a cached result from another base path.
+
+    Prefect local filesystem result storage raises `ValueError` when a cached
+    result points outside the active storage base path. That can happen after a
+    checkout moves or when old cache metadata survives a storage-root change.
+
+    Args:
+        exc (ValueError): Exception raised while reading the cached result.
+
+    Returns:
+        bool: Whether the error should trigger a direct rerun of the wrapped
+            function.
+    """
+    return "outside of the base path" in str(exc)

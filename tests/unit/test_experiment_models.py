@@ -8,6 +8,7 @@ import types
 from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from rich.progress import Progress, TextColumn
@@ -149,7 +150,7 @@ def test_fit_detector_wraps_lazy_train_stream_with_known_total() -> None:
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         seen_total: int | None = None
         seen_unit: str | None = None
         seen_sequences: list[TemplateSequence] = field(default_factory=list)
@@ -248,7 +249,7 @@ def test_stream_predictions_only_scores_test_sequences(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         predicted_window_ids: list[int] = field(default_factory=list)
 
         @override
@@ -373,7 +374,7 @@ def test_stream_predictions_logs_scored_test_sequence_counts(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
 
         @override
         def fit(
@@ -447,7 +448,7 @@ def test_stream_predictions_uses_bulk_detector_interface(
 
     @dataclass(slots=True)
     class _BulkRecordingDetector(ExperimentDetector, BatchExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         bulk_window_ids: list[int] = field(default_factory=list)
 
         @override
@@ -532,7 +533,7 @@ def test_stream_predictions_does_not_write_predictions_by_default(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
 
         @override
         def fit(

@@ -175,7 +175,51 @@ def test_materialize_reruns_function_when_output_path_is_missing(
     """
     output_path = tmp_path / "artifact.txt"
 
-    monkeypatch.setattr("anomalog.cache.materialize", _skip_materialize)
+    monkeypatch.setattr("anomalog.cache.core._prefect_materialize", _skip_materialize)
+
+    @materialize(output_path)
+    def _build() -> str:
+        output_path.write_text("hello", encoding="utf-8")
+        return "rebuilt"
+
+    with disable_run_logger():
+        assert _build() == "rebuilt"
+    assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_reruns_function_when_prefect_cached_result_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-output materialization should recover from stale Prefect cache paths.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that simulates a stale local filesystem result.
+    """
+
+    def _raise_stale_path_error(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                message = (
+                    "Provided path /old/run/storage is outside of the base path "
+                    "/new/run/storage."
+                )
+                raise ValueError(message)
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _raise_stale_path_error,
+    )
 
     @materialize(output_path)
     def _build() -> str:
