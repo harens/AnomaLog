@@ -12,6 +12,8 @@ from anomalog.sources.contracts import DatasetSource
 
 SplitFileSpec = tuple[str, int]
 SplitFileSpecs = tuple[SplitFileSpec, ...]
+LabelledRawSplitFileSpec = tuple[str, str, int]
+LabelledRawSplitFileSpecs = tuple[LabelledRawSplitFileSpec, ...]
 PostProcessFn = Callable[[Path, Path], None]
 
 _LOGGER = logging.getLogger(__name__)
@@ -181,3 +183,40 @@ def materialise_labelled_session_stream(
         event_count,
         raw_logs_path,
     )
+
+
+def materialise_labelled_raw_stream(
+    source_root: Path,
+    raw_logs_path: Path,
+    split_files: LabelledRawSplitFileSpecs,
+) -> None:
+    r"""Concatenate raw split files into a labelled stream.
+
+    Each emitted row keeps the original raw line while adding a stable split
+    name and anomaly label:
+    `<split_name>\\t<label>\\t<raw_line>`.
+
+    Args:
+        source_root (Path): Root containing the split source files.
+        raw_logs_path (Path): Destination path for the synthetic raw stream.
+        split_files (LabelledRawSplitFileSpecs): Source filename, output split
+            name, and anomaly label in output order.
+
+    Raises:
+        FileNotFoundError: If any expected split file is missing.
+    """
+    row_count = 0
+    with raw_logs_path.open("w", encoding="utf-8") as output:
+        for source_name, split_name, label in split_files:
+            split_path = _find_source_file(source_root, source_name)
+            if split_path is None:
+                msg = f"Missing {source_name} in extracted archive at {source_root}."
+                raise FileNotFoundError(msg)
+            with split_path.open(encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.rstrip("\n")
+                    if not line:
+                        continue
+                    output.write(f"{split_name}\t{label}\t{line}\n")
+                    row_count += 1
+    _LOGGER.info("Wrote %s labelled raw rows to %s", row_count, raw_logs_path)

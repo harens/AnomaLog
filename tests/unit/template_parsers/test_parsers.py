@@ -1,5 +1,7 @@
 """Tests for template parser implementations."""
 
+import sys
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias
@@ -12,7 +14,11 @@ from anomalog.parsers.template import (
     resolve_template_parser,
     template_parser_names,
 )
-from anomalog.parsers.template.parsers import Drain3Parser, IdentityTemplateParser
+from anomalog.parsers.template.parsers import (
+    Drain3Parser,
+    IdentityTemplateParser,
+    SpellTemplateParser,
+)
 
 ZeroArgFn: TypeAlias = Callable[[], None]
 MaterializeDecorator: TypeAlias = Callable[[ZeroArgFn], ZeroArgFn]
@@ -150,7 +156,8 @@ def test_template_parser_registry_resolves_builtins() -> None:
     """Built-in template parsers register themselves by config name."""
     assert resolve_template_parser("drain3") is Drain3Parser
     assert resolve_template_parser("identity") is IdentityTemplateParser
-    assert set(template_parser_names()) >= {"drain3", "identity"}
+    assert resolve_template_parser("spell") is SpellTemplateParser
+    assert set(template_parser_names()) >= {"drain3", "identity", "spell"}
 
 
 def test_template_parser_registry_rejects_unknown_names() -> None:
@@ -259,3 +266,59 @@ def test_identity_template_parser_is_a_no_op_for_train_and_inference() -> None:
     parser.train(lambda: iter(["hello"]))
 
     assert parser.inference("hello") == ("hello", [])
+
+
+def test_spell_template_parser_trains_and_infers_with_fake_spellpy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser should expose trained templates through inference.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch module imports and cwd.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+
+    class _FakeLogParser:
+        def __init__(
+            self,
+            *,
+            indir: str,
+            outdir: str,
+            log_format: str,
+            logmain: str,
+            tau: float,
+        ) -> None:
+            del indir, log_format, tau
+            self._outdir = Path(outdir)
+            self._logmain = logmain
+
+        def parse(self, _filename: str) -> None:
+            templates_path = self._outdir / f"{self._logmain}_templates.csv"
+            templates_path.write_text(
+                "EventId,EventTemplate,Occurrences\n"
+                "E1,Build <*> complete,2\n"
+                "E2,Delete <*> complete,1\n",
+                encoding="utf-8",
+            )
+
+    fake_spell_module = types.SimpleNamespace(LogParser=_FakeLogParser)
+    fake_spellpy_module = types.ModuleType("spellpy")
+    fake_spellpy_module.__dict__["spell"] = fake_spell_module
+    monkeypatch.setitem(sys.modules, "spellpy", fake_spellpy_module)
+    monkeypatch.chdir(tmp_path)
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(
+        lambda: iter(
+            [
+                "Build vm-1 complete",
+                "Build vm-2 complete",
+                "Delete vm-1 complete",
+            ],
+        ),
+    )
+
+    template, parameters = parser.inference("Build vm-3 complete")
+    assert template == "Build <*> complete"
+    assert parameters == ["vm-3"]

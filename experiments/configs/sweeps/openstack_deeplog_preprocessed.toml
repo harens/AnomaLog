@@ -1,0 +1,4 @@
+name = "openstack_deeplog_preprocessed"
+dataset = "openstack_deeplog_preprocessed_exact_boundary"
+model = "deeplog"
+description = "DeepLog OpenStack reproduction on LogHub OpenStack.tar.gz with Spell parsing, 1-minute sessions, and file-boundary train/test splits."

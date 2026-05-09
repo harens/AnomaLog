@@ -9,7 +9,11 @@ from anomalog.parsers.structured.deeplog_preprocessed import (
     DelimitedLabelledEventParser,
 )
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
-from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.parsers import (
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+)
 from anomalog.parsers.structured.registry import (
     resolve_structured_parser,
     structured_parser_names,
@@ -20,6 +24,7 @@ __all__ = [
     "BaseStructuredLine",
     "DelimitedLabelledEventParser",
     "HDFSV1Parser",
+    "OpenStackDeepLogParser",
     "ParquetStructuredSink",
     "StructuredParser",
     "StructuredSink",

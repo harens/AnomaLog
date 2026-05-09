@@ -7,11 +7,14 @@ from pathlib import Path
 
 from anomalog.dataset import DatasetSpec
 from anomalog.labels import CSVReader
-from anomalog.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers import BGLParser, HDFSV1Parser, OpenStackDeepLogParser
 from anomalog.parsers.structured import DelimitedLabelledEventParser
-from anomalog.parsers.template import IdentityTemplateParser
+from anomalog.parsers.template import IdentityTemplateParser, SpellTemplateParser
 from anomalog.sources import PostProcessedSource, RemoteZipSource
-from anomalog.sources.deeplog_preprocessed import materialise_labelled_session_stream
+from anomalog.sources.deeplog_preprocessed import (
+    materialise_labelled_raw_stream,
+    materialise_labelled_session_stream,
+)
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling.
@@ -75,10 +78,34 @@ hdfs_wuyifan18_deeplog_preprocessed = (
     .template_with(IdentityTemplateParser)
 )
 
+openstack_deeplog_preprocessed = (
+    DatasetSpec("OPENSTACK_DEEPLOG_PREPROCESSED")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/OpenStack.tar.gz",
+                md5_checksum="66bd42c07837a094d9b0ea2d036b5713",
+            ),
+            post_process=partial(
+                materialise_labelled_raw_stream,
+                split_files=(
+                    ("openstack_normal1.log", "openstack_train", 0),
+                    ("openstack_normal2.log", "openstack_test_normal", 0),
+                    ("openstack_abnormal.log", "openstack_test_abnormal", 1),
+                ),
+            ),
+            raw_logs_relpath=Path("preprocessed/openstack_labelled_raw.log"),
+        ),
+    )
+    .parse_with(OpenStackDeepLogParser())
+    .template_with(SpellTemplateParser)
+)
+
 _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
     "hdfs_v1": hdfs_v1,
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
+    "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
 }
 
 

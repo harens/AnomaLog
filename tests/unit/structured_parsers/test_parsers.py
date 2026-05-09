@@ -9,7 +9,11 @@ from anomalog.parsers.structured import (
 from anomalog.parsers.structured.deeplog_preprocessed import (
     DelimitedLabelledEventParser,
 )
-from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.parsers import (
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+)
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000
@@ -53,11 +57,27 @@ def test_structured_parser_registry_resolves_builtins() -> None:
         DelimitedLabelledEventParser
     )
     assert resolve_structured_parser("hdfs_v1") is HDFSV1Parser
+    assert resolve_structured_parser("openstack_deeplog") is OpenStackDeepLogParser
     assert set(structured_parser_names()) >= {
         "bgl",
         "delimited_labelled_event",
         "hdfs_v1",
+        "openstack_deeplog",
     }
+
+
+def test_openstack_deeplog_parser_groups_by_split_scoped_minute() -> None:
+    """OpenStack parser should create one-minute split-scoped entity buckets."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_train\t0\t100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[instance-0001] Build complete",
+    )
+
+    assert parsed is not None
+    assert parsed.entity_id == "openstack_train:2017-01-01 00:00"
+    assert parsed.anomalous == 0
+    assert parsed.untemplated_message_text == "Build complete"
 
 
 def test_structured_parser_registry_rejects_unknown_names() -> None:

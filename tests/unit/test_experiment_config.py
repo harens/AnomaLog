@@ -8,6 +8,7 @@ import pytest
 
 from anomalog.parsers.template import IdentityTemplateParser
 from anomalog.sources.deeplog_preprocessed import (
+    materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
 from experiments import ConfigError
@@ -121,6 +122,54 @@ def _write_preprocessed_hdfs_archive(
     train_entry_count = sum(
         len(line.split()) for line in train_text.splitlines() if line
     )
+    return source_root, archive_path, train_entry_count
+
+
+def _write_openstack_labelled_raw_archive(
+    tmp_path: Path,
+    *,
+    train_text: str,
+    normal_text: str,
+    abnormal_text: str,
+) -> tuple[Path, Path, int]:
+    """Create a tiny archive containing a labelled raw OpenStack stream.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the archive fixture.
+        train_text (str): Raw rows written to `openstack_normal1.log`.
+        normal_text (str): Raw rows written to `openstack_normal2.log`.
+        abnormal_text (str): Raw rows written to `openstack_abnormal.log`.
+
+    Returns:
+        tuple[Path, Path, int]: Source root, synthetic archive, and train row
+            count contributed by `openstack_normal1.log`.
+    """
+    source_root = tmp_path / "openstack_source"
+    source_root.mkdir()
+    (source_root / "openstack_normal1.log").write_text(train_text, encoding="utf-8")
+    (source_root / "openstack_normal2.log").write_text(normal_text, encoding="utf-8")
+    (source_root / "openstack_abnormal.log").write_text(abnormal_text, encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "openstack_labelled_raw.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    materialise_labelled_raw_stream(
+        source_root=source_root,
+        raw_logs_path=raw_logs_path,
+        split_files=(
+            ("openstack_normal1.log", "openstack_train", 0),
+            ("openstack_normal2.log", "openstack_test_normal", 0),
+            ("openstack_abnormal.log", "openstack_test_abnormal", 1),
+        ),
+    )
+
+    archive_path = tmp_path / "openstack_preprocessed.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(
+            raw_logs_path,
+            arcname="preprocessed/openstack_labelled_raw.log",
+        )
+
+    train_entry_count = len([line for line in train_text.splitlines() if line])
     return source_root, archive_path, train_entry_count
 
 
@@ -1038,6 +1087,131 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
         ),
         load_split_sequences(
             dataset_name="hdfs_wuyifan18_deeplog_preprocessed_local_high",
+            train_fraction=1.0,
+            test_fraction=0.0,
+        ),
+    ]
+    assert split_signatures[0] == expected
+    assert split_signatures[1] == expected
+
+
+def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fractions(
+    tmp_path: Path,
+) -> None:
+    """OpenStack split settings should keep model-facing train/test data stable.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic config tree.
+    """
+    train_text = (
+        "100 2017-01-01 00:00:10.000 1 INFO nova.compute [instance-a] Build start\n"
+        "101 2017-01-01 00:00:40.000 1 INFO nova.compute [instance-a] Build done\n"
+        "102 2017-01-01 00:01:05.000 1 INFO nova.compute [instance-a] Delete start\n"
+    )
+    normal_text = (
+        "200 2017-01-01 00:02:05.000 2 INFO nova.compute [instance-b] Build start\n"
+    )
+    abnormal_text = (
+        "300 2017-01-01 00:03:05.000 3 INFO nova.compute [instance-c] Libvirt error\n"
+    )
+    _source_root, archive_path, train_entry_count = (
+        _write_openstack_labelled_raw_archive(
+            tmp_path,
+            train_text=train_text,
+            normal_text=normal_text,
+            abnormal_text=abnormal_text,
+        )
+    )
+
+    def load_split_sequences(
+        *,
+        dataset_name: str,
+        train_fraction: float,
+        test_fraction: float,
+    ) -> list[tuple[str, str, int, list[str]]]:
+        sweep_path = _write_config_tree(
+            tmp_path,
+            sweep_name=f"{dataset_name}_sweep",
+            dataset=(
+                dataset_name,
+                (
+                    f'name = "{dataset_name}"\n'
+                    'dataset_name = "OPENSTACK_DEEPLOG_PREPROCESSED"\n'
+                    'structured_parser = "openstack_deeplog"\n'
+                    'template_parser = "identity"\n'
+                    "\n[source]\n"
+                    'type = "local_zip"\n'
+                    f'zip_path = "{archive_path.as_posix()}"\n'
+                    'raw_logs_relpath = "preprocessed/openstack_labelled_raw.log"\n'
+                    "\n[sequence]\n"
+                    'grouping = "entity"\n'
+                    f"train_fraction = {train_fraction}\n"
+                    f"test_fraction = {test_fraction}\n"
+                    "\n[sequence.split]\n"
+                    'mode = "raw_entry_prefix_count"\n'
+                    f"train_entry_count = {train_entry_count}\n"
+                    'application_order = "before_grouping"\n'
+                    'straddling_group_policy = "split_partial_sequences"\n'
+                    "\n[cache_paths]\n"
+                    'data_root = "data/openstack_preprocessed"\n'
+                    'cache_root = ".cache/openstack_preprocessed"\n'
+                ),
+            ),
+            model=(
+                "template_frequency_default",
+                (
+                    'name = "template_frequency_default"\n'
+                    'detector = "template_frequency"\n'
+                ),
+            ),
+        )
+        bundle = _load_one_bundle(sweep_path)
+        spec = build_dataset_spec(bundle.dataset, repo_root=tmp_path)
+        sequences = list(bundle.dataset.sequence.apply(spec.build()))
+        return [
+            (
+                sequence.entity_ids[0],
+                sequence.split_label.value,
+                sequence.label,
+                sequence.templates,
+            )
+            for sequence in sequences
+        ]
+
+    expected = [
+        (
+            "openstack_train:2017-01-01 00:00",
+            "train",
+            0,
+            ["Build start", "Build done"],
+        ),
+        (
+            "openstack_train:2017-01-01 00:01",
+            "train",
+            0,
+            ["Delete start"],
+        ),
+        (
+            "openstack_test_normal:2017-01-01 00:02",
+            "test",
+            0,
+            ["Build start"],
+        ),
+        (
+            "openstack_test_abnormal:2017-01-01 00:03",
+            "test",
+            1,
+            ["Libvirt error"],
+        ),
+    ]
+    split_signatures = [
+        load_split_sequences(
+            dataset_name="openstack_deeplog_preprocessed_local_low",
+            train_fraction=0.2,
+            test_fraction=0.8,
+        ),
+        load_split_sequences(
+            dataset_name="openstack_deeplog_preprocessed_local_high",
             train_fraction=1.0,
             test_fraction=0.0,
         ),

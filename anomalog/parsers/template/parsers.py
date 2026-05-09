@@ -1,9 +1,13 @@
-"""Template parser implementations (Drain3 and identity)."""
+"""Template parser implementations."""
 
+import csv
 import hashlib
+import importlib
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
+from operator import itemgetter
 from pathlib import Path
 from typing import ClassVar
 
@@ -294,6 +298,145 @@ class IdentityTemplateParser(TemplateParser):
         """
         del untemplated_text_iterator
         # No training needed for the identity parser
+
+
+@dataclass(slots=True)
+class SpellTemplateParser(TemplateParser):
+    """Spell-based template parser for DeepLog-style key extraction.
+
+    This parser trains Spell on the provided text stream, then performs
+    inference by matching lines against the mined templates. Matching is done
+    in template-occurrence order so frequently observed templates win first.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+        dataset_name (str | None): Optional dataset name used for cache paths.
+        tau (float): Spell similarity threshold passed to Spell training.
+    """
+
+    name: ClassVar[str] = "spell"
+    dataset_name: str | None = None
+    tau: float = 0.5
+    _patterns: list[tuple[str, re.Pattern[str], int]] | None = None
+
+    @override
+    def train(
+        self,
+        untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+    ) -> None:
+        """Train Spell templates from the text stream.
+
+        Args:
+            untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
+                Zero-argument iterator factory over untemplated message text.
+
+        Raises:
+            ModuleNotFoundError: If optional `spellpy` is not installed.
+        """
+        try:
+            spell = importlib.import_module("spellpy").spell
+        except ModuleNotFoundError as exc:
+            msg = "Spell template parsing requires optional dependency 'spellpy'."
+            raise ModuleNotFoundError(msg) from exc
+
+        log_lines = list(untemplated_text_iterator())
+        if not log_lines:
+            self._patterns = []
+            return
+
+        log_dir = Path.cwd() / ".cache" / "spell"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        dataset_prefix = self.dataset_name or "dataset"
+        raw_path = log_dir / f"{dataset_prefix}_spell_input.log"
+        outdir = log_dir / f"{dataset_prefix}_spell_output"
+        outdir.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+        parser = spell.LogParser(
+            indir=str(log_dir),
+            outdir=str(outdir),
+            log_format="<Content>",
+            logmain=raw_path.name,
+            tau=self.tau,
+        )
+        parser.parse(raw_path.name)
+
+        templates_path = outdir / f"{raw_path.name}_templates.csv"
+        rows = _read_spell_template_rows(templates_path)
+        self._patterns = [
+            (
+                template,
+                _compile_spell_template_regex(template),
+                occurrences,
+            )
+            for template, occurrences in rows
+        ]
+
+    @override
+    def inference(
+        self,
+        unstructured_text: UntemplatedText,
+    ) -> tuple[LogTemplate, ExtractedParameters]:
+        """Infer template and extracted parameters for one log line.
+
+        Args:
+            unstructured_text (UntemplatedText): Raw line to match.
+
+        Returns:
+            tuple[LogTemplate, ExtractedParameters]: Matched template and
+                captured parameters, or a self-template fallback when unmatched.
+
+        Raises:
+            ValueError: If the parser has not been trained yet.
+        """
+        if self._patterns is None:
+            msg = "Parser has not been trained yet"
+            raise ValueError(msg)
+
+        for template, pattern, _ in self._patterns:
+            match = pattern.fullmatch(unstructured_text)
+            if match is None:
+                continue
+            return template, list(match.groups())
+        return unstructured_text, []
+
+
+def _read_spell_template_rows(path: Path) -> list[tuple[str, int]]:
+    """Read Spell template rows in descending occurrence order.
+
+    Args:
+        path (Path): Spell templates CSV path.
+
+    Returns:
+        list[tuple[str, int]]: `(template, occurrences)` rows sorted by
+            descending occurrence.
+    """
+    rows: list[tuple[str, int]] = []
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            template = row.get("EventTemplate")
+            occurrences = row.get("Occurrences")
+            if template is None or occurrences is None:
+                continue
+            rows.append((template, int(occurrences)))
+    rows.sort(key=itemgetter(1), reverse=True)
+    return rows
+
+
+def _compile_spell_template_regex(template: str) -> re.Pattern[str]:
+    """Compile a Spell template into a parameter-capturing regex.
+
+    Args:
+        template (str): Spell template containing zero or more `<*>` markers.
+
+    Returns:
+        re.Pattern[str]: Full-line regex for inference matching.
+    """
+    sentinel = "__ANOMALOG_SPELL_WILDCARD__"
+    escaped = re.escape(template.replace("<*>", sentinel))
+    pattern_text = escaped.replace(sentinel, "(.*?)")
+    return re.compile(pattern_text)
 
 
 # class LogParser(Parser):

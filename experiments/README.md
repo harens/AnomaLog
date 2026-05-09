@@ -71,6 +71,11 @@ The checked-in sweep set is split by detector family:
   split fixed to the full `hdfs_train` prefix and then evaluates both
   `hdfs_test_normal` and `hdfs_test_abnormal` exactly as they appear in the
   preprocessed archive.
+- `openstack_deeplog_preprocessed.toml` is the matching OpenStack
+  file-boundary reproduction probe. It materialises LogHub's OpenStack archive,
+  parses with Spell (`tau=0.5`), builds the DeepLog event-id vocabulary from
+  `openstack_normal1.log`, and then evaluates `openstack_normal2.log` and
+  `openstack_abnormal.log` on the same exact boundary.
 - `hdfs_wuyifan18_deepcase.toml` is the matching DeepCASE probe on the same
   exact-boundary dataset. It reuses the same dataset config and only changes
   the detector family.
@@ -214,9 +219,10 @@ written to the prediction stream unless you explicitly opt in with
 To add a preprocessing ablation, create another file in `configs/datasets/`.
 
 For built-in datasets, prefer `preset = "bgl"`, `preset = "hdfs_v1"`, or
-`preset = "hdfs_wuyifan18_deeplog_preprocessed"` depending on whether you want
-the LogHub-style raw HDFS corpus or the preprocessed DeepLog session files
-with the exact `hdfs_train` / `hdfs_test_*` file boundary.
+`preset = "hdfs_wuyifan18_deeplog_preprocessed"` / 
+`preset = "openstack_deeplog_preprocessed"` depending on whether you want the
+LogHub-style raw corpus or the DeepLog-style preprocessed session files with
+the exact train/test file boundary.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Omit `[cache_paths]` to use AnomaLog's default platformdirs-based cache/data locations.
 

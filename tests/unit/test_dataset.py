@@ -23,12 +23,14 @@ from anomalog.parsers.template import (
     ExtractedParameters,
     IdentityTemplateParser,
     LogTemplate,
+    SpellTemplateParser,
     TemplateParser,
 )
 from anomalog.presets import (
     bgl,
     hdfs_v1,
     hdfs_wuyifan18_deeplog_preprocessed,
+    openstack_deeplog_preprocessed,
     preset_names,
     resolve_preset,
 )
@@ -236,10 +238,15 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
         resolve_preset("hdfs_wuyifan18_deeplog_preprocessed")
         is hdfs_wuyifan18_deeplog_preprocessed
     )
+    assert (
+        resolve_preset("openstack_deeplog_preprocessed")
+        is openstack_deeplog_preprocessed
+    )
     assert set(preset_names()) >= {
         "bgl",
         "hdfs_v1",
         "hdfs_wuyifan18_deeplog_preprocessed",
+        "openstack_deeplog_preprocessed",
     }
 
 
@@ -252,6 +259,15 @@ def test_wuyifan18_deeplog_hdfs_preset_uses_preprocessed_session_source() -> Non
     source = hdfs_wuyifan18_deeplog_preprocessed.source
     assert source is not None
     assert source.raw_logs_relpath == Path("preprocessed/hdfs_events.log")
+
+
+@pytest.mark.allow_no_new_coverage
+def test_openstack_deeplog_preset_uses_preprocessed_session_source() -> None:
+    """OpenStack DeepLog preset should expose the preprocessed event stream."""
+    assert openstack_deeplog_preprocessed.template_parser is SpellTemplateParser
+    source = openstack_deeplog_preprocessed.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/openstack_labelled_raw.log")
 
 
 def test_builtin_presets_reject_unknown_names() -> None:

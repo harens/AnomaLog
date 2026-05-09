@@ -4,12 +4,17 @@ from anomalog.parsers.structured.contracts import StructuredParser
 from anomalog.parsers.structured.deeplog_preprocessed import (
     DelimitedLabelledEventParser,
 )
-from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.parsers import (
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+)
 
 _STRUCTURED_PARSERS: dict[str, type[StructuredParser]] = {
     "bgl": BGLParser,
     "delimited_labelled_event": DelimitedLabelledEventParser,
     "hdfs_v1": HDFSV1Parser,
+    "openstack_deeplog": OpenStackDeepLogParser,
 }
 
 

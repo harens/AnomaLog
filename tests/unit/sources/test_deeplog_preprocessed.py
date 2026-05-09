@@ -8,7 +8,10 @@ from typing_extensions import override
 
 from anomalog.sources import PostProcessedSource
 from anomalog.sources.contracts import DatasetSource
-from anomalog.sources.deeplog_preprocessed import materialise_labelled_session_stream
+from anomalog.sources.deeplog_preprocessed import (
+    materialise_labelled_raw_stream,
+    materialise_labelled_session_stream,
+)
 
 
 def test_post_processed_source_invokes_keyword_only_post_processor(
@@ -78,3 +81,46 @@ class _StubSource(DatasetSource):
     def raw_logs_path(self, *, dataset_name: str, dataset_root: Path) -> Path:
         del dataset_name
         return dataset_root / "preprocessed" / "hdfs_events.log"
+
+
+def test_materialise_labelled_raw_stream_preserves_split_order_and_labels(
+    tmp_path: Path,
+) -> None:
+    """Raw split materialisation should keep raw lines and explicit split labels.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic source.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    for filename in (
+        "openstack_normal1.log",
+        "openstack_normal2.log",
+        "openstack_abnormal.log",
+    ):
+        (source_root / filename).write_text("placeholder\n", encoding="utf-8")
+
+    (source_root / "openstack_normal1.log").write_text(
+        "n1 line 1\nn1 line 2\n",
+        encoding="utf-8",
+    )
+    (source_root / "openstack_normal2.log").write_text("n2 line 1\n", encoding="utf-8")
+    (source_root / "openstack_abnormal.log").write_text("ab line 1\n", encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "openstack_labelled_raw.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    materialise_labelled_raw_stream(
+        source_root,
+        raw_logs_path,
+        (
+            ("openstack_normal1.log", "openstack_train", 0),
+            ("openstack_normal2.log", "openstack_test_normal", 0),
+            ("openstack_abnormal.log", "openstack_test_abnormal", 1),
+        ),
+    )
+    assert raw_logs_path.read_text(encoding="utf-8") == (
+        "openstack_train\t0\tn1 line 1\n"
+        "openstack_train\t0\tn1 line 2\n"
+        "openstack_test_normal\t0\tn2 line 1\n"
+        "openstack_test_abnormal\t1\tab line 1\n"
+    )

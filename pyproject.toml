@@ -16,6 +16,7 @@ dependencies = [
     "prefect>=3.6.15",
     "pyarrow>=23.0.0",
     "rich>=14.2.0",
+    "spellpy>=0.0.9",
 ]
 
 [project.urls]

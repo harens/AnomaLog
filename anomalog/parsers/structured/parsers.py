@@ -1,4 +1,4 @@
-"""Concrete StructuredParser implementations for HDFS and BGL log formats."""
+"""Concrete StructuredParser implementations for built-in log formats."""
 
 import re
 from dataclasses import dataclass
@@ -244,3 +244,111 @@ class BGLParser(StructuredParser):
             untemplated_message_text=untemplated,
             anomalous=anomalous,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenStackDeepLogParser(StructuredParser):
+    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
+
+    Input rows are expected in the derived-source format:
+    `<split_name>\\t<label>\\t<raw_openstack_line>`.
+    The parser maps each row into the canonical structured schema and uses a
+    split-scoped one-minute bucket as the `entity_id`, matching the paper's
+    OpenStack minute sessioning workflow.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "openstack_deeplog"
+
+    _ROW_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<split>[^\t]+)\t(?P<label>[01])\t(?P<raw>.*)$",
+    )
+    _OPENSTACK_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"""
+        ^\s*
+        (?P<logrecord>\S+)\s+
+        (?P<date>\d{4}-\d{2}-\d{2})\s+
+        (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
+        (?P<pid>\S+)\s+
+        (?P<level>[A-Z]+)\s+
+        (?P<component>\S+)\s+
+        \[(?P<addr>[^\]]*)\]\s+
+        (?P<content>.*?)
+        \s*$
+        """,
+        re.VERBOSE,
+    )
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse one labelled OpenStack row.
+
+        Args:
+            raw_line (str): Labelled row from the derived raw stream.
+
+        Returns:
+            BaseStructuredLine | None: Parsed row or `None` when malformed.
+        """
+        s = raw_line.rstrip("\n")
+        logger = get_logger()
+
+        row_match = self._ROW_RE.match(s)
+        if row_match is None:
+            logger.warning("Cannot parse OpenStack labelled row: %r", s)
+            return None
+
+        split_name = row_match.group("split")
+        raw_payload = row_match.group("raw")
+        label = int(row_match.group("label"))
+
+        match = self._OPENSTACK_RE.match(raw_payload)
+        if match is None:
+            logger.warning("Cannot parse OpenStack payload row: %r", raw_payload)
+            return None
+
+        data = match.groupdict()
+        ts_ms = _openstack_datetime_to_unix_ms(data["date"], data["time"])
+        if ts_ms is None:
+            logger.warning(
+                "Failed to parse OpenStack timestamp date=%r time=%r row=%r",
+                data["date"],
+                data["time"],
+                raw_payload,
+            )
+            return None
+        dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+        minute_bucket = dt.strftime("%Y-%m-%d %H:%M")
+        entity_id = f"{split_name}:{minute_bucket}"
+
+        return BaseStructuredLine(
+            timestamp_unix_ms=ts_ms,
+            entity_id=entity_id,
+            untemplated_message_text=data["content"].strip(),
+            anomalous=label,
+        )
+
+
+def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
+    """Convert OpenStack date/time fragments to epoch milliseconds.
+
+    Args:
+        date_s (str): Date fragment in `YYYY-MM-DD`.
+        time_s (str): Time fragment with optional fractional seconds.
+
+    Returns:
+        int | None: Unix epoch milliseconds, or `None` when parsing fails.
+    """
+    value = f"{date_s} {time_s}"
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        pass
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        pass
+    return None
