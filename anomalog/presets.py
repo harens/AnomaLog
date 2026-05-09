@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 from anomalog.dataset import DatasetSpec
 from anomalog.labels import CSVReader
 from anomalog.parsers import BGLParser, HDFSV1Parser
-from anomalog.sources import RemoteZipSource
+from anomalog.parsers.structured import DelimitedLabelledEventParser
+from anomalog.parsers.template import IdentityTemplateParser
+from anomalog.sources import PostProcessedSource, RemoteZipSource
+from anomalog.sources.deeplog_preprocessed import materialise_labelled_session_stream
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling.
@@ -49,9 +53,32 @@ bgl = (
     .parse_with(BGLParser())
 )
 
+hdfs_wuyifan18_deeplog_preprocessed = (
+    DatasetSpec("HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+            ),
+            post_process=partial(
+                materialise_labelled_session_stream,
+                split_files=(
+                    ("hdfs_train", 0),
+                    ("hdfs_test_normal", 0),
+                    ("hdfs_test_abnormal", 1),
+                ),
+            ),
+            raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
+        ),
+    )
+    .parse_with(DelimitedLabelledEventParser())
+    .template_with(IdentityTemplateParser)
+)
+
 _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
     "hdfs_v1": hdfs_v1,
+    "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
 }
 
 

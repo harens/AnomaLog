@@ -48,14 +48,14 @@ class RemoteZipSource(DatasetSource):
     Attributes:
         name (ClassVar[str]): Registry/config name for the source.
         url (str): Absolute HTTP(S) URL of the dataset archive.
-        md5_checksum (str): Expected checksum for the downloaded archive.
+        md5_checksum (str | None): Optional checksum for the downloaded archive.
         raw_logs_relpath (Path | None): Optional raw-log path relative to the
             extracted dataset root.
     """
 
     name: ClassVar[str] = "remote_zip"
     url: str
-    md5_checksum: str
+    md5_checksum: str | None = None
     raw_logs_relpath: Path | None = None
 
     @staticmethod
@@ -122,6 +122,26 @@ class RemoteZipSource(DatasetSource):
             zip_path (Path): Local temporary path for the downloaded zip archive.
             progress_factory (Callable[[], Progress]): Factory for the download
                 progress bar implementation.
+        """
+        logger = get_run_logger()
+        dataset_name = zip_path.stem
+        logger.info("Starting download of %s dataset from %s", dataset_name, self.url)
+
+        self._validate_remote_url(self.url)
+        self._download_zip(zip_path, progress_factory)
+        self._finalise_download(zip_path)
+
+    def _download_zip(
+        self,
+        zip_path: Path,
+        progress_factory: Callable[[], Progress],
+    ) -> None:
+        """Download the archive and clean up partial files on failure.
+
+        Args:
+            zip_path (Path): Local temporary path for the downloaded zip archive.
+            progress_factory (Callable[[], Progress]): Factory for the download
+                progress bar implementation.
 
         Raises:
             HTTPError: If the download fails with an HTTP error.
@@ -129,10 +149,7 @@ class RemoteZipSource(DatasetSource):
         """
         logger = get_run_logger()
         dataset_name = zip_path.stem
-        logger.info("Starting download of %s dataset from %s", dataset_name, self.url)
-
         state = _DownloadProgress()
-        self._validate_remote_url(self.url)
 
         try:
             with progress_factory() as pbar:
@@ -160,7 +177,11 @@ class RemoteZipSource(DatasetSource):
                         pbar.update(state.task_id, advance=advance)
                         state.last_downloaded = downloaded
 
-                urlretrieve(self.url, zip_path, reporthook=show_progress)  # noqa: S310 - Validation is done in _validate_remote_url
+                urlretrieve(  # noqa: S310 - Validation is done in _validate_remote_url
+                    self.url,
+                    zip_path,
+                    reporthook=show_progress,
+                )
 
         except HTTPError as exc:
             if exc.code == HTTPStatus.SERVICE_UNAVAILABLE:
@@ -187,7 +208,15 @@ class RemoteZipSource(DatasetSource):
                 zip_path.unlink()  # remove partial file
             raise
 
-        verify_md5(zip_path, self.md5_checksum)
+    def _finalise_download(self, zip_path: Path) -> None:
+        """Verify, extract, and remove a successfully downloaded archive.
+
+        Args:
+            zip_path (Path): Local path of the successfully downloaded archive.
+        """
+        if self.md5_checksum is not None:
+            verify_md5(zip_path, self.md5_checksum)
         extract_zip(zip_path, zip_path.with_suffix(""))
+        logger = get_run_logger()
         logger.info("Removing zip file %s", zip_path)
         zip_path.unlink()

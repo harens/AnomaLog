@@ -1,0 +1,4 @@
+name = "hdfs_wuyifan18_deepcase"
+dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"
+model = "deepcase_paper"
+description = "DeepCASE HDFS reproduction on the wuyifan18 preprocessed session files with the exact hdfs_train / hdfs_test file boundary."

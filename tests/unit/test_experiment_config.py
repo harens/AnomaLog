@@ -1,10 +1,15 @@
 # ruff: noqa: PLR2004
 """Tests for experiment config loading and validation."""
 
+import zipfile
 from pathlib import Path
 
 import pytest
 
+from anomalog.parsers.template import IdentityTemplateParser
+from anomalog.sources.deeplog_preprocessed import (
+    materialise_labelled_session_stream,
+)
 from experiments import ConfigError
 from experiments.audit import (
     validate_deepcase_bgl_extension_config,
@@ -42,9 +47,9 @@ def _write_config_tree(
     sweeps_dir = experiments_root / "configs" / "sweeps"
     datasets_dir = experiments_root / "configs" / "datasets"
     models_dir = experiments_root / "configs" / "models"
-    sweeps_dir.mkdir(parents=True)
-    datasets_dir.mkdir(parents=True)
-    models_dir.mkdir(parents=True)
+    sweeps_dir.mkdir(parents=True, exist_ok=True)
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_name, dataset_body = dataset
     model_name, model_body = model
@@ -67,6 +72,56 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
     bundles = load_experiment_bundles(sweep_path)
     assert len(bundles) == 1
     return bundles[0]
+
+
+def _write_preprocessed_hdfs_archive(
+    tmp_path: Path,
+    *,
+    train_text: str,
+    normal_text: str,
+    abnormal_text: str,
+) -> tuple[Path, Path, int]:
+    """Create a tiny archive containing the already preprocessed HDFS stream.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the archive fixture.
+        train_text (str): Raw session lines written to `hdfs_train`.
+        normal_text (str): Raw session lines written to `hdfs_test_normal`.
+        abnormal_text (str): Raw session lines written to `hdfs_test_abnormal`.
+
+    Returns:
+        tuple[Path, Path, int]: Source root, synthetic archive, and raw-entry
+            count contributed by `hdfs_train`.
+    """
+    source_root = tmp_path / "hdfs_preprocessed_source"
+    source_root.mkdir()
+    (source_root / "hdfs_train").write_text(train_text, encoding="utf-8")
+    (source_root / "hdfs_test_normal").write_text(normal_text, encoding="utf-8")
+    (source_root / "hdfs_test_abnormal").write_text(
+        abnormal_text,
+        encoding="utf-8",
+    )
+
+    raw_logs_path = tmp_path / "preprocessed" / "hdfs_events.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    materialise_labelled_session_stream(
+        source_root=source_root,
+        raw_logs_path=raw_logs_path,
+        split_files=(
+            ("hdfs_train", 0),
+            ("hdfs_test_normal", 0),
+            ("hdfs_test_abnormal", 1),
+        ),
+    )
+
+    archive_path = tmp_path / "hdfs_preprocessed.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(raw_logs_path, arcname="preprocessed/hdfs_events.log")
+
+    train_entry_count = sum(
+        len(line.split()) for line in train_text.splitlines() if line
+    )
+    return source_root, archive_path, train_entry_count
 
 
 @pytest.mark.allow_no_new_coverage
@@ -686,6 +741,242 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     assert hdfs_bundle.model.top_g == 9
     assert hdfs_bundle.model.num_layers == 2
     assert hdfs_bundle.model.hidden_size == 64
+
+
+def test_wuyifan18_deeplog_preprocessed_config_uses_exact_raw_entry_boundary() -> None:
+    """The new DeepLog sweep should pin the exact file boundary."""
+    repo_root = Path(__file__).resolve().parents[2]
+    dataset_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs_wuyifan18_preprocessed_exact_boundary.toml"
+    )
+    deeplog_sweep_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "sweeps"
+        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
+    )
+    deepcase_sweep_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "sweeps"
+        / "hdfs_wuyifan18_deepcase.toml"
+    )
+
+    assert dataset_path.read_text(encoding="utf-8") == (
+        'name = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
+        'dataset_name = "HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED"\n'
+        'preset = "hdfs_wuyifan18_deeplog_preprocessed"\n'
+        'template_parser = "identity"\n'
+        'description = "DeepLog HDFS reproduction config using the wuyifan18 '
+        "preprocessed session files and the exact hdfs_train / hdfs_test file "
+        'boundary."\n'
+        "\n[sequence]\n"
+        'grouping = "entity"\n'
+        "train_fraction = 1.0\n"
+        "test_fraction = 0.0\n"
+        "\n[sequence.split]\n"
+        'mode = "raw_entry_prefix_count"\n'
+        "train_entry_count = 4855\n"
+        'application_order = "before_grouping"\n'
+        'straddling_group_policy = "split_partial_sequences"\n'
+        "\n[cache_paths]\n"
+        'data_root = "data/hdfs_wuyifan18_deeplog_preprocessed"\n'
+        'cache_root = ".cache/hdfs_wuyifan18_deeplog_preprocessed"\n'
+    )
+    assert deeplog_sweep_path.read_text(encoding="utf-8") == (
+        'name = "hdfs_wuyifan18_deeplog_preprocessed"\n'
+        'dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
+        'model = "deeplog_hdfs_paper_key_only"\n'
+        'description = "DeepLog HDFS reproduction on the wuyifan18 '
+        "preprocessed session files with the exact hdfs_train / hdfs_test "
+        'file boundary."\n'
+    )
+    assert deepcase_sweep_path.read_text(encoding="utf-8") == (
+        'name = "hdfs_wuyifan18_deepcase"\n'
+        'dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
+        'model = "deepcase_paper"\n'
+        'description = "DeepCASE HDFS reproduction on the wuyifan18 '
+        "preprocessed session files with the exact hdfs_train / hdfs_test "
+        'file boundary."\n'
+    )
+
+    bundle = load_experiment_bundles(
+        deeplog_sweep_path,
+    )[0]
+
+    assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
+    assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
+    assert bundle.dataset.template_parser == "identity"
+    assert bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
+    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+    assert isinstance(bundle.dataset.sequence.split, RawEntryPrefixCountSplitConfig)
+    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    assert bundle.dataset.sequence.split.train_entry_count == 4855
+    assert bundle.dataset.sequence.split.straddling_group_policy.value == (
+        "split_partial_sequences"
+    )
+    assert bundle.dataset.sequence.train_on_normal_entities_only is False
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.model.history_size == 10
+    assert bundle.model.top_g == 9
+    assert bundle.model.num_layers == 2
+    assert bundle.model.hidden_size == 64
+    spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
+    assert spec.template_parser is IdentityTemplateParser
+
+
+def test_wuyifan18_deepcase_preprocessed_config_uses_exact_raw_entry_boundary() -> None:
+    """The new DeepCASE sweep should reuse the same exact-boundary dataset."""
+    repo_root = Path(__file__).resolve().parents[2]
+    deepcase_sweep_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "sweeps"
+        / "hdfs_wuyifan18_deepcase.toml"
+    )
+
+    bundle = load_experiment_bundles(
+        deepcase_sweep_path,
+    )[0]
+
+    assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
+    assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
+    assert bundle.dataset.template_parser == "identity"
+    assert isinstance(bundle.model, DeepCaseModelConfig)
+    assert bundle.model.context_length == 10
+    assert bundle.model.timeout_seconds == 86_400
+    assert bundle.model.hidden_size == 128
+
+    spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
+    assert spec.template_parser is IdentityTemplateParser
+
+
+def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
+    tmp_path: Path,
+) -> None:
+    """Raw-entry split settings should leave the file-level boundary unchanged.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic config tree.
+    """
+    train_text = "5 5 5 22 11 9 11 9 11 9 26 26 26 23 23 23 21 21 21\n1 2 3\n"
+    normal_text = "4 4 4\n"
+    abnormal_text = "6\n"
+    _source_root, archive_path, train_entry_count = _write_preprocessed_hdfs_archive(
+        tmp_path,
+        train_text=train_text,
+        normal_text=normal_text,
+        abnormal_text=abnormal_text,
+    )
+
+    def load_split_sequences(
+        *,
+        dataset_name: str,
+        train_fraction: float,
+        test_fraction: float,
+    ) -> list[tuple[str, str, int, list[str]]]:
+        sweep_path = _write_config_tree(
+            tmp_path,
+            sweep_name=f"{dataset_name}_sweep",
+            dataset=(
+                dataset_name,
+                (
+                    f'name = "{dataset_name}"\n'
+                    'dataset_name = "HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED"\n'
+                    'structured_parser = "delimited_labelled_event"\n'
+                    'template_parser = "identity"\n'
+                    "\n[source]\n"
+                    'type = "local_zip"\n'
+                    f'zip_path = "{archive_path.as_posix()}"\n'
+                    'raw_logs_relpath = "preprocessed/hdfs_events.log"\n'
+                    "\n[sequence]\n"
+                    'grouping = "entity"\n'
+                    f"train_fraction = {train_fraction}\n"
+                    f"test_fraction = {test_fraction}\n"
+                    "\n[sequence.split]\n"
+                    'mode = "raw_entry_prefix_count"\n'
+                    f"train_entry_count = {train_entry_count}\n"
+                    'application_order = "before_grouping"\n'
+                    'straddling_group_policy = "split_partial_sequences"\n'
+                    "\n[cache_paths]\n"
+                    'data_root = "data/hdfs_preprocessed"\n'
+                    'cache_root = ".cache/hdfs_preprocessed"\n'
+                ),
+            ),
+            model=(
+                "template_frequency_default",
+                (
+                    'name = "template_frequency_default"\n'
+                    'detector = "template_frequency"\n'
+                ),
+            ),
+        )
+        bundle = _load_one_bundle(sweep_path)
+        spec = build_dataset_spec(bundle.dataset, repo_root=tmp_path)
+        sequences = list(bundle.dataset.sequence.apply(spec.build()))
+        return [
+            (
+                sequence.entity_ids[0],
+                sequence.split_label.value,
+                sequence.label,
+                sequence.templates,
+            )
+            for sequence in sequences
+        ]
+
+    expected = [
+        (
+            "hdfs_train:0",
+            "train",
+            0,
+            [
+                "5",
+                "5",
+                "5",
+                "22",
+                "11",
+                "9",
+                "11",
+                "9",
+                "11",
+                "9",
+                "26",
+                "26",
+                "26",
+                "23",
+                "23",
+                "23",
+                "21",
+                "21",
+                "21",
+            ],
+        ),
+        ("hdfs_train:1", "train", 0, ["1", "2", "3"]),
+        ("hdfs_test_normal:0", "test", 0, ["4", "4", "4"]),
+        ("hdfs_test_abnormal:0", "test", 1, ["6"]),
+    ]
+    split_signatures = [
+        load_split_sequences(
+            dataset_name="hdfs_wuyifan18_deeplog_preprocessed_local_low",
+            train_fraction=0.2,
+            test_fraction=0.8,
+        ),
+        load_split_sequences(
+            dataset_name="hdfs_wuyifan18_deeplog_preprocessed_local_high",
+            train_fraction=1.0,
+            test_fraction=0.0,
+        ),
+    ]
+    assert split_signatures[0] == expected
+    assert split_signatures[1] == expected
 
 
 @pytest.mark.allow_no_new_coverage

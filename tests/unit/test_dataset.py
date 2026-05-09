@@ -19,8 +19,19 @@ from anomalog.parsers.structured import (
     StructuredSink,
 )
 from anomalog.parsers.structured.contracts import EntityLabelCounts, StructuredLine
-from anomalog.parsers.template import ExtractedParameters, LogTemplate, TemplateParser
-from anomalog.presets import bgl, hdfs_v1, preset_names, resolve_preset
+from anomalog.parsers.template import (
+    ExtractedParameters,
+    IdentityTemplateParser,
+    LogTemplate,
+    TemplateParser,
+)
+from anomalog.presets import (
+    bgl,
+    hdfs_v1,
+    hdfs_wuyifan18_deeplog_preprocessed,
+    preset_names,
+    resolve_preset,
+)
 from anomalog.sources import DatasetSource
 from anomalog.sources.local import LocalZipSource
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
@@ -221,7 +232,26 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
     """Built-in presets should be available through the public registry."""
     assert resolve_preset("bgl") is bgl
     assert resolve_preset("hdfs_v1") is hdfs_v1
-    assert set(preset_names()) >= {"bgl", "hdfs_v1"}
+    assert (
+        resolve_preset("hdfs_wuyifan18_deeplog_preprocessed")
+        is hdfs_wuyifan18_deeplog_preprocessed
+    )
+    assert set(preset_names()) >= {
+        "bgl",
+        "hdfs_v1",
+        "hdfs_wuyifan18_deeplog_preprocessed",
+    }
+
+
+# Protects the registry contract for the new preset; the nearby preset lookup
+# branch is already covered by the existing built-in preset registry test.
+@pytest.mark.allow_no_new_coverage
+def test_wuyifan18_deeplog_hdfs_preset_uses_preprocessed_session_source() -> None:
+    """The new preset should stay pinned to the preprocessed DeepLog files."""
+    assert hdfs_wuyifan18_deeplog_preprocessed.template_parser is IdentityTemplateParser
+    source = hdfs_wuyifan18_deeplog_preprocessed.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/hdfs_events.log")
 
 
 def test_builtin_presets_reject_unknown_names() -> None:

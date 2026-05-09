@@ -1,6 +1,7 @@
 """Input/output helpers for progress reporting and dataset integrity checks."""
 
 import hashlib
+import logging
 import sys
 import zipfile
 from collections.abc import Callable
@@ -215,7 +216,7 @@ def extract_zip(zip_path: Path, dst_dir: Path) -> None:
     Raises:
         zipfile.BadZipFile: If the archive fails the integrity check.
     """
-    logger = get_run_logger()
+    logger = logging.getLogger(__name__)
     logger.info("Extracting %s to %s", zip_path, dst_dir)
 
     with zipfile.ZipFile(zip_path) as z:
