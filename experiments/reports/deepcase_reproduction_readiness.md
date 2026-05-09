@@ -15,10 +15,10 @@ Paper target:
 
 Current AnomaLog equivalent:
 
-- `metrics.next_event_prediction.classification_top1_weighted`
+- `metrics.metric_blocks.next_event_prediction.classification_top1_weighted`
 - The block mirrors the weighted top-1 multi-class next-event metrics and is
   the right comparison target for Table IV.
-- The run also records `metrics.next_event_prediction.totals`,
+- The run also records `metrics.metric_blocks.next_event_prediction.totals`,
   `exclusions`, and `vocabulary_policy` so the sample population is auditable.
 
 Direct comparability:
@@ -98,7 +98,7 @@ Current AnomaLog equivalent:
 
 - Entity-grouped DeepCASE with event-level labels when available.
 - `metrics.prediction_diagnostics.event_decision_metrics`
-- `metrics.next_event_prediction`
+- `metrics.metric_blocks.next_event_prediction`
 - `metrics.manual_workload_reduction`
 - `metrics.semi_automatic_workload_reduction`
 

@@ -344,26 +344,18 @@ def build_run_metrics_report(
         model_summary (ModelRunSummary): Model-side summary for the run.
 
     Returns:
-        dict[str, object]: Serialised task-aware metric report with metadata,
-            metric blocks, and the selected primary metrics.
+        dict[str, object]: Serialised task-aware metric report with metadata
+            and canonical metric blocks.
     """
     metric_blocks = _build_metric_blocks(
         bundle=bundle,
         model_summary=model_summary,
     )
-    evaluation_unit = _evaluation_unit_for_dataset(bundle.dataset)
-    primary_scope = select_primary_metric_scope(
-        metric_blocks,
-        requested_primary_scope=bundle.model.primary_metric_scope,
-        evaluation_unit=evaluation_unit,
-    )
-    primary_block = None if primary_scope is None else metric_blocks[primary_scope]
     metadata = build_metric_metadata(
         bundle=bundle,
         sequences=sequences,
         model_summary=model_summary,
     )
-    next_event_prediction = metric_blocks.get(MetricScope.NEXT_EVENT_PREDICTION)
     run_metrics = model_summary.metrics
     return {
         **metadata,
@@ -374,25 +366,11 @@ def build_run_metrics_report(
         "train_label_counts": run_metrics.get("train_label_counts"),
         "test_label_counts": run_metrics.get("test_label_counts"),
         "ignored_label_counts": run_metrics.get("ignored_label_counts"),
-        "tp": run_metrics.get("tp"),
-        "tn": run_metrics.get("tn"),
-        "fp": run_metrics.get("fp"),
-        "fn": run_metrics.get("fn"),
         "mean_test_score": run_metrics.get("mean_test_score"),
         "metric_blocks": {
             scope.value: msgspec.to_builtins(block)
             for scope, block in metric_blocks.items()
         },
-        **(
-            {
-                "next_event_prediction": msgspec.to_builtins(next_event_prediction),
-            }
-            if next_event_prediction is not None
-            else {}
-        ),
-        "primary_metrics": (
-            None if primary_block is None else msgspec.to_builtins(primary_block)
-        ),
     }
 
 

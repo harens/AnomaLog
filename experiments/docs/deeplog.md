@@ -75,11 +75,11 @@ extensions:
 - Scoped metrics:
   `metrics.json` now carries task-aware blocks such as
   `event_level_detection`, `sequence_level_detection`, and
-  `next_event_prediction` plus top-level metadata for
-  `primary_metric_scope`, `evaluation_unit`, and the active split policy.
-  DeepLog BGL stream runs should foreground the event-level block and treat
-  the sequence-level block as invalid or diagnostic-only when the sequence
-  labels are single-class.
+  `next_event_prediction` inside the canonical `metric_blocks` object plus
+  top-level metadata for `primary_metric_scope`, `evaluation_unit`, and the
+  active split policy. DeepLog BGL stream runs should foreground the
+  event-level block and treat the sequence-level block as invalid or
+  diagnostic-only when the sequence labels are single-class.
 - Missing or non-numeric parameter values:
   positions not admitted by the strict schema are never modeled. For admitted
   positions, missing values are padded with `0.0` internally but masked out of

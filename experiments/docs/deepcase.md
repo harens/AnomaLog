@@ -65,14 +65,15 @@ underlying automatic decisions separately from abstentions.
 `metrics.json` now reports scoped blocks with explicit
 `metric_scope`, `prediction_unit`, `label_unit`, and `status` fields. The
 shared sequence-level wrapper remains useful when it is the configured primary
-scope, but it is no longer treated as the universal headline metric.
-DeepCASE runs should foreground the configured `primary_metric_scope` and keep
-sequence-level results separate from the event-level abstention diagnostics.
+scope, but it is no longer treated as the universal headline metric. The
+canonical payload lives in `metric_blocks`. DeepCASE runs should foreground
+the configured `primary_metric_scope` and keep sequence-level results separate
+from the event-level abstention diagnostics.
 
-The paper-comparison block for HDFS Table IV uses
-`next_event_prediction.classification_top1_weighted`. It mirrors the weighted
-multi-class next-event metrics and is the block that should be compared to the
-paper's prediction table.
+The paper-comparison block for HDFS Table IV lives at
+`metric_blocks.next_event_prediction.classification_top1_weighted`. It mirrors
+the weighted multi-class next-event metrics and is the block that should be
+compared to the paper's prediction table.
 
 Event-level automatic-decision metrics evaluate DeepCASE at its
 contextual-sample level, where:

@@ -100,11 +100,13 @@ def _assert_deepcase_metrics(
     assert "abstained_normal_label_count" not in metrics
     assert "parent_sequence_fallback_count" not in metrics
     assert "random_seed" not in metrics
+    assert "next_event_prediction" not in metrics
     assert metrics["evaluation_unit"] == "sequence"
     assert metrics["primary_metric_scope"] == "sequence_level_detection"
     assert metrics["prediction_unit"] == "sequence"
     assert metrics["label_unit"] == "sequence"
-    assert metrics["primary_metrics"]["status"] == "valid"
+    assert "primary_metrics" not in metrics
+    assert "legacy_metrics" not in metrics
     metric_blocks = {str(key): value for key, value in metrics["metric_blocks"].items()}
     sequence_level_detection = _object_dict(
         metric_blocks["sequence_level_detection"],
@@ -307,14 +309,15 @@ def test_run_experiment_with_deepcase_writes_event_findings(
     )
     predictions = _read_predictions(run_dir)
     run_log = (run_dir / "run.log").read_text(encoding="utf-8")
+    metric_blocks = {str(key): value for key, value in metrics["metric_blocks"].items()}
 
     model_manifest = manifest["model_manifest"]
     prediction_diagnostics = model_manifest["prediction_diagnostics"]
-    next_event_prediction = metrics["next_event_prediction"]
+    next_event_prediction = _object_dict(metric_blocks["next_event_prediction"])
 
     assert isinstance(model_manifest, dict)
     assert isinstance(prediction_diagnostics, dict)
-    assert isinstance(next_event_prediction, dict)
+    assert "next_event_prediction" not in metrics
     _assert_deepcase_outputs(
         metrics=metrics,
         manifest=manifest,
@@ -322,6 +325,7 @@ def test_run_experiment_with_deepcase_writes_event_findings(
         prediction_diagnostics=prediction_diagnostics,
         predictions=predictions,
     )
+    assert next_event_prediction["status"] == "valid"
     assert manifest["sequence_config"]["grouping"] == "entity"
     assert "Fitting deepcase detector" in run_log
     assert "DeepCase resolved torch device: cpu" in run_log

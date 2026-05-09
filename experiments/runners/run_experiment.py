@@ -291,7 +291,11 @@ def _log_primary_metric_report(
     """
     primary_metric_scope = report.get("primary_metric_scope")
     logger.info("Primary metric scope: %s", primary_metric_scope)
-    primary_metrics = report.get("primary_metrics")
+    metric_blocks = report.get("metric_blocks")
+    if isinstance(metric_blocks, dict) and isinstance(primary_metric_scope, str):
+        primary_metrics = metric_blocks.get(primary_metric_scope)
+    else:
+        primary_metrics = None
     if isinstance(primary_metrics, dict):
         primary_metrics_mapping: dict[str, Any] = primary_metrics
         status = primary_metrics_mapping.get("status")

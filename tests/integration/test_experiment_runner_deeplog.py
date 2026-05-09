@@ -117,11 +117,17 @@ def _assert_deeplog_metrics(metrics: dict[str, Any]) -> None:
 def _assert_deeplog_metric_metadata(metrics: dict[str, Any]) -> None:
     assert "accuracy" not in metrics
     assert "f1" not in metrics
+    assert "tp" not in metrics
+    assert "tn" not in metrics
+    assert "fp" not in metrics
+    assert "fn" not in metrics
+    assert "next_event_prediction" not in metrics
     assert metrics["evaluation_unit"] == "continuous_event_stream"
     assert metrics["primary_metric_scope"] == "event_level_detection"
     assert metrics["prediction_unit"] == "event"
     assert metrics["label_unit"] == "event"
-    assert metrics["primary_metrics"]["status"] == "valid"
+    assert "primary_metrics" not in metrics
+    assert "legacy_metrics" not in metrics
 
 
 def _assert_deeplog_sequence_counts(metrics: dict[str, Any]) -> None:

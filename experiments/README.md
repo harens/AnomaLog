@@ -200,9 +200,9 @@ Each concrete run writes a deterministic directory under `experiments/results/<c
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
 - `metrics.json`: task-aware detector metrics, including the selected
-  `primary_metric_scope`, scoped metric blocks, and run-level evaluation
-  metadata such as `evaluation_unit`, `prediction_unit`, `label_unit`, and
-  split policy details
+  `primary_metric_scope`, canonical scoped metric blocks, and run-level
+  evaluation metadata such as `evaluation_unit`, `prediction_unit`,
+  `label_unit`, and split policy details at the top level.
 - `predictions.jsonl`: optional test-sequence outputs, including detector
   scores and any emitted key phrases when `--write-predictions` is supplied
 - `environment.json`: Python, platform, package, and git metadata
