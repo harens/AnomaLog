@@ -19,8 +19,8 @@ from experiments.config_loader import (
 )
 
 _DEFAULT_DATASETS = (
-    "hdfs_v1_entity_supervised:10",
-    "bgl_entity:3",
+    "hdfs_v1_entity_normal_only:10",
+    "bgl_entity_normal_only:3",
 )
 
 if TYPE_CHECKING:

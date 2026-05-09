@@ -34,9 +34,13 @@ truth.
 
 The checked-in sweep set is split by detector family:
 
-- `bgl.toml` and `hdfs_v1.toml` sweep the chronological baseline models
-  (`template_frequency_default` and `naive_bayes_default`) across train
-  fractions `0.01`, `0.1`, and `0.2`
+- `bgl_template_frequency_normal_only.toml` and
+  `hdfs_v1_template_frequency_normal_only.toml` sweep the template-frequency
+  baseline on the normal-only entity datasets across train fractions `0.01`
+  and `0.1`
+- `bgl_naive_bayes_chronological.toml` and
+  `hdfs_v1_naive_bayes_chronological.toml` sweep the Naive Bayes baseline on
+  the chronological entity datasets across train fractions `0.01` and `0.1`
 - `bgl_deeplog.toml` and `hdfs_v1_deeplog.toml` sweep the DeepLog model on the
   normal-only dataset variants
 - `bgl_deepcase.toml` and `hdfs_v1_deepcase.toml` sweep the DeepCASE model on
@@ -118,13 +122,17 @@ From the repository root:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --config experiments/configs/sweeps/bgl.toml
+  --config experiments/configs/sweeps/bgl_template_frequency_normal_only.toml
 ```
 
 Add `--force` to replace the deterministic output directories for the same
 concrete sweep variants.
 Add `--write-predictions` if you want each run to persist `predictions.jsonl`
 alongside the other result artefacts.
+
+The checked-in Slurm wrappers live under `slurm/` and are generated from
+`slurm/jobs.toml`. They keep a 1:1 mapping with the sweep configs and can be
+refreshed with `uv run python -m experiments.slurm_scripts`.
 
 To audit dataset/split readiness for DeepLog paper reproduction:
 
@@ -218,6 +226,9 @@ raw-entry split fixed and vary only values that should not alter the file
 boundary if you want a regression test against accidental split drift. Add
 `max_workers = 2` or another positive integer only when the default `"auto"`
 parallelism is too aggressive for a particular backend or machine.
+
+If the sweep needs a Slurm submission wrapper, add a matching entry to
+`slurm/jobs.toml` and regenerate the checked-in `.sbatch` files.
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.
 

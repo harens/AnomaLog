@@ -1,0 +1,8 @@
+name = "hdfs_v1_template_frequency_normal_only"
+dataset = "hdfs_v1_entity_normal_only"
+model = "template_frequency_default"
+description = "HDFS v1 template-frequency baseline at 1% and 10% normal-only train fractions."
+
+[[axes]]
+path = "dataset.sequence.train_fraction"
+values = [0.01, 0.1]

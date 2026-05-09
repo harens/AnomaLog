@@ -139,11 +139,11 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     # cannot contribute line coverage to the configured coverage target.
     sweep_path = _write_config_tree(
         tmp_path,
-        sweep_name="bgl_template_frequency",
+        sweep_name="bgl_template_frequency_normal_only",
         dataset=(
-            "bgl_entity",
+            "bgl_entity_normal_only",
             (
-                'name = "bgl_entity"\n'
+                'name = "bgl_entity_normal_only"\n'
                 'dataset_name = "BGL"\n'
                 'preset = "bgl"\n'
                 "\n[sequence]\n"
@@ -160,14 +160,14 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     )
     bundle = _load_one_bundle(sweep_path)
 
-    assert bundle.sweep.name == "bgl_template_frequency"
-    assert bundle.concrete_name == "bgl_template_frequency"
-    assert bundle.dataset.name == "bgl_entity"
+    assert bundle.sweep.name == "bgl_template_frequency_normal_only"
+    assert bundle.concrete_name == "bgl_template_frequency_normal_only"
+    assert bundle.dataset.name == "bgl_entity_normal_only"
     assert bundle.model.name == "template_frequency_default"
     assert bundle.dataset.preset == "bgl"
     assert bundle.dataset.cache_paths is None
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert bundle.dataset_path.name == "bgl_entity.toml"
+    assert bundle.dataset_path.name == "bgl_entity_normal_only.toml"
     assert bundle.model_path.name == "template_frequency_default.toml"
 
 
@@ -184,11 +184,11 @@ def test_load_experiment_bundles_support_naive_bayes_model_configs(
     # `anomalog` coverage target.
     sweep_path = _write_config_tree(
         tmp_path,
-        sweep_name="hdfs_v1_naive_bayes",
+        sweep_name="hdfs_v1_naive_bayes_chronological",
         dataset=(
-            "hdfs_v1_entity_supervised",
+            "hdfs_v1_entity_chronological",
             (
-                'name = "hdfs_v1_entity_supervised"\n'
+                'name = "hdfs_v1_entity_chronological"\n'
                 'dataset_name = "HDFS_v1"\n'
                 'preset = "hdfs_v1"\n'
             ),
@@ -200,8 +200,8 @@ def test_load_experiment_bundles_support_naive_bayes_model_configs(
     )
     bundle = _load_one_bundle(sweep_path)
 
-    assert bundle.sweep.name == "hdfs_v1_naive_bayes"
-    assert bundle.dataset.name == "hdfs_v1_entity_supervised"
+    assert bundle.sweep.name == "hdfs_v1_naive_bayes_chronological"
+    assert bundle.dataset.name == "hdfs_v1_entity_chronological"
     assert bundle.model.name == "naive_bayes_default"
     assert bundle.model.detector == "naive_bayes"
     assert bundle.dataset.preset == "hdfs_v1"
@@ -223,9 +223,9 @@ def test_load_experiment_bundles_support_river_multinomial_nb_model_configs(
         tmp_path,
         sweep_name="bgl_river_multinomial_nb",
         dataset=(
-            "bgl_entity",
+            "bgl_entity_normal_only",
             (
-                'name = "bgl_entity"\n'
+                'name = "bgl_entity_normal_only"\n'
                 'dataset_name = "BGL"\n'
                 'preset = "bgl"\n'
                 "\n[sequence]\n"
@@ -244,7 +244,7 @@ def test_load_experiment_bundles_support_river_multinomial_nb_model_configs(
     bundle = _load_one_bundle(sweep_path)
 
     assert bundle.sweep.name == "bgl_river_multinomial_nb"
-    assert bundle.dataset.name == "bgl_entity"
+    assert bundle.dataset.name == "bgl_entity_normal_only"
     assert bundle.model.name == "river_multinomial_nb_default"
     assert bundle.model.detector == "river"
     assert bundle.dataset.preset == "bgl"
@@ -268,8 +268,8 @@ def test_load_experiment_bundles_support_deeplog_model_configs(
         tmp_path,
         sweep_name="bgl_deeplog",
         dataset=(
-            "bgl_entity",
-            'name = "bgl_entity"\ndataset_name = "BGL"\npreset = "bgl"\n',
+            "bgl_entity_normal_only",
+            ('name = "bgl_entity_normal_only"\ndataset_name = "BGL"\npreset = "bgl"\n'),
         ),
         model=(
             "deeplog_default",
@@ -299,14 +299,14 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
         tmp_path,
         sweep_name="bgl_model_matrix",
         dataset=(
-            "bgl_entity",
+            "bgl_entity_normal_only",
             (
-                'name = "bgl_entity"\n'
+                'name = "bgl_entity_normal_only"\n'
                 'dataset_name = "BGL"\n'
                 'preset = "bgl"\n'
                 "\n[sequence]\n"
                 'grouping = "entity"\n'
-                "train_fraction = 0.2\n"
+                "train_fraction = 0.01\n"
                 "test_fraction = 0.5\n"
                 "train_on_normal_entities_only = true\n"
             ),
@@ -319,7 +319,7 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
             '\n[[axes]]\npath = "sweep.model"\n'
             'values = ["template_frequency_default", "deeplog_default"]\n'
             '\n[[axes]]\npath = "dataset.sequence.train_fraction"\n'
-            "values = [0.2, 0.4]\n"
+            "values = [0.01, 0.1]\n"
         ),
     )
     models_dir = sweep_path.parent.parent / "models"
@@ -331,10 +331,10 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
     bundles = load_experiment_bundles(sweep_path)
 
     assert [bundle.concrete_name for bundle in bundles] == [
-        "bgl_template_frequency_train_fraction_0p2",
-        "bgl_template_frequency_train_fraction_0p4",
-        "bgl_deeplog_train_fraction_0p2",
-        "bgl_deeplog_train_fraction_0p4",
+        "bgl_entity_normal_only_template_frequency_train_fraction_0p01",
+        "bgl_entity_normal_only_template_frequency_train_fraction_0p1",
+        "bgl_entity_normal_only_deeplog_train_fraction_0p01",
+        "bgl_entity_normal_only_deeplog_train_fraction_0p1",
     ]
     assert {
         (
@@ -344,11 +344,72 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
         )
         for bundle in bundles
     } == {
-        ("template_frequency_default", 0.2, 0.5),
-        ("template_frequency_default", 0.4, 0.5),
-        ("deeplog_default", 0.2, 0.5),
-        ("deeplog_default", 0.4, 0.5),
+        ("template_frequency_default", 0.01, 0.5),
+        ("template_frequency_default", 0.1, 0.5),
+        ("deeplog_default", 0.01, 0.5),
+        ("deeplog_default", 0.1, 0.5),
     }
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            "experiments/configs/sweeps/bgl_template_frequency_normal_only.toml",
+            "bgl_entity_normal_only",
+            "template_frequency_default",
+            True,
+        ),
+        (
+            "experiments/configs/sweeps/bgl_naive_bayes_chronological.toml",
+            "bgl_entity_chronological",
+            "naive_bayes_default",
+            False,
+        ),
+        (
+            "experiments/configs/sweeps/hdfs_v1_template_frequency_normal_only.toml",
+            "hdfs_v1_entity_normal_only",
+            "template_frequency_default",
+            True,
+        ),
+        (
+            "experiments/configs/sweeps/hdfs_v1_naive_bayes_chronological.toml",
+            "hdfs_v1_entity_chronological",
+            "naive_bayes_default",
+            False,
+        ),
+    ],
+)
+def test_baseline_sweeps_target_the_expected_dataset_and_model_contract(
+    case: tuple[str, str, str, bool],
+) -> None:
+    """Checked-in baseline sweeps should reflect the training contract.
+
+    Args:
+        case (tuple[str, str, str, bool]): Sweep path, dataset name, model name,
+            and expected normal-only training flag.
+
+    Raises:
+        TypeError: If a baseline sweep resolves to a non-entity sequence config.
+    """
+    sweep_relpath, expected_dataset, expected_model, expected_normal_only = case
+    repo_root = Path(__file__).resolve().parents[2]
+    bundles = load_experiment_bundles(repo_root / sweep_relpath)
+
+    assert {bundle.dataset.name for bundle in bundles} == {expected_dataset}
+    assert {bundle.model.name for bundle in bundles} == {expected_model}
+    assert {bundle.dataset.sequence.train_fraction for bundle in bundles} == {
+        0.01,
+        0.1,
+    }
+    for bundle in bundles:
+        if not isinstance(bundle.dataset.sequence, EntitySequenceConfig):
+            msg = "expected an entity sequence configuration"
+            raise TypeError(msg)
+        assert (
+            bundle.dataset.sequence.train_on_normal_entities_only
+            is expected_normal_only
+        )
 
 
 @pytest.mark.allow_no_new_coverage
@@ -364,10 +425,10 @@ def test_load_experiment_bundles_defaults_max_workers_to_auto(
     # `anomalog` coverage target.
     sweep_path = _write_config_tree(
         tmp_path,
-        sweep_name="bgl_template_frequency",
+        sweep_name="bgl_template_frequency_normal_only",
         dataset=(
-            "bgl_entity",
-            'name = "bgl_entity"\ndataset_name = "BGL"\npreset = "bgl"\n',
+            "bgl_entity_normal_only",
+            ('name = "bgl_entity_normal_only"\ndataset_name = "BGL"\npreset = "bgl"\n'),
         ),
         model=(
             "template_frequency_default",
@@ -395,7 +456,7 @@ def test_load_experiment_bundles_reject_missing_model_config(tmp_path: Path) -> 
     sweep_path = sweeps_dir / "missing_model.toml"
     sweep_path.write_text(
         """name = "broken"
-dataset = "bgl_entity"
+dataset = "bgl_entity_normal_only"
 model = "does_not_exist"
 """,
         encoding="utf-8",

@@ -8,3 +8,7 @@ description = "Built-in BGL preset grouped by entity with chronological prefix/s
 grouping = "entity"
 train_fraction = 0.2
 train_on_normal_entities_only = false
+
+[cache_paths]
+data_root = "data/bgl_entity"
+cache_root = ".cache/bgl_entity"

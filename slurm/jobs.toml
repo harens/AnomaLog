@@ -1,0 +1,12 @@
+sweeps = [
+  "experiments/configs/sweeps/bgl_template_frequency_normal_only.toml",
+  "experiments/configs/sweeps/bgl_naive_bayes_chronological.toml",
+  "experiments/configs/sweeps/bgl_deepcase_event_level_extension.toml",
+  "experiments/configs/sweeps/bgl_deeplog_paper_10pct_entry_stream_no_online.toml",
+  "experiments/configs/sweeps/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml",
+  "experiments/configs/sweeps/hdfs_v1_template_frequency_normal_only.toml",
+  "experiments/configs/sweeps/hdfs_v1_naive_bayes_chronological.toml",
+  "experiments/configs/sweeps/hdfs_v1_deepcase.toml",
+  "experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first.toml",
+  "experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml",
+]
