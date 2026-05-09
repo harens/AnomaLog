@@ -139,18 +139,17 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     # cannot contribute line coverage to the configured coverage target.
     sweep_path = _write_config_tree(
         tmp_path,
-        sweep_name="bgl_template_frequency_normal_only",
+        sweep_name="bgl_template_frequency_chronological",
         dataset=(
-            "bgl_entity_normal_only",
+            "bgl_entity_chronological",
             (
-                'name = "bgl_entity_normal_only"\n'
+                'name = "bgl_entity_chronological"\n'
                 'dataset_name = "BGL"\n'
                 'preset = "bgl"\n'
                 "\n[sequence]\n"
                 'grouping = "entity"\n'
                 "train_fraction = 0.8\n"
                 "test_fraction = 0.2\n"
-                "train_on_normal_entities_only = true\n"
             ),
         ),
         model=(
@@ -160,14 +159,14 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     )
     bundle = _load_one_bundle(sweep_path)
 
-    assert bundle.sweep.name == "bgl_template_frequency_normal_only"
-    assert bundle.concrete_name == "bgl_template_frequency_normal_only"
-    assert bundle.dataset.name == "bgl_entity_normal_only"
+    assert bundle.sweep.name == "bgl_template_frequency_chronological"
+    assert bundle.concrete_name == "bgl_template_frequency_chronological"
+    assert bundle.dataset.name == "bgl_entity_chronological"
     assert bundle.model.name == "template_frequency_default"
     assert bundle.dataset.preset == "bgl"
     assert bundle.dataset.cache_paths is None
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert bundle.dataset_path.name == "bgl_entity_normal_only.toml"
+    assert bundle.dataset_path.name == "bgl_entity_chronological.toml"
     assert bundle.model_path.name == "template_frequency_default.toml"
 
 
@@ -299,16 +298,15 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
         tmp_path,
         sweep_name="bgl_model_matrix",
         dataset=(
-            "bgl_entity_normal_only",
+            "bgl_entity_chronological",
             (
-                'name = "bgl_entity_normal_only"\n'
+                'name = "bgl_entity_chronological"\n'
                 'dataset_name = "BGL"\n'
                 'preset = "bgl"\n'
                 "\n[sequence]\n"
                 'grouping = "entity"\n'
                 "train_fraction = 0.01\n"
                 "test_fraction = 0.5\n"
-                "train_on_normal_entities_only = true\n"
             ),
         ),
         model=(
@@ -331,10 +329,10 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
     bundles = load_experiment_bundles(sweep_path)
 
     assert [bundle.concrete_name for bundle in bundles] == [
-        "bgl_entity_normal_only_template_frequency_train_fraction_0p01",
-        "bgl_entity_normal_only_template_frequency_train_fraction_0p1",
-        "bgl_entity_normal_only_deeplog_train_fraction_0p01",
-        "bgl_entity_normal_only_deeplog_train_fraction_0p1",
+        "bgl_entity_chronological_template_frequency_train_fraction_0p01",
+        "bgl_entity_chronological_template_frequency_train_fraction_0p1",
+        "bgl_entity_chronological_deeplog_train_fraction_0p01",
+        "bgl_entity_chronological_deeplog_train_fraction_0p1",
     ]
     assert {
         (
@@ -355,10 +353,10 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
     "case",
     [
         (
-            "experiments/configs/sweeps/bgl_template_frequency_normal_only.toml",
-            "bgl_entity_normal_only",
+            "experiments/configs/sweeps/bgl_template_frequency_chronological.toml",
+            "bgl_entity_chronological",
             "template_frequency_default",
-            True,
+            False,
         ),
         (
             "experiments/configs/sweeps/bgl_naive_bayes_chronological.toml",
@@ -367,10 +365,10 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
             False,
         ),
         (
-            "experiments/configs/sweeps/hdfs_v1_template_frequency_normal_only.toml",
-            "hdfs_v1_entity_normal_only",
+            "experiments/configs/sweeps/hdfs_v1_template_frequency_chronological.toml",
+            "hdfs_v1_entity_chronological",
             "template_frequency_default",
-            True,
+            False,
         ),
         (
             "experiments/configs/sweeps/hdfs_v1_naive_bayes_chronological.toml",
@@ -425,10 +423,18 @@ def test_load_experiment_bundles_defaults_max_workers_to_auto(
     # `anomalog` coverage target.
     sweep_path = _write_config_tree(
         tmp_path,
-        sweep_name="bgl_template_frequency_normal_only",
+        sweep_name="bgl_template_frequency_chronological",
         dataset=(
-            "bgl_entity_normal_only",
-            ('name = "bgl_entity_normal_only"\ndataset_name = "BGL"\npreset = "bgl"\n'),
+            "bgl_entity_chronological",
+            (
+                'name = "bgl_entity_chronological"\n'
+                'dataset_name = "BGL"\n'
+                'preset = "bgl"\n'
+                "\n[sequence]\n"
+                'grouping = "entity"\n'
+                "train_fraction = 0.8\n"
+                "test_fraction = 0.2\n"
+            ),
         ),
         model=(
             "template_frequency_default",

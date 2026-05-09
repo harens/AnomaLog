@@ -34,9 +34,9 @@ truth.
 
 The checked-in sweep set is split by detector family:
 
-- `bgl_template_frequency_normal_only.toml` and
-  `hdfs_v1_template_frequency_normal_only.toml` sweep the template-frequency
-  baseline on the normal-only entity datasets across train fractions `0.01`
+- `bgl_template_frequency_chronological.toml` and
+  `hdfs_v1_template_frequency_chronological.toml` sweep the template-frequency
+  baseline on the chronological entity datasets across train fractions `0.01`
   and `0.1`
 - `bgl_naive_bayes_chronological.toml` and
   `hdfs_v1_naive_bayes_chronological.toml` sweep the Naive Bayes baseline on
@@ -122,7 +122,7 @@ From the repository root:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --config experiments/configs/sweeps/bgl_template_frequency_normal_only.toml
+  --config experiments/configs/sweeps/bgl_template_frequency_chronological.toml
 ```
 
 Add `--force` to replace the deterministic output directories for the same
