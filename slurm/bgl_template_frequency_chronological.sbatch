@@ -11,7 +11,7 @@
 export PATH="${HOME}/.local/bin:${PATH}"
 export RUN_NAME="bgl_template_frequency_chronological"
 
-REPO_ROOT="${SLURM_SUBMIT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"
 export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"

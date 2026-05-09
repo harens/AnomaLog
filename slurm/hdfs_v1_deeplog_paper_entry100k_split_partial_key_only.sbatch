@@ -11,7 +11,7 @@
 export PATH="${HOME}/.local/bin:${PATH}"
 export RUN_NAME="hdfs_v1_deeplog_paper_entry100k_split_partial_key_only"
 
-REPO_ROOT="${SLURM_SUBMIT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"
 export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"

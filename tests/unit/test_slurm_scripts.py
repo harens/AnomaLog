@@ -41,8 +41,8 @@ def test_render_slurm_script_uses_sweep_stem_and_relative_config_path(
     assert "#SBATCH --job-name=example" in rendered.content
     assert 'export RUN_NAME="example"' in rendered.content
     assert (
-        'REPO_ROOT="${SLURM_SUBMIT_DIR:-'
-        '$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"' in rendered.content
+        'REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"'
+        in rendered.content
     )
     assert (
         'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
