@@ -141,7 +141,6 @@ def _append_split(
 
 
 def materialise_labelled_session_stream(
-    *,
     source_root: Path,
     raw_logs_path: Path,
     split_files: SplitFileSpecs,
