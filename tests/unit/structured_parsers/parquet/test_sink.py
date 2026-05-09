@@ -372,6 +372,67 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
     }
 
 
+def test_count_entities_by_label_uses_grouped_rows_when_scanning_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct-entity counts should not depend on a single-column dataset scan.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the dataset reader with a
+            sentinel so this regression test exercises the grouped-row path.
+    """
+    sink = _make_sink(tmp_path)
+
+    def _fail_dataset(_self: ParquetStructuredSink) -> object:
+        msg = "count_entities_by_label should use grouped rows"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(ParquetStructuredSink, "_dataset", _fail_dataset)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "iter_entity_sequences",
+        lambda _self: (
+            lambda: iter(
+                [
+                    (
+                        structured_line(
+                            line_order=0,
+                            timestamp_unix_ms=10,
+                            entity_id="node-b",
+                            untemplated_message_text="b0",
+                            anomalous=0,
+                        ),
+                    ),
+                    (
+                        structured_line(
+                            line_order=1,
+                            timestamp_unix_ms=11,
+                            entity_id="node-a",
+                            untemplated_message_text="a1",
+                            anomalous=0,
+                        ),
+                        structured_line(
+                            line_order=2,
+                            timestamp_unix_ms=12,
+                            entity_id="node-a",
+                            untemplated_message_text="a2",
+                            anomalous=1,
+                        ),
+                    ),
+                ],
+            )
+        ),
+    )
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+
+    assert (normal_entities, total_entities) == (1, 2)
+
+
 def test_sink_entity_grouping_merges_buckets_chronologically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

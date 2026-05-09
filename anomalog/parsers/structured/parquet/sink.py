@@ -336,28 +336,25 @@ class ParquetStructuredSink(StructuredSink):
         Returns:
             EntityLabelCounts: Normal and total distinct entity counts.
         """
-        scanner = self._dataset().scanner(
-            columns=[ENTITY_FIELD],
-            batch_size=self._DEFAULT_BATCH_SIZE,
-        )
         normals = 0
-        entities_seen: set[str] = set()
+        total = 0
 
-        for batch in scanner.to_batches():
-            col = batch.column(0)
-            for val in col.to_pylist():
-                if val is None:
-                    continue
-                entity_id = str(val)
-                if entity_id in entities_seen:
-                    continue
-                entities_seen.add(entity_id)
-                label = label_for_group(entity_id)
-                if is_anomalous_label(label):
-                    continue
-                normals += 1
+        # Reuse the sink's canonical entity grouping rather than projecting the
+        # entity id column directly from the dataset. That keeps the counting
+        # path aligned with the grouped reader and avoids depending on
+        # single-column Arrow projections for partitioned parquet caches.
+        for rows in self.iter_entity_sequences()():
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            if entity_id is None:
+                continue
+            total += 1
+            if is_anomalous_label(label_for_group(entity_id)):
+                continue
+            normals += 1
 
-        total = len(entities_seen)
         return EntityLabelCounts(normal_entities=normals, total_entities=total)
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
