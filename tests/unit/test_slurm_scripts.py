@@ -40,6 +40,18 @@ def test_render_slurm_script_uses_sweep_stem_and_relative_config_path(
     assert rendered.path == Path("example.sbatch")
     assert "#SBATCH --job-name=example" in rendered.content
     assert 'export RUN_NAME="example"' in rendered.content
+    assert (
+        'REPO_ROOT="${SLURM_SUBMIT_DIR:-'
+        '$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"' in rendered.content
+    )
+    assert (
+        'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
+        '${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"' in rendered.content
+    )
+    assert (
+        'mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" '
+        '"$UV_CACHE_DIR"' in rendered.content
+    )
     assert '  --config "experiments/configs/sweeps/example.toml" \\' in rendered.content
     assert "  --force" in rendered.content
 

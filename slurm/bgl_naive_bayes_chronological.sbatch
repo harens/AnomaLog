@@ -11,16 +11,16 @@
 export PATH="${HOME}/.local/bin:${PATH}"
 export RUN_NAME="bgl_naive_bayes_chronological"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"
 export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"
 export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_HOME}/storage"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"
 export PREFECT_API_DATABASE_CONNECTION_URL="sqlite+aiosqlite:///${PREFECT_HOME}/prefect.db"
 # export PREFECT_TASKS_REFRESH_CACHE=true
 
-mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH"
+mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"
 
 cd "$REPO_ROOT"
 
