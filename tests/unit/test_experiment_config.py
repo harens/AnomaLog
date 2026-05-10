@@ -173,6 +173,55 @@ def _write_openstack_labelled_raw_archive(
     return source_root, archive_path, train_entry_count
 
 
+def _read_token_sessions(path: Path) -> list[list[str]]:
+    return [
+        line.strip().split()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _model_input_signature(
+    *,
+    bundle: ExperimentBundle,
+    repo_root: Path,
+) -> list[tuple[str, str, int, list[str]]]:
+    sequences = list(
+        bundle.dataset.sequence.apply(
+            build_dataset_spec(bundle.dataset, repo_root=repo_root).build(),
+        ),
+    )
+    return [
+        (
+            sequence.entity_ids[0],
+            sequence.split_label.value,
+            sequence.label,
+            sequence.templates,
+        )
+        for sequence in sequences
+    ]
+
+
+def _expected_hdfs_split_signature(
+    *,
+    sessions_by_split: dict[str, list[list[str]]],
+) -> list[tuple[str, str, int, list[str]]]:
+    return (
+        [
+            (f"hdfs_train:{index}", "train", 0, session)
+            for index, session in enumerate(sessions_by_split["hdfs_train"])
+        ]
+        + [
+            (f"hdfs_test_normal:{index}", "test", 0, session)
+            for index, session in enumerate(sessions_by_split["hdfs_test_normal"])
+        ]
+        + [
+            (f"hdfs_test_abnormal:{index}", "test", 1, session)
+            for index, session in enumerate(sessions_by_split["hdfs_test_abnormal"])
+        ]
+    )
+
+
 @pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     tmp_path: Path,
@@ -859,7 +908,7 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     assert hdfs_bundle.model.hidden_size == 64
 
 
-def test_wuyifan18_deeplog_preprocessed_config_uses_exact_raw_entry_boundary() -> None:
+def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> None:
     """The new DeepLog sweep should pin the exact file boundary."""
     repo_root = Path(__file__).resolve().parents[2]
     dataset_path = (
@@ -898,7 +947,7 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_raw_entry_boundary() -
         "test_fraction = 0.0\n"
         "\n[sequence.split]\n"
         'mode = "raw_entry_prefix_count"\n'
-        "train_entry_count = 4855\n"
+        "train_entry_count = 95125\n"
         'application_order = "before_grouping"\n'
         'straddling_group_policy = "split_partial_sequences"\n'
         "\n[cache_paths]\n"
@@ -934,7 +983,7 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_raw_entry_boundary() -
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
     assert isinstance(bundle.dataset.sequence.split, RawEntryPrefixCountSplitConfig)
     assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
-    assert bundle.dataset.sequence.split.train_entry_count == 4855
+    assert bundle.dataset.sequence.split.train_entry_count == 95_125
     assert bundle.dataset.sequence.split.straddling_group_policy.value == (
         "split_partial_sequences"
     )
@@ -944,6 +993,8 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_raw_entry_boundary() -
     assert bundle.model.top_g == 9
     assert bundle.model.num_layers == 2
     assert bundle.model.hidden_size == 64
+    assert bundle.model.epochs == 300
+    assert bundle.model.batch_size == 2048
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
 
@@ -986,7 +1037,7 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
     train_text = "5 5 5 22 11 9 11 9 11 9 26 26 26 23 23 23 21 21 21\n1 2 3\n"
     normal_text = "4 4 4\n"
     abnormal_text = "6\n"
-    _source_root, archive_path, train_entry_count = _write_preprocessed_hdfs_archive(
+    source_root, archive_path, train_entry_count = _write_preprocessed_hdfs_archive(
         tmp_path,
         train_text=train_text,
         normal_text=normal_text,
@@ -1036,49 +1087,19 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
             ),
         )
         bundle = _load_one_bundle(sweep_path)
-        spec = build_dataset_spec(bundle.dataset, repo_root=tmp_path)
-        sequences = list(bundle.dataset.sequence.apply(spec.build()))
-        return [
-            (
-                sequence.entity_ids[0],
-                sequence.split_label.value,
-                sequence.label,
-                sequence.templates,
-            )
-            for sequence in sequences
-        ]
+        return _model_input_signature(bundle=bundle, repo_root=tmp_path)
 
-    expected = [
-        (
-            "hdfs_train:0",
-            "train",
-            0,
-            [
-                "5",
-                "5",
-                "5",
-                "22",
-                "11",
-                "9",
-                "11",
-                "9",
-                "11",
-                "9",
-                "26",
-                "26",
-                "26",
-                "23",
-                "23",
-                "23",
-                "21",
-                "21",
-                "21",
-            ],
-        ),
-        ("hdfs_train:1", "train", 0, ["1", "2", "3"]),
-        ("hdfs_test_normal:0", "test", 0, ["4", "4", "4"]),
-        ("hdfs_test_abnormal:0", "test", 1, ["6"]),
-    ]
+    expected = _expected_hdfs_split_signature(
+        sessions_by_split={
+            "hdfs_train": _read_token_sessions(source_root / "hdfs_train"),
+            "hdfs_test_normal": _read_token_sessions(
+                source_root / "hdfs_test_normal",
+            ),
+            "hdfs_test_abnormal": _read_token_sessions(
+                source_root / "hdfs_test_abnormal",
+            ),
+        },
+    )
     split_signatures = [
         load_split_sequences(
             dataset_name="hdfs_wuyifan18_deeplog_preprocessed_local_low",
@@ -1093,6 +1114,121 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
     ]
     assert split_signatures[0] == expected
     assert split_signatures[1] == expected
+
+
+@pytest.mark.allow_no_new_coverage
+def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -> None:
+    """Real wuyifan18 config should yield expected model-facing templates."""
+    repo_root = Path(__file__).resolve().parents[2]
+    sweep_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "sweeps"
+        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
+    )
+    bundle = load_experiment_bundles(sweep_path)[0]
+    observed = _model_input_signature(bundle=bundle, repo_root=repo_root)
+    observed_by_entity = {
+        entity_id: (split, label, templates)
+        for entity_id, split, label, templates in observed
+    }
+    expected_train_first_line = [
+        "5",
+        "5",
+        "5",
+        "22",
+        "11",
+        "9",
+        "11",
+        "9",
+        "11",
+        "9",
+        "26",
+        "26",
+        "26",
+        "23",
+        "23",
+        "23",
+        "21",
+        "21",
+        "21",
+    ]
+    expected_test_normal_first_line = expected_train_first_line
+    expected_test_normal_last_line = [
+        "5",
+        "5",
+        "22",
+        "5",
+        "11",
+        "9",
+        "11",
+        "9",
+        "11",
+        "9",
+        "26",
+        "26",
+        "26",
+    ]
+    expected_test_abnormal_first_line = [
+        "5",
+        "5",
+        "22",
+        "5",
+        "11",
+        "9",
+        "11",
+        "9",
+        "11",
+        "9",
+        "26",
+        "26",
+        "26",
+        "4",
+        "4",
+        "3",
+        "2",
+        "23",
+        "23",
+        "23",
+        "21",
+        "21",
+        "28",
+        "26",
+        "21",
+    ]
+    expected_test_abnormal_last_line = ["5", "22"]
+    assert len(observed) == 575_059
+    assert observed_by_entity["hdfs_train:0"] == (
+        "train",
+        0,
+        expected_train_first_line,
+    )
+    assert observed_by_entity["hdfs_train:4854"] == (
+        "train",
+        0,
+        expected_train_first_line,
+    )
+    assert observed_by_entity["hdfs_test_normal:0"] == (
+        "test",
+        0,
+        expected_test_normal_first_line,
+    )
+    assert observed_by_entity["hdfs_test_normal:553365"] == (
+        "test",
+        0,
+        expected_test_normal_last_line,
+    )
+    assert observed_by_entity["hdfs_test_abnormal:0"] == (
+        "test",
+        1,
+        expected_test_abnormal_first_line,
+    )
+    assert observed_by_entity["hdfs_test_abnormal:16837"] == (
+        "test",
+        1,
+        expected_test_abnormal_last_line,
+    )
 
 
 def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fractions(

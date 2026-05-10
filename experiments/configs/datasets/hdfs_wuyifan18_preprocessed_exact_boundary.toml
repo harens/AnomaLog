@@ -11,7 +11,7 @@ test_fraction = 0.0
 
 [sequence.split]
 mode = "raw_entry_prefix_count"
-train_entry_count = 4855
+train_entry_count = 95125
 application_order = "before_grouping"
 straddling_group_policy = "split_partial_sequences"
 

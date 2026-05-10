@@ -67,8 +67,8 @@ The checked-in sweep set is split by detector family:
   explicit per-event eligibility mask so normal target events can train even
   when a chunk also contains anomalies or post-cutoff context.
 - `hdfs_wuyifan18_deeplog_preprocessed.toml` is a file-boundary reproduction
-  probe for the wuyifan18 DeepLog HDFS session files. It keeps the raw-entry
-  split fixed to the full `hdfs_train` prefix and then evaluates both
+  probe for the wuyifan18 DeepLog HDFS session files. It keeps the sequence
+  split fixed to the full `hdfs_train` session prefix and then evaluates both
   `hdfs_test_normal` and `hdfs_test_abnormal` exactly as they appear in the
   preprocessed archive.
 - `openstack_deeplog_preprocessed.toml` is the matching OpenStack
