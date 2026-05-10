@@ -25,5 +25,5 @@ mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"
 cd "$REPO_ROOT"
 
 uv run python -m experiments.runners.run_experiment \
-  --config "experiments/configs/sweeps/bgl_deeplog_paper_10pct_entry_stream_no_online.toml" \
+  --config "experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml" \
   --force

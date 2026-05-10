@@ -1,8 +1,9 @@
-"""TOML decoding and bundle loading for experiment sweeps."""
+"""TOML decoding and bundle loading for dataset-owned experiment matrices."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -21,7 +22,8 @@ from experiments.config_types import (
     ExperimentBundle,
     LabelReaderConfig,
     SequenceConfig,
-    SweepConfig,
+    SweepAxisConfig,
+    WorkerCount,
     _optional_str,
     serialise_config,
 )
@@ -36,12 +38,55 @@ if TYPE_CHECKING:
 TDecoded = TypeVar("TDecoded")
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedDatasetExperiment:
+    """Resolved dataset-owned experiment matrix loaded from one TOML file.
+
+    Attributes:
+        experiments_root (Path): Root directory containing experiment configs.
+        config_path (Path): Resolved dataset experiment path.
+        config (_DatasetExperimentConfig): Decoded dataset experiment config.
+    """
+
+    experiments_root: Path
+    config_path: Path
+    config: _DatasetExperimentConfig
+
+
+class _DatasetExperimentConfig(msgspec.Struct, frozen=True):
+    """Dataset-owned experiment matrix loaded from one TOML file.
+
+    Attributes:
+        name (str): Human-readable matrix name.
+        dataset (DatasetVariantConfig): Decoded dataset config.
+        models (list[dict[str, object]]): Embedded model run entries.
+        model (dict[str, object] | None): Backwards-compatible single model.
+        overrides (dict[str, object]): Fixed overrides applied to every run.
+        axes (list[SweepAxisConfig]): Cartesian-product axes for every run.
+        results_root (Path): Root directory for run outputs.
+        description (str | None): Optional free-text matrix description.
+        max_workers (WorkerCount): Maximum concurrent concrete runs.
+    """
+
+    name: str
+    dataset: DatasetVariantConfig
+    models: list[dict[str, object]] = msgspec.field(default_factory=list)
+    model: dict[str, object] | None = None
+    overrides: dict[str, object] = msgspec.field(default_factory=dict)
+    axes: list[SweepAxisConfig] = msgspec.field(default_factory=list)
+    results_root: Path = Path("experiments/results")
+    description: str | None = None
+    max_workers: WorkerCount = "auto"
+
+
 def _path_hook(type_: type[Path], obj: str) -> Path:
     del type_
     return Path(obj)
 
 
 def _path_dec_hook(type_: type, obj: object) -> object:
+    if type_ is object:
+        return obj
     if type_ is not Path or not isinstance(obj, str):
         msg = f"Unsupported decoded type: {type_!r}"
         raise NotImplementedError(msg)
@@ -180,27 +225,97 @@ def _decode_dataset_config(obj: object) -> DatasetVariantConfig:
     )
 
 
+def _decode_dataset_experiment_config(obj: object) -> _DatasetExperimentConfig:
+    raw_config = _normalize_toml_table(obj, expected_type="dataset experiment")
+    dataset_obj = raw_config.get("dataset")
+    models_obj = raw_config.get("models")
+    model_obj = raw_config.get("model")
+    if not isinstance(dataset_obj, dict):
+        msg = "dataset experiment config must define a `[dataset]` table."
+        raise TypeError(msg)
+    if models_obj is None:
+        if model_obj is None:
+            msg = (
+                "dataset experiment config must define a `[model]` or "
+                "`[[models]]` entry."
+            )
+            raise TypeError(msg)
+        models_obj = [model_obj]
+    if not isinstance(models_obj, list):
+        msg = "dataset experiment config `models` must be a TOML array."
+        raise TypeError(msg)
+    results_root_obj = raw_config.get("results_root", "experiments/results")
+    if not isinstance(results_root_obj, (str, Path)):
+        msg = "dataset experiment config `results_root` must be a path string."
+        raise TypeError(msg)
+    if isinstance(results_root_obj, str):
+        results_root = Path(results_root_obj)
+    else:
+        results_root = results_root_obj
+    max_workers_obj = raw_config.get("max_workers", "auto")
+    if max_workers_obj != "auto" and (
+        not isinstance(max_workers_obj, int) or isinstance(max_workers_obj, bool)
+    ):
+        msg = "dataset experiment max_workers must be a positive integer or `auto`."
+        raise TypeError(msg)
+    if max_workers_obj == "auto":
+        max_workers: WorkerCount = "auto"
+    elif isinstance(max_workers_obj, int):
+        max_workers = max_workers_obj
+    else:
+        msg = "dataset experiment max_workers must be a positive integer or `auto`."
+        raise TypeError(msg)
+    return _DatasetExperimentConfig(
+        name=str(raw_config["name"]),
+        dataset=_decode_dataset_config(dataset_obj),
+        models=[_normalize_model_entry(model) for model in models_obj],
+        model=(None if model_obj is None else _normalize_model_entry(model_obj)),
+        overrides=msgspec.convert(
+            raw_config.get("overrides", {}),
+            type=dict[str, object],
+            dec_hook=_path_dec_hook,
+        ),
+        axes=msgspec.convert(
+            raw_config.get("axes", []),
+            type=list[SweepAxisConfig],
+            dec_hook=_path_dec_hook,
+        ),
+        results_root=results_root,
+        description=_optional_str(raw_config.get("description")),
+        max_workers=max_workers,
+    )
+
+
 def load_experiment_bundles(sweep_config_path: Path) -> list[ExperimentBundle]:
-    """Load a sweep config and expand it into concrete experiment bundles.
+    """Load a dataset-owned experiment matrix and expand it into bundles.
 
     Args:
-        sweep_config_path (Path): Sweep config TOML path to resolve.
+        sweep_config_path (Path): Dataset manifest TOML path to resolve.
 
     Returns:
-        list[ExperimentBundle]: Fully resolved concrete runs derived from the sweep.
+        list[ExperimentBundle]: Fully resolved concrete runs derived from the
+            manifest or inline scenario.
+
+    Raises:
+        ConfigError: If the manifest does not decode or is missing its root
+            `experiments` directory.
     """
-    resolved_sweep_path = sweep_config_path.resolve()
-    experiments_root = _find_experiments_root(resolved_sweep_path)
-    sweep = _load_toml(resolved_sweep_path, expected_type=SweepConfig)
-    _resolve_config_refs(
-        experiments_root=experiments_root,
-        dataset=sweep.dataset,
-        model=sweep.model,
-    )
-    return _expand_sweep(
-        experiments_root=experiments_root,
-        sweep_path=resolved_sweep_path,
-        sweep=sweep,
+    resolved_config_path = sweep_config_path.resolve()
+    experiments_root = _find_experiments_root(resolved_config_path)
+    raw_config = _decode_toml_file(resolved_config_path, decode=lambda raw: raw)
+    if not isinstance(raw_config, dict):
+        msg = (
+            f"{resolved_config_path}: dataset experiment config must decode "
+            "from a TOML table."
+        )
+        raise ConfigError(msg)
+    config = _decode_dataset_experiment_config(raw_config)
+    return _expand_model_runs(
+        context=_ResolvedDatasetExperiment(
+            experiments_root=experiments_root,
+            config_path=resolved_config_path,
+            config=config,
+        ),
     )
 
 
@@ -212,100 +327,95 @@ def _find_experiments_root(path: Path) -> Path:
     raise ConfigError(msg)
 
 
-def _resolve_named_config(base_dir: Path, config_ref: str) -> Path:
-    ref_path = Path(config_ref)
-    candidate = (
-        ref_path
-        if ref_path.suffix == ".toml" and ref_path.is_absolute()
-        else base_dir
-        / (ref_path if ref_path.suffix == ".toml" else f"{config_ref}.toml")
-    )
-    resolved = candidate.resolve()
-    if not resolved.exists():
-        msg = f"Config file not found: {resolved}"
-        raise ConfigError(msg)
-    return resolved
+def _resolve_named_config(config_dir: Path, config_name: str) -> Path:
+    candidate = config_dir / f"{config_name}.toml"
+    if candidate.exists():
+        return candidate
+    msg = f"Missing named config: {candidate}"
+    raise ConfigError(msg)
 
 
-def _resolve_config_refs(
+def _expand_model_runs(
     *,
-    experiments_root: Path,
-    dataset: str,
-    model: str,
-) -> tuple[Path, Path]:
-    return (
-        _resolve_named_config(experiments_root / "configs" / "datasets", dataset),
-        _resolve_named_config(experiments_root / "configs" / "models", model),
-    )
-
-
-def _expand_sweep(
-    *,
-    experiments_root: Path,
-    sweep_path: Path,
-    sweep: SweepConfig,
+    context: _ResolvedDatasetExperiment,
 ) -> list[ExperimentBundle]:
-    axis_combinations = list(product(*(axis.values for axis in sweep.axes)))
+    bundles: list[ExperimentBundle] = []
+    model_entries = context.config.models or (
+        [] if context.config.model is None else [context.config.model]
+    )
+    axis_combinations = list(product(*(axis.values for axis in context.config.axes)))
     if not axis_combinations:
         axis_combinations = [()]
-    bundles: list[ExperimentBundle] = []
-    for axis_values in axis_combinations:
-        axis_overrides = {
-            axis.path: value
-            for axis, value in zip(sweep.axes, axis_values, strict=True)
-        }
-        bundles.append(
-            _build_concrete_bundle(
-                experiments_root=experiments_root,
-                sweep_path=sweep_path,
-                sweep=sweep,
-                default_name=sweep.name if len(axis_combinations) == 1 else None,
-                axis_overrides=axis_overrides,
-            ),
-        )
+    for model_config in model_entries:
+        for current_axis_values in axis_combinations:
+            axis_overrides = {
+                axis.path: value
+                for axis, value in zip(
+                    context.config.axes,
+                    current_axis_values,
+                    strict=True,
+                )
+            }
+            bundles.append(
+                _build_concrete_bundle(
+                    context=context,
+                    model_config=model_config,
+                    axis_overrides=axis_overrides,
+                    default_name=(
+                        context.config.name
+                        if len(model_entries) == 1 and len(context.config.axes) == 0
+                        else None
+                    ),
+                ),
+            )
     return bundles
 
 
 def _build_concrete_bundle(
     *,
-    experiments_root: Path,
-    sweep_path: Path,
-    sweep: SweepConfig,
-    default_name: str | None,
+    context: _ResolvedDatasetExperiment,
+    model_config: dict[str, object],
     axis_overrides: dict[str, object],
+    default_name: str | None,
 ) -> ExperimentBundle:
-    applied_overrides = dict(sweep.overrides)
-    applied_overrides.update(axis_overrides)
-    concrete_sweep = _apply_sweep_overrides(sweep, applied_overrides)
-    dataset_path, model_path = _resolve_config_refs(
-        experiments_root=experiments_root,
-        dataset=concrete_sweep.dataset,
-        model=concrete_sweep.model,
+    applied_overrides = dict(context.config.overrides)
+    model = _resolve_model_config(
+        model_config,
+        repo_root=context.experiments_root.parent,
     )
+    model_overrides_obj = model_config.get("overrides", {})
+    if not isinstance(model_overrides_obj, dict):
+        msg = "model overrides must be a TOML table."
+        raise TypeError(msg)
+    applied_overrides.update(
+        {str(key): value for key, value in model_overrides_obj.items()},
+    )
+    applied_overrides.update(axis_overrides)
     dataset = _apply_config_overrides(
-        config=_decode_toml_file(dataset_path, decode=_decode_dataset_config),
+        config=context.config.dataset,
         overrides=applied_overrides,
         prefix="dataset",
         decode=_decode_dataset_config,
     )
     model = _apply_config_overrides(
-        config=_decode_toml_file(model_path, decode=_decode_model_config),
+        config=model,
         overrides=applied_overrides,
         prefix="model",
         decode=_decode_model_config,
     )
     concrete_name = _build_concrete_name(
         default_name=default_name,
-        concrete_sweep=concrete_sweep,
+        dataset=dataset,
+        model=model,
         applied_overrides=applied_overrides,
     )
     return ExperimentBundle(
-        experiments_root=experiments_root,
-        repo_root=experiments_root.parent,
-        sweep_path=sweep_path,
-        dataset_path=dataset_path,
-        model_path=model_path,
-        sweep=concrete_sweep,
+        experiments_root=context.experiments_root,
+        repo_root=context.experiments_root.parent,
+        sweep_path=context.config_path,
+        dataset_path=context.config_path,
+        model_path=context.config_path,
+        sweep=context.config,
         dataset=dataset,
         model=model,
         concrete_name=concrete_name,
@@ -313,20 +423,36 @@ def _build_concrete_bundle(
     )
 
 
-def _apply_sweep_overrides(
-    sweep: SweepConfig,
-    overrides: dict[str, object],
-) -> SweepConfig:
-    updated = serialise_config(sweep)
-    for path, value in overrides.items():
-        if not path.startswith("sweep."):
-            continue
-        leaf_segments = path.split(".")[1:]
-        if leaf_segments and leaf_segments[0] in {"axes", "max_workers", "overrides"}:
-            msg = f"Sweep overrides may not target {path!r}."
+def _normalize_model_entry(model: object) -> dict[str, object]:
+    if isinstance(model, str):
+        return {"ref": model}
+    return _normalize_toml_table(model, expected_type="model")
+
+
+def _resolve_model_config(
+    model_config: dict[str, object],
+    *,
+    repo_root: Path,
+) -> ExperimentModelConfig:
+    ref = model_config.get("ref")
+    if ref is not None:
+        if not isinstance(ref, str):
+            msg = "model `ref` must be a string."
+            raise TypeError(msg)
+        model_path = repo_root / "experiments" / "configs" / "models" / f"{ref}.toml"
+        if not model_path.exists():
+            msg = f"Missing model config for reference: {model_path}"
             raise ConfigError(msg)
-        _set_nested_value(updated, leaf_segments, value, root_name="sweep")
-    return msgspec.convert(updated, type=SweepConfig, dec_hook=_path_dec_hook)
+        model = _decode_toml_file(model_path, decode=_decode_model_config)
+    else:
+        model = _decode_model_config(
+            {
+                key: value
+                for key, value in model_config.items()
+                if key not in {"overrides", "axes"}
+            },
+        )
+    return model
 
 
 TConfig = TypeVar("TConfig")
@@ -385,17 +511,18 @@ def _require_object_dict(value: object, *, path: str) -> dict[str, object]:
 def _build_concrete_name(
     *,
     default_name: str | None,
-    concrete_sweep: SweepConfig,
+    dataset: DatasetVariantConfig,
+    model: ExperimentModelConfig,
     applied_overrides: dict[str, object],
 ) -> str:
     if default_name is not None and not applied_overrides:
         return _slugify_label(default_name)
-    dataset_label = _slugify_label(_trim_known_suffixes(concrete_sweep.dataset))
-    model_label = _slugify_label(_trim_known_suffixes(concrete_sweep.model))
+    dataset_label = _slugify_label(_trim_known_suffixes(dataset.name))
+    model_label = _slugify_label(_trim_known_suffixes(model.name))
     override_labels = [
         _override_label(path, value)
         for path, value in sorted(applied_overrides.items())
-        if path != "sweep.model"
+        if path not in {"dataset", "model"}
     ]
     return "_".join([dataset_label, model_label, *override_labels])
 

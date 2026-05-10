@@ -42,7 +42,7 @@ def validate_deepcase_hdfs_table_iv_config(
             configuration to validate.
     """
     _validate_deepcase_hdfs_dataset_config(dataset_config=dataset_config)
-    _validate_deepcase_paper_model_config(model_config=model_config)
+    _validate_deepcase_model_config(model_config=model_config)
 
 
 def validate_deepcase_hdfs_table_x_config(
@@ -59,7 +59,7 @@ def validate_deepcase_hdfs_table_x_config(
             configuration to validate.
     """
     _validate_deepcase_hdfs_dataset_config(dataset_config=dataset_config)
-    _validate_deepcase_paper_model_config(model_config=model_config)
+    _validate_deepcase_model_config(model_config=model_config)
 
 
 def validate_deepcase_bgl_extension_config(
@@ -76,63 +76,63 @@ def validate_deepcase_bgl_extension_config(
             configuration to validate.
     """
     _validate_deepcase_bgl_extension_dataset_config(dataset_config=dataset_config)
-    _validate_deepcase_paper_model_config(model_config=model_config)
+    _validate_deepcase_model_config(model_config=model_config)
 
 
-def _validate_deepcase_paper_model_config(
+def _validate_deepcase_model_config(
     *,
     model_config: ExperimentModelConfig | None,
 ) -> None:
     if model_config is None:
-        msg = "DeepCASE paper configs require a model config."
+        msg = "DeepCASE configs require a model config."
         raise ConfigError(msg)
     if not isinstance(model_config, DeepCaseModelConfig):
-        msg = "DeepCASE paper configs must use the DeepCASE model."
+        msg = "DeepCASE configs must use the DeepCASE model."
         raise TypeError(msg)
     _require_equal(
         model_config.context_length,
         _DEEPCASE_CONTEXT_LENGTH,
-        "DeepCASE paper configs must use context_length = 10.",
+        "DeepCASE configs must use context_length = 10.",
     )
     _require_close(
         model_config.timeout_seconds,
         _DEEPCASE_TIMEOUT_SECONDS,
-        "DeepCASE paper configs must use timeout_seconds = 86400.",
+        "DeepCASE configs must use timeout_seconds = 86400.",
     )
     _require_equal(
         model_config.hidden_size,
         _DEEPCASE_HIDDEN_SIZE,
-        "DeepCASE paper configs must use hidden_size = 128.",
+        "DeepCASE configs must use hidden_size = 128.",
     )
     _require_close(
         model_config.label_smoothing_delta,
         _DEEPCASE_LABEL_SMOOTHING_DELTA,
-        "DeepCASE paper configs must use label_smoothing_delta = 0.1.",
+        "DeepCASE configs must use label_smoothing_delta = 0.1.",
     )
     _require_close(
         model_config.confidence_threshold,
         _DEEPCASE_CONFIDENCE_THRESHOLD,
-        "DeepCASE paper configs must use confidence_threshold = 0.2.",
+        "DeepCASE configs must use confidence_threshold = 0.2.",
     )
     _require_close(
         model_config.eps,
         _DEEPCASE_EPS,
-        "DeepCASE paper configs must use eps = 0.1.",
+        "DeepCASE configs must use eps = 0.1.",
     )
     _require_equal(
         model_config.min_samples,
         _DEEPCASE_MIN_SAMPLES,
-        "DeepCASE paper configs must use min_samples = 5.",
+        "DeepCASE configs must use min_samples = 5.",
     )
     _require_equal(
         model_config.epochs,
         _DEEPCASE_EPOCHS,
-        "DeepCASE paper configs must use epochs = 100.",
+        "DeepCASE configs must use epochs = 100.",
     )
     _require_equal(
         model_config.iterations,
         _DEEPCASE_ITERATIONS,
-        "DeepCASE paper configs must use iterations = 100.",
+        "DeepCASE configs must use iterations = 100.",
     )
 
 

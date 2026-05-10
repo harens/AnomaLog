@@ -1,4 +1,4 @@
-name = "deepcase_paper"
+name = "deepcase"
 detector = "deepcase"
 primary_metric_scope = "sequence_level_detection"
 context_length = 10

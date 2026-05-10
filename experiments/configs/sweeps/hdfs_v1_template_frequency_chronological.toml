@@ -1,8 +1,0 @@
-name = "hdfs_v1_template_frequency_chronological"
-dataset = "hdfs_v1_entity_chronological"
-model = "template_frequency_default"
-description = "HDFS v1 template-frequency baseline at 1% and 10% chronological train fractions."
-
-[[axes]]
-path = "dataset.sequence.train_fraction"
-values = [0.01, 0.1]

@@ -64,9 +64,9 @@ def test_run_experiment_with_river_multinomial_nb_writes_predictions(
     model_config = tmp_path / "experiments" / "configs" / "models" / "river.toml"
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
-    sweep_config.parent.mkdir(parents=True)
-    dataset_config.parent.mkdir(parents=True)
-    model_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True, exist_ok=True)
+    dataset_config.parent.mkdir(parents=True, exist_ok=True)
+    model_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
     shutil.copy2(FIXTURE_ROOT / "tiny_river_run.toml", sweep_config)
     shutil.copy2(DATASET_FIXTURE_ROOT / "tiny_dataset_nb.toml", dataset_config)

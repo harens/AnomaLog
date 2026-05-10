@@ -1,5 +1,0 @@
-name = "deeplog_hdfs_paper_key_only"
-detector = "deeplog"
-parameter_detection_enabled = false
-epochs = 300
-batch_size = 2048

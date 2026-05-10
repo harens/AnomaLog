@@ -1,4 +1,0 @@
-name = "hdfs_wuyifan18_deeplog_preprocessed"
-dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"
-model = "deeplog_hdfs_paper_key_only"
-description = "DeepLog HDFS reproduction on the wuyifan18 preprocessed session files with the exact hdfs_train / hdfs_test file boundary."

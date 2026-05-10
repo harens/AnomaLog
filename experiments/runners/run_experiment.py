@@ -1,4 +1,4 @@
-"""CLI entrypoint for an AnomaLog experiment sweep."""
+"""CLI entrypoint for an AnomaLog dataset experiment manifest."""
 
 from __future__ import annotations
 
@@ -70,10 +70,10 @@ def run_experiment(
     force: bool = False,
     write_predictions: bool = False,
 ) -> list[Path]:
-    """Run one sweep config and return all concrete result directories.
+    """Run one dataset manifest and return all concrete result directories.
 
     Args:
-        config_path (Path): Sweep config TOML path to execute.
+        config_path (Path): Dataset manifest TOML path to execute.
         force (bool): Whether to replace an existing deterministic result
             directories.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
@@ -84,11 +84,11 @@ def run_experiment(
             artifacts.
 
     Raises:
-        ConfigError: If the sweep does not expand to any concrete runs.
+        ConfigError: If the manifest does not expand to any concrete runs.
     """
     bundles = load_experiment_bundles(config_path)
     if not bundles:
-        msg = f"Sweep {config_path} did not expand to any concrete runs."
+        msg = f"Manifest {config_path} did not expand to any concrete runs."
         raise ConfigError(msg)
     max_workers = _resolve_max_workers(
         requested_workers=bundles[0].sweep.max_workers,
@@ -106,7 +106,7 @@ def run_experiment(
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         return list(
             executor.map(
-                _run_bundle_from_sweep_payload,
+                _run_bundle_from_manifest_payload,
                 [
                     (config_path, index, force, write_predictions)
                     for index in range(len(bundles))
@@ -128,7 +128,7 @@ def _resolve_max_workers(
     return min(bundle_count, requested_workers)
 
 
-def _run_bundle_from_sweep_payload(
+def _run_bundle_from_manifest_payload(
     payload: tuple[Path, int, bool, bool],
 ) -> Path:
     config_path, index, force, write_predictions = payload
@@ -142,7 +142,7 @@ def _run_bundle(
     force: bool = False,
     write_predictions: bool = False,
 ) -> Path:
-    """Execute one concrete run derived from a sweep.
+    """Execute one concrete run derived from a dataset manifest.
 
     Args:
         bundle (ExperimentBundle): Concrete run bundle to execute.
@@ -173,10 +173,10 @@ def _run_bundle(
         result_paths.run_log_path,
         run_name=bundle.concrete_name,
     ) as logger:
-        logger.info("Loaded sweep config from %s", bundle.sweep_path)
+        logger.info("Loaded experiment config from %s", bundle.sweep_path)
         logger.info("Using dataset config %s", bundle.dataset_path)
         logger.info("Using model config %s", bundle.model_path)
-        logger.info("Running concrete sweep variant %s", bundle.concrete_name)
+        logger.info("Running concrete experiment variant %s", bundle.concrete_name)
         if bundle.applied_overrides:
             logger.info("Applied overrides: %s", bundle.applied_overrides)
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
@@ -351,7 +351,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config",
         required=True,
         type=Path,
-        help="Path to a sweep config TOML file under experiments/configs/sweeps.",
+        help="Path to a dataset manifest TOML file under experiments/configs/datasets.",
     )
     parser.add_argument(
         "--force",
@@ -389,7 +389,7 @@ def _experiment_logger_name(run_name: str) -> str:
     """Return the stable logger name used for one concrete experiment run.
 
     Args:
-        run_name (str): Human-readable concrete sweep variant name.
+        run_name (str): Human-readable concrete experiment variant name.
 
     Returns:
         str: Logger name displayed by the Prefect-style formatter.

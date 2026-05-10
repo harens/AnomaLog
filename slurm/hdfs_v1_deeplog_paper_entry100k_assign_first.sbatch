@@ -25,5 +25,5 @@ mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"
 cd "$REPO_ROOT"
 
 uv run python -m experiments.runners.run_experiment \
-  --config "experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first.toml" \
+  --config "experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml" \
   --force

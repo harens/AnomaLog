@@ -388,14 +388,14 @@ class DeepLogModelConfig(
             description="Training epochs for DeepLog neural models. "
             "This is not defined in the paper.",
         ),
-    ] = 30
+    ] = 300
     batch_size: Annotated[
         PositiveInt,
         msgspec.Meta(
             description="Training batch size for DeepLog neural models. "
             "This is not defined in the paper.",
         ),
-    ] = 128
+    ] = 2048
     learning_rate: Annotated[
         PositiveFloat,
         msgspec.Meta(

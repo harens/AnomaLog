@@ -88,9 +88,9 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
     model_config = tmp_path / "experiments" / "configs" / "models" / "naive_bayes.toml"
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
-    sweep_config.parent.mkdir(parents=True)
-    dataset_config.parent.mkdir(parents=True)
-    model_config.parent.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True, exist_ok=True)
+    dataset_config.parent.mkdir(parents=True, exist_ok=True)
+    model_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
     shutil.copy2(FIXTURE_ROOT / "tiny_nb_run.toml", sweep_config)
     shutil.copy2(FIXTURE_ROOT / "tiny_dataset_nb.toml", dataset_config)

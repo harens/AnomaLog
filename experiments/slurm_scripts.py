@@ -1,4 +1,4 @@
-"""Render Slurm wrappers for experiment sweep configs."""
+"""Render Slurm wrappers for experiment dataset manifests."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class SlurmJobConfig(msgspec.Struct, frozen=True):
     """Configuration for one generated Slurm wrapper.
 
     Attributes:
-        sweep (Path): Sweep config path relative to the repository root.
+        sweep (Path): Dataset-manifest path relative to the repository root.
         force (bool): Whether the generated wrapper should pass `--force`.
         time (str): Slurm wall-clock limit.
         cpus_per_task (int): CPU reservation for the job.
@@ -33,10 +33,10 @@ class SlurmJobConfig(msgspec.Struct, frozen=True):
 
 
 class SlurmJobsManifest(msgspec.Struct, frozen=True):
-    """Manifest listing the Slurm sweep configs that should be wrapped.
+    """Manifest listing the dataset manifests that should be wrapped.
 
     Attributes:
-        sweeps (list[Path]): Ordered sweep config paths to render.
+        sweeps (list[Path]): Ordered dataset-manifest paths to render.
     """
 
     sweeps: list[Path]
@@ -60,14 +60,14 @@ def load_slurm_jobs(manifest_path: Path, *, repo_root: Path) -> list[SlurmJobCon
 
     Args:
         manifest_path (Path): TOML manifest describing the generated wrappers.
-        repo_root (Path): Repository root used to resolve relative sweep paths.
+        repo_root (Path): Repository root used to resolve relative manifest paths.
 
     Returns:
         list[SlurmJobConfig]: Manifest entries in their declared order.
 
     Raises:
         ConfigError: If the manifest cannot be decoded, references a missing
-            sweep config, or repeats the same sweep stem more than once.
+            manifest config, or repeats the same manifest stem more than once.
     """
     resolved_manifest_path = _resolve_path(manifest_path, repo_root)
     try:
@@ -88,7 +88,7 @@ def load_slurm_jobs(manifest_path: Path, *, repo_root: Path) -> list[SlurmJobCon
     for sweep in manifest.sweeps:
         sweep_path = _resolve_path(sweep, repo_root)
         if not sweep_path.exists():
-            msg = f"Missing sweep config for Slurm job: {sweep_path}"
+            msg = f"Missing manifest config for Slurm job: {sweep_path}"
             raise ConfigError(msg)
         jobs.append(SlurmJobConfig(sweep=sweep))
     _validate_unique_stems(jobs)
@@ -105,7 +105,7 @@ def render_slurm_script(
 
     Args:
         job (SlurmJobConfig): Manifest entry to render.
-        repo_root (Path): Repository root used to resolve the sweep config path.
+        repo_root (Path): Repository root used to resolve the manifest config path.
         manifest_path (Path): Manifest path used in the generated header comment.
 
     Returns:
@@ -171,7 +171,7 @@ def write_slurm_scripts(
 
     Args:
         manifest_path (Path): Manifest describing the wrappers to generate.
-        repo_root (Path): Repository root used to resolve sweep paths.
+        repo_root (Path): Repository root used to resolve manifest paths.
         output_dir (Path | None): Directory that should receive the generated
             `.sbatch` files. Defaults to the manifest directory.
 
@@ -216,7 +216,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--repo-root",
         type=Path,
         default=Path.cwd(),
-        help="Repository root used to resolve sweep paths.",
+        help="Repository root used to resolve manifest paths.",
     )
     parser.add_argument(
         "--output-dir",
@@ -267,7 +267,7 @@ def _repo_relative_path(path: Path, repo_root: Path) -> str:
 def _validate_unique_stems(jobs: list[SlurmJobConfig]) -> None:
     stems = [job.sweep.stem for job in jobs]
     if len(stems) != len(set(stems)):
-        msg = "Slurm job manifest must not repeat the same sweep stem."
+        msg = "Slurm job manifest must not repeat the same manifest stem."
         raise ConfigError(msg)
 
 

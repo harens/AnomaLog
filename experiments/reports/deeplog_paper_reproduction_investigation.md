@@ -119,9 +119,10 @@ boundary losses remain inspectable in machine-readable form.
 - HDFS:
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
-  - `experiments/configs/models/deeplog_hdfs_paper_key_only.toml`
-  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first_full.toml`
-  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml`
+  - `experiments/configs/datasets/hdfs_wuyifan18_deeplog_preprocessed.toml`
+  - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
+  - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
+  - `experiments/configs/datasets/openstack_deeplog_preprocessed.toml`
 - BGL:
   - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
   - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`

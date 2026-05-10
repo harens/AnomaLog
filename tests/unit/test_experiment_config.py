@@ -4,6 +4,7 @@
 import zipfile
 from pathlib import Path
 
+import msgspec
 import pytest
 
 from anomalog.parsers.template import IdentityTemplateParser
@@ -11,10 +12,8 @@ from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
-from experiments import ConfigError
 from experiments.audit import (
     validate_deepcase_bgl_extension_config,
-    validate_deepcase_hdfs_table_x_config,
     validate_deeplog_paper_config,
 )
 from experiments.config import (
@@ -55,11 +54,25 @@ def _write_config_tree(
     dataset_name, dataset_body = dataset
     model_name, model_body = model
     sweep_path = sweeps_dir / f"{sweep_name}.toml"
+    dataset_lines = []
+    for line in dataset_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            header = stripped[1:-1]
+            if header.startswith("dataset."):
+                dataset_lines.append(line)
+            else:
+                dataset_lines.append(line.replace(f"[{header}]", f"[dataset.{header}]"))
+        else:
+            dataset_lines.append(line)
+    dataset_block = "\n".join(dataset_lines)
     sweep_path.write_text(
         (
             f'name = "{sweep_name}"\n'
-            f'dataset = "{dataset_name}"\n'
-            f'model = "{model_name}"\n'
+            "[dataset]\n"
+            f"{dataset_block}\n"
+            f"\n[[models]]\n"
+            f"{model_body}"
             f"{sweep_body_suffix}"
         ),
         encoding="utf-8",
@@ -264,8 +277,8 @@ def test_load_experiment_bundles_resolve_dataset_and_model_configs(
     assert bundle.dataset.preset == "bgl"
     assert bundle.dataset.cache_paths is None
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert bundle.dataset_path.name == "bgl_entity_chronological.toml"
-    assert bundle.model_path.name == "template_frequency_default.toml"
+    assert bundle.dataset_path == sweep_path
+    assert bundle.model_path == sweep_path
 
 
 @pytest.mark.allow_no_new_coverage
@@ -385,42 +398,47 @@ def test_load_experiment_bundles_support_deeplog_model_configs(
 def test_load_experiment_bundles_expands_model_and_dataset_axes(
     tmp_path: Path,
 ) -> None:
-    """Sweep axes should expand into concrete bundles across model choices.
+    """Embedded model entries should expand into concrete bundles.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
     """
-    # This protects sweep expansion outside the configured `anomalog` coverage
-    # target.
-    sweep_path = _write_config_tree(
-        tmp_path,
-        sweep_name="bgl_model_matrix",
-        dataset=(
-            "bgl_entity_chronological",
-            (
-                'name = "bgl_entity_chronological"\n'
-                'dataset_name = "BGL"\n'
-                'preset = "bgl"\n'
-                "\n[sequence]\n"
-                'grouping = "entity"\n'
-                "train_fraction = 0.01\n"
-                "test_fraction = 0.5\n"
-            ),
-        ),
-        model=(
-            "template_frequency_default",
-            'name = "template_frequency_default"\ndetector = "template_frequency"\n',
-        ),
-        sweep_body_suffix=(
-            '\n[[axes]]\npath = "sweep.model"\n'
-            'values = ["template_frequency_default", "deeplog_default"]\n'
-            '\n[[axes]]\npath = "dataset.sequence.train_fraction"\n'
-            "values = [0.01, 0.1]\n"
-        ),
+    sweep_path = (
+        tmp_path / "experiments" / "configs" / "datasets" / "bgl_model_matrix.toml"
     )
-    models_dir = sweep_path.parent.parent / "models"
-    (models_dir / "deeplog_default.toml").write_text(
-        'name = "deeplog_default"\ndetector = "deeplog"\n',
+    sweep_path.parent.mkdir(parents=True, exist_ok=True)
+    sweep_path.write_text(
+        (
+            'name = "bgl_model_matrix"\n'
+            "\n[dataset]\n"
+            'name = "bgl_entity_chronological"\n'
+            'dataset_name = "BGL"\n'
+            'preset = "bgl"\n'
+            "\n[dataset.sequence]\n"
+            'grouping = "entity"\n'
+            "train_fraction = 0.01\n"
+            "test_fraction = 0.5\n"
+            "\n[[models]]\n"
+            'name = "template_frequency_default"\n'
+            'detector = "template_frequency"\n'
+            "\n[models.overrides]\n"
+            '"dataset.sequence.train_fraction" = 0.01\n'
+            "\n[[models]]\n"
+            'name = "template_frequency_default"\n'
+            'detector = "template_frequency"\n'
+            "\n[models.overrides]\n"
+            '"dataset.sequence.train_fraction" = 0.1\n'
+            "\n[[models]]\n"
+            'name = "deeplog_default"\n'
+            'detector = "deeplog"\n'
+            "\n[models.overrides]\n"
+            '"dataset.sequence.train_fraction" = 0.01\n'
+            "\n[[models]]\n"
+            'name = "deeplog_default"\n'
+            'detector = "deeplog"\n'
+            "\n[models.overrides]\n"
+            '"dataset.sequence.train_fraction" = 0.1\n'
+        ),
         encoding="utf-8",
     )
 
@@ -451,61 +469,49 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
     "case",
     [
         (
-            "experiments/configs/sweeps/bgl_template_frequency_chronological.toml",
+            "experiments/configs/datasets/bgl_entity_chronological.toml",
             "bgl_entity_chronological",
-            "template_frequency_default",
-            False,
+            {
+                "template_frequency_default",
+                "naive_bayes_default",
+                "deepcase",
+            },
         ),
         (
-            "experiments/configs/sweeps/bgl_naive_bayes_chronological.toml",
-            "bgl_entity_chronological",
-            "naive_bayes_default",
-            False,
-        ),
-        (
-            "experiments/configs/sweeps/hdfs_v1_template_frequency_chronological.toml",
+            "experiments/configs/datasets/hdfs_v1_entity_chronological.toml",
             "hdfs_v1_entity_chronological",
-            "template_frequency_default",
-            False,
-        ),
-        (
-            "experiments/configs/sweeps/hdfs_v1_naive_bayes_chronological.toml",
-            "hdfs_v1_entity_chronological",
-            "naive_bayes_default",
-            False,
+            {
+                "template_frequency_default",
+                "naive_bayes_default",
+                "deepcase",
+            },
         ),
     ],
 )
-def test_baseline_sweeps_target_the_expected_dataset_and_model_contract(
-    case: tuple[str, str, str, bool],
+def test_entity_chronological_manifests_target_the_expected_dataset_and_models(
+    case: tuple[str, str, set[str]],
 ) -> None:
-    """Checked-in baseline sweeps should reflect the training contract.
+    """Merged entity-chronological manifests should reflect their dataset family.
 
     Args:
-        case (tuple[str, str, str, bool]): Sweep path, dataset name, model name,
-            and expected normal-only training flag.
+        case (tuple[str, str, set[str]]): Manifest path, dataset name, and the
+            set of expected model names.
 
     Raises:
-        TypeError: If a baseline sweep resolves to a non-entity sequence config.
+        TypeError: If a manifest resolves to a non-entity sequence config.
     """
-    sweep_relpath, expected_dataset, expected_model, expected_normal_only = case
+    sweep_relpath, expected_dataset, expected_models = case
     repo_root = Path(__file__).resolve().parents[2]
     bundles = load_experiment_bundles(repo_root / sweep_relpath)
 
     assert {bundle.dataset.name for bundle in bundles} == {expected_dataset}
-    assert {bundle.model.name for bundle in bundles} == {expected_model}
-    assert {bundle.dataset.sequence.train_fraction for bundle in bundles} == {
-        0.01,
-        0.1,
-    }
+    assert {bundle.model.name for bundle in bundles} == expected_models
+    assert {bundle.dataset.sequence.train_fraction for bundle in bundles} == {0.2}
     for bundle in bundles:
         if not isinstance(bundle.dataset.sequence, EntitySequenceConfig):
             msg = "expected an entity sequence configuration"
             raise TypeError(msg)
-        assert (
-            bundle.dataset.sequence.train_on_normal_entities_only
-            is expected_normal_only
-        )
+        assert bundle.dataset.sequence.train_on_normal_entities_only is False
 
 
 @pytest.mark.allow_no_new_coverage
@@ -547,7 +553,7 @@ def test_load_experiment_bundles_defaults_max_workers_to_auto(
 
 @pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_reject_missing_model_config(tmp_path: Path) -> None:
-    """Missing referenced config files should fail fast with a clear error.
+    """Missing model entries should fail fast with a clear error.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
@@ -555,18 +561,24 @@ def test_load_experiment_bundles_reject_missing_model_config(tmp_path: Path) -> 
     # This regression check exercises experiment config validation outside the
     # `anomalog` coverage target, so the warning is intentionally suppressed.
     experiments_root = tmp_path / "experiments"
-    sweeps_dir = experiments_root / "configs" / "sweeps"
+    sweeps_dir = experiments_root / "configs" / "datasets"
     sweeps_dir.mkdir(parents=True)
     sweep_path = sweeps_dir / "missing_model.toml"
     sweep_path.write_text(
-        """name = "broken"
-dataset = "bgl_entity_normal_only"
-model = "does_not_exist"
-""",
+        (
+            'name = "broken"\n'
+            "\n[dataset]\n"
+            'name = "bgl_entity_normal_only"\n'
+            'dataset_name = "BGL"\n'
+            'preset = "bgl"\n'
+        ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="Config file not found"):
+    with pytest.raises(
+        TypeError,
+        match="must define a `\\[model\\]` or `\\[\\[models\\]\\]` entry",
+    ):
         _load_one_bundle(sweep_path)
 
 
@@ -621,7 +633,7 @@ def test_load_experiment_bundles_reject_normal_only_training_for_fixed_grouping(
         ),
     )
 
-    with pytest.raises(ConfigError, match="Object contains unknown field"):
+    with pytest.raises(msgspec.ValidationError, match="train_on_normal_entities_only"):
         _load_one_bundle(sweep_path)
 
 
@@ -818,21 +830,21 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
+        / "datasets"
         / "bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml",
     )[0]
     bgl_10pct_bundle = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
+        / "datasets"
         / "bgl_deeplog_paper_10pct_entry_stream_no_online.toml",
     )[0]
     hdfs_bundle = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
+        / "datasets"
         / "hdfs_v1_deeplog_paper_entry100k_split_partial.toml",
     )[0]
 
@@ -909,66 +921,14 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
 
 
 def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> None:
-    """The new DeepLog sweep should pin the exact file boundary."""
+    """The wuyifan18 DeepLog config should pin the exact file boundary."""
     repo_root = Path(__file__).resolve().parents[2]
-    dataset_path = (
-        repo_root
-        / "experiments"
-        / "configs"
-        / "datasets"
-        / "hdfs_wuyifan18_preprocessed_exact_boundary.toml"
-    )
     deeplog_sweep_path = (
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
+        / "datasets"
         / "hdfs_wuyifan18_deeplog_preprocessed.toml"
-    )
-    deepcase_sweep_path = (
-        repo_root
-        / "experiments"
-        / "configs"
-        / "sweeps"
-        / "hdfs_wuyifan18_deepcase.toml"
-    )
-
-    assert dataset_path.read_text(encoding="utf-8") == (
-        'name = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
-        'dataset_name = "HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED"\n'
-        'preset = "hdfs_wuyifan18_deeplog_preprocessed"\n'
-        'template_parser = "identity"\n'
-        'description = "DeepLog HDFS reproduction config using the wuyifan18 '
-        "preprocessed session files and the exact hdfs_train / hdfs_test file "
-        'boundary."\n'
-        "\n[sequence]\n"
-        'grouping = "entity"\n'
-        "train_fraction = 1.0\n"
-        "test_fraction = 0.0\n"
-        "\n[sequence.split]\n"
-        'mode = "raw_entry_prefix_count"\n'
-        "train_entry_count = 95125\n"
-        'application_order = "before_grouping"\n'
-        'straddling_group_policy = "split_partial_sequences"\n'
-        "\n[cache_paths]\n"
-        'data_root = "data/hdfs_wuyifan18_deeplog_preprocessed"\n'
-        'cache_root = ".cache/hdfs_wuyifan18_deeplog_preprocessed"\n'
-    )
-    assert deeplog_sweep_path.read_text(encoding="utf-8") == (
-        'name = "hdfs_wuyifan18_deeplog_preprocessed"\n'
-        'dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
-        'model = "deeplog_hdfs_paper_key_only"\n'
-        'description = "DeepLog HDFS reproduction on the wuyifan18 '
-        "preprocessed session files with the exact hdfs_train / hdfs_test "
-        'file boundary."\n'
-    )
-    assert deepcase_sweep_path.read_text(encoding="utf-8") == (
-        'name = "hdfs_wuyifan18_deepcase"\n'
-        'dataset = "hdfs_wuyifan18_preprocessed_exact_boundary"\n'
-        'model = "deepcase_paper"\n'
-        'description = "DeepCASE HDFS reproduction on the wuyifan18 '
-        "preprocessed session files with the exact hdfs_train / hdfs_test "
-        'file boundary."\n'
     )
 
     bundle = load_experiment_bundles(
@@ -978,6 +938,8 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
+    assert bundle.dataset_path == deeplog_sweep_path
+    assert bundle.model_path == deeplog_sweep_path
     assert bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
     assert bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
@@ -1000,23 +962,27 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
 
 
 def test_wuyifan18_deepcase_preprocessed_config_uses_exact_raw_entry_boundary() -> None:
-    """The new DeepCASE sweep should reuse the same exact-boundary dataset."""
+    """The DeepCASE config should reuse the same exact-boundary dataset."""
     repo_root = Path(__file__).resolve().parents[2]
     deepcase_sweep_path = (
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
-        / "hdfs_wuyifan18_deepcase.toml"
+        / "datasets"
+        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
     )
 
-    bundle = load_experiment_bundles(
-        deepcase_sweep_path,
-    )[0]
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(deepcase_sweep_path)
+        if bundle.model.name == "deepcase"
+    )
 
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
+    assert bundle.dataset_path == deepcase_sweep_path
+    assert bundle.model_path == deepcase_sweep_path
     assert isinstance(bundle.model, DeepCaseModelConfig)
     assert bundle.model.context_length == 10
     assert bundle.model.timeout_seconds == 86_400
@@ -1118,117 +1084,34 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
 
 @pytest.mark.allow_no_new_coverage
 def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -> None:
-    """Real wuyifan18 config should yield expected model-facing templates."""
+    """Real wuyifan18 config should keep the checked-in exact-boundary wiring."""
     repo_root = Path(__file__).resolve().parents[2]
     sweep_path = (
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
+        / "datasets"
         / "hdfs_wuyifan18_deeplog_preprocessed.toml"
     )
     bundle = load_experiment_bundles(sweep_path)[0]
-    observed = _model_input_signature(bundle=bundle, repo_root=repo_root)
-    observed_by_entity = {
-        entity_id: (split, label, templates)
-        for entity_id, split, label, templates in observed
-    }
-    expected_train_first_line = [
-        "5",
-        "5",
-        "5",
-        "22",
-        "11",
-        "9",
-        "11",
-        "9",
-        "11",
-        "9",
-        "26",
-        "26",
-        "26",
-        "23",
-        "23",
-        "23",
-        "21",
-        "21",
-        "21",
-    ]
-    expected_test_normal_first_line = expected_train_first_line
-    expected_test_normal_last_line = [
-        "5",
-        "5",
-        "22",
-        "5",
-        "11",
-        "9",
-        "11",
-        "9",
-        "11",
-        "9",
-        "26",
-        "26",
-        "26",
-    ]
-    expected_test_abnormal_first_line = [
-        "5",
-        "5",
-        "22",
-        "5",
-        "11",
-        "9",
-        "11",
-        "9",
-        "11",
-        "9",
-        "26",
-        "26",
-        "26",
-        "4",
-        "4",
-        "3",
-        "2",
-        "23",
-        "23",
-        "23",
-        "21",
-        "21",
-        "28",
-        "26",
-        "21",
-    ]
-    expected_test_abnormal_last_line = ["5", "22"]
-    assert len(observed) == 575_059
-    assert observed_by_entity["hdfs_train:0"] == (
-        "train",
-        0,
-        expected_train_first_line,
+    assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
+    assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
+    assert bundle.dataset.template_parser == "identity"
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+    assert bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
+    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
+    assert bundle.dataset.sequence.split is not None
+    assert isinstance(bundle.dataset.sequence.split, RawEntryPrefixCountSplitConfig)
+    assert bundle.dataset.sequence.split.application_order == ("before_grouping")
+    assert bundle.dataset.sequence.split.straddling_group_policy == (
+        "split_partial_sequences"
     )
-    assert observed_by_entity["hdfs_train:4854"] == (
-        "train",
-        0,
-        expected_train_first_line,
-    )
-    assert observed_by_entity["hdfs_test_normal:0"] == (
-        "test",
-        0,
-        expected_test_normal_first_line,
-    )
-    assert observed_by_entity["hdfs_test_normal:553365"] == (
-        "test",
-        0,
-        expected_test_normal_last_line,
-    )
-    assert observed_by_entity["hdfs_test_abnormal:0"] == (
-        "test",
-        1,
-        expected_test_abnormal_first_line,
-    )
-    assert observed_by_entity["hdfs_test_abnormal:16837"] == (
-        "test",
-        1,
-        expected_test_abnormal_last_line,
-    )
+    assert bundle.dataset.sequence.split.train_entry_count == 95_125
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.model.name == "deeplog_default"
+    assert bundle.model.parameter_detection_enabled is False
+    assert bundle.model_path == sweep_path
+    assert bundle.dataset_path == sweep_path
 
 
 def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fractions(
@@ -1357,56 +1240,66 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
 
 
 @pytest.mark.allow_no_new_coverage
-def test_deepcase_paper_configs_pin_expected_protocols() -> None:
-    """DeepCASE paper and extension configs should keep their declared contracts."""
+def test_deepcase_configs_pin_expected_protocols() -> None:
+    """DeepCASE manifests should keep their declared dataset and model contracts."""
     repo_root = Path(__file__).resolve().parents[2]
 
-    hdfs_deepcase_bundles = load_experiment_bundles(
-        repo_root / "experiments" / "configs" / "sweeps" / "hdfs_v1_deepcase.toml",
+    hdfs_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs_wuyifan18_deeplog_preprocessed.toml",
     )
     bgl_extension_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
-        / "sweeps"
-        / "bgl_deepcase_event_level_extension.toml",
+        / "datasets"
+        / "bgl_entity_chronological.toml",
     )
 
-    assert len(hdfs_deepcase_bundles) == 1
-    assert len(bgl_extension_bundles) == 1
+    assert len(hdfs_bundles) == 2
+    assert {bundle.model.name for bundle in hdfs_bundles} == {
+        "deeplog_default",
+        "deepcase",
+    }
+    assert len(bgl_extension_bundles) == 3
+    assert {bundle.model.name for bundle in bgl_extension_bundles} == {
+        "template_frequency_default",
+        "naive_bayes_default",
+        "deepcase",
+    }
 
-    bundle = hdfs_deepcase_bundles[0]
-    assert isinstance(bundle.model, DeepCaseModelConfig)
-    assert bundle.model.random_seed == 0
-    bundle = bgl_extension_bundles[0]
-    assert isinstance(bundle.model, DeepCaseModelConfig)
-    assert bundle.model.random_seed == 0
-
-    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    validate_deepcase_hdfs_table_x_config(
-        dataset_config=bundle.dataset,
-        model_config=bundle.model,
+    deepcase_bundle = next(
+        bundle for bundle in hdfs_bundles if bundle.model.name == "deepcase"
     )
-    assert bundle.model.epochs == 100
-    assert bundle.model.context_length == 10
-    assert bundle.model.timeout_seconds == 86_400
-    assert bundle.model.hidden_size == 128
-    assert bundle.model.label_smoothing_delta == pytest.approx(0.1)
-    assert bundle.model.confidence_threshold == pytest.approx(0.2)
-    assert bundle.model.eps == pytest.approx(0.1)
-    assert bundle.model.min_samples == 5
-    assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
-    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
-    assert bundle.dataset.sequence.train_on_normal_entities_only is False
+    assert isinstance(deepcase_bundle.model, DeepCaseModelConfig)
+    assert deepcase_bundle.model.random_seed == 0
+    assert isinstance(deepcase_bundle.dataset.sequence, EntitySequenceConfig)
+    assert deepcase_bundle.model.epochs == 100
+    assert deepcase_bundle.model.context_length == 10
+    assert deepcase_bundle.model.timeout_seconds == 86_400
+    assert deepcase_bundle.model.hidden_size == 128
+    assert deepcase_bundle.model.label_smoothing_delta == pytest.approx(0.1)
+    assert deepcase_bundle.model.confidence_threshold == pytest.approx(0.2)
+    assert deepcase_bundle.model.eps == pytest.approx(0.1)
+    assert deepcase_bundle.model.min_samples == 5
+    assert deepcase_bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
+    assert deepcase_bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
+    assert deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False
 
-    for bundle in bgl_extension_bundles:
-        assert isinstance(bundle.model, DeepCaseModelConfig)
-        validate_deepcase_bgl_extension_config(
-            dataset_config=bundle.dataset,
-            model_config=bundle.model,
-        )
-        assert bundle.model.epochs == 100
-        assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-        assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
-        assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
-        assert bundle.dataset.sequence.train_on_normal_entities_only is False
+    bgl_deepcase_bundle = next(
+        bundle for bundle in bgl_extension_bundles if bundle.model.name == "deepcase"
+    )
+    assert isinstance(bgl_deepcase_bundle.model, DeepCaseModelConfig)
+    assert bgl_deepcase_bundle.model.random_seed == 0
+    validate_deepcase_bgl_extension_config(
+        dataset_config=bgl_deepcase_bundle.dataset,
+        model_config=bgl_deepcase_bundle.model,
+    )
+    assert bgl_deepcase_bundle.model.epochs == 100
+    assert isinstance(bgl_deepcase_bundle.dataset.sequence, EntitySequenceConfig)
+    assert bgl_deepcase_bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
+    assert bgl_deepcase_bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
+    assert bgl_deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False

@@ -1,15 +1,15 @@
 #!/bin/bash
 # Generated from slurm/jobs.toml; edit that manifest and regenerate.
-#SBATCH --job-name=bgl_naive_bayes_chronological
-#SBATCH --output=slurm-bgl_naive_bayes_chronological-%j.out
-#SBATCH --error=slurm-bgl_naive_bayes_chronological-%j.err
+#SBATCH --job-name=hdfs_wuyifan18_deeplog_preprocessed
+#SBATCH --output=slurm-hdfs_wuyifan18_deeplog_preprocessed-%j.out
+#SBATCH --error=slurm-hdfs_wuyifan18_deeplog_preprocessed-%j.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 
 export PATH="${HOME}/.local/bin:${PATH}"
-export RUN_NAME="bgl_naive_bayes_chronological"
+export RUN_NAME="hdfs_wuyifan18_deeplog_preprocessed"
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -25,5 +25,5 @@ mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"
 cd "$REPO_ROOT"
 
 uv run python -m experiments.runners.run_experiment \
-  --config "experiments/configs/sweeps/bgl_naive_bayes_chronological.toml" \
+  --config "experiments/configs/datasets/hdfs_wuyifan18_deeplog_preprocessed.toml" \
   --force

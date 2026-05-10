@@ -1,15 +1,15 @@
 #!/bin/bash
 # Generated from slurm/jobs.toml; edit that manifest and regenerate.
-#SBATCH --job-name=hdfs_v1_deepcase
-#SBATCH --output=slurm-hdfs_v1_deepcase-%j.out
-#SBATCH --error=slurm-hdfs_v1_deepcase-%j.err
+#SBATCH --job-name=bgl_entity_chronological
+#SBATCH --output=slurm-bgl_entity_chronological-%j.out
+#SBATCH --error=slurm-bgl_entity_chronological-%j.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 
 export PATH="${HOME}/.local/bin:${PATH}"
-export RUN_NAME="hdfs_v1_deepcase"
+export RUN_NAME="bgl_entity_chronological"
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -25,5 +25,5 @@ mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"
 cd "$REPO_ROOT"
 
 uv run python -m experiments.runners.run_experiment \
-  --config "experiments/configs/sweeps/hdfs_v1_deepcase.toml" \
+  --config "experiments/configs/datasets/bgl_entity_chronological.toml" \
   --force

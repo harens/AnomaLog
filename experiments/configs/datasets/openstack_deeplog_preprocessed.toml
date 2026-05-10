@@ -1,0 +1,33 @@
+name = "openstack_deeplog_preprocessed"
+description = "DeepLog OpenStack reproduction on LogHub OpenStack.tar.gz with Spell parsing, 1-minute sessions, and file-boundary train/test splits."
+
+[dataset]
+name = "openstack_deeplog_preprocessed"
+dataset_name = "OPENSTACK_DEEPLOG_PREPROCESSED"
+preset = "openstack_deeplog_preprocessed"
+template_parser = "spell"
+description = "DeepLog OpenStack reproduction config using Spell (tau=0.5), 1-minute sessioning, and the normal1 / normal2 / abnormal file boundary."
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 1.0
+test_fraction = 0.0
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_count"
+train_entry_count = 831
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[dataset.cache_paths]
+data_root = "data/openstack_deeplog_preprocessed"
+cache_root = ".cache/openstack_deeplog_preprocessed"
+
+[[models]]
+ref = "deeplog_default"
+
+[models.overrides]
+"model.parameter_detection_enabled" = false
+
+[[models]]
+ref = "deepcase"

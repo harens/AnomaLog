@@ -1,3 +1,32 @@
 name = "deeplog_paper_defaults"
-dataset = "deeplog_dataset"
-model = "deeplog"
+
+[dataset]
+name = "deeplog_dataset"
+dataset_name = "deeplog-paper-fixture"
+structured_parser = "bgl"
+
+[dataset.source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/deeplog_bgl.log"
+
+evaluation_unit = "continuous_event_stream"
+
+[dataset.cache_paths]
+data_root = "./data"
+cache_root = "./cache"
+
+[dataset.sequence]
+grouping = "chronological_stream"
+chunk_size = 100000
+train_fraction = 0.1
+test_fraction = 0.9
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_normal_fraction"
+train_normal_entry_fraction = 0.1
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[[models]]
+ref = "deeplog"

@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    runtime_checkable,
+)
 
 import msgspec
 
@@ -754,6 +763,27 @@ class SweepAxisConfig(msgspec.Struct, frozen=True):
         _validate_override_path(self.path)
 
 
+@runtime_checkable
+class ExperimentRunConfig(Protocol):
+    """Shared runtime contract for dataset-owned experiment matrices.
+
+    Attributes:
+        name (str): Human-readable run name.
+        dataset (Any): Decoded dataset config.
+        models (list[Any]): Concrete model run entries embedded in the file.
+        results_root (Path): Root directory for run outputs.
+        description (str | None): Optional free-text run description.
+        max_workers (WorkerCount): Maximum concurrent concrete runs.
+    """
+
+    name: str
+    dataset: Any
+    models: list[Any]
+    results_root: Path
+    description: str | None
+    max_workers: WorkerCount
+
+
 class SweepConfig(msgspec.Struct, frozen=True):
     """Top-level experiment sweep configuration.
 
@@ -809,7 +839,7 @@ class SweepConfig(msgspec.Struct, frozen=True):
 
 
 class ExperimentBundle(msgspec.Struct, frozen=True):
-    """Resolved concrete run config derived from a sweep.
+    """Resolved concrete run config derived from a sweep or inline scenario.
 
     Attributes:
         experiments_root (Path): Root directory containing experiment configs.
@@ -817,7 +847,7 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
         sweep_path (Path): Resolved sweep config path.
         dataset_path (Path): Resolved dataset config path.
         model_path (Path): Resolved model config path.
-        sweep (SweepConfig): Decoded sweep config.
+        sweep (ExperimentRunConfig): Decoded sweep or inline scenario config.
         dataset (DatasetVariantConfig): Decoded dataset config.
         model (ExperimentModelConfig): Decoded model config.
         concrete_name (str): Deterministic label for the concrete run within the
@@ -831,7 +861,7 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
     sweep_path: Path
     dataset_path: Path
     model_path: Path
-    sweep: SweepConfig
+    sweep: ExperimentRunConfig
     dataset: DatasetVariantConfig
     model: ExperimentModelConfig
     concrete_name: str

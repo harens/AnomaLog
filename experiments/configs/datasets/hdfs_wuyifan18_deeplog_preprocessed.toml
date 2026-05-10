@@ -1,0 +1,33 @@
+name = "hdfs_wuyifan18_deeplog_preprocessed"
+description = "DeepLog and DeepCASE HDFS reproduction on the wuyifan18 preprocessed session files with the exact hdfs_train / hdfs_test file boundary."
+
+[dataset]
+name = "hdfs_wuyifan18_preprocessed_exact_boundary"
+dataset_name = "HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED"
+preset = "hdfs_wuyifan18_deeplog_preprocessed"
+template_parser = "identity"
+description = "DeepLog and DeepCASE HDFS reproduction config using the wuyifan18 preprocessed session files and the exact hdfs_train / hdfs_test file boundary."
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 1.0
+test_fraction = 0.0
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_count"
+train_entry_count = 95125
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[dataset.cache_paths]
+data_root = "data/hdfs_wuyifan18_deeplog_preprocessed"
+cache_root = ".cache/hdfs_wuyifan18_deeplog_preprocessed"
+
+[[models]]
+ref = "deeplog_default"
+
+[models.overrides]
+"model.parameter_detection_enabled" = false
+
+[[models]]
+ref = "deepcase"

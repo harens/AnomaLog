@@ -26,10 +26,10 @@ def _prepare_run_tree(tmp_path: Path) -> Path:
     model_config = tmp_path / "experiments" / "configs" / "models" / "deepcase.toml"
     log_path = tmp_path / "logs" / "deepcase_fixture.log"
 
-    log_path.parent.mkdir(parents=True)
-    sweep_config.parent.mkdir(parents=True)
-    dataset_config.parent.mkdir(parents=True)
-    model_config.parent.mkdir(parents=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    sweep_config.parent.mkdir(parents=True, exist_ok=True)
+    dataset_config.parent.mkdir(parents=True, exist_ok=True)
+    model_config.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(FIXTURE_LOG, log_path)
     shutil.copy2(FIXTURE_ROOT / "deepcase_run.toml", sweep_config)

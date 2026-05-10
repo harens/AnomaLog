@@ -37,7 +37,8 @@ extensions:
 - Manifest reporting for parameter-model coverage and per-template feature
   counts.
 - Explicit key-only HDFS reproduction support via
-  `parameter_detection_enabled = false` on the paper-reproduction model config.
+  `parameter_detection_enabled = false` in the dataset manifest overrides for
+  the base `deeplog_default` model.
 - Detector-owned next-event diagnostics derived from the key model's ranked
   predictions. These diagnostics are separate from anomaly scoring and are
   exposed in run metrics for the full test scoring pass.
@@ -167,8 +168,6 @@ This section keeps the short version in the main DeepLog note:
 - HDFS:
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
-  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_assign_first_full.toml`
-  - `experiments/configs/sweeps/hdfs_v1_deeplog_paper_entry100k_split_partial_key_only.toml`
 - BGL:
   - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
   - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`

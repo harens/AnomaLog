@@ -1,3 +1,21 @@
 name = "tiny_nb_run"
-dataset = "tiny_dataset_nb"
-model = "naive_bayes"
+
+[dataset]
+name = "tiny_dataset_nb"
+dataset_name = "tiny-bgl-naive-bayes"
+structured_parser = "bgl"
+
+[dataset.source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/tiny_bgl_happy_path.log"
+
+[dataset.sequence]
+grouping = "fixed"
+window_size = 4
+step = 2
+train_fraction = 0.67
+test_fraction = 0.25
+
+[[models]]
+ref = "naive_bayes"
