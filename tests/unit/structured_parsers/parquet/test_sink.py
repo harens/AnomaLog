@@ -23,6 +23,7 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
+    ENTITY_BUCKET_FIELD,
     EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
@@ -298,6 +299,26 @@ def test_iter_structured_lines_reads_rows_from_real_parquet_dataset(
     rows = list(sink.iter_structured_lines()())
 
     assert rows == WINDOW_AND_BATCH_ROWS[2:4]
+
+
+def test_parquet_dataset_schema_exposes_timestamp_and_partition_fields(
+    tmp_path: Path,
+) -> None:
+    """The materialised parquet dataset should advertise the full row schema.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        WINDOW_AND_BATCH_ROWS[2:4],
+    )
+
+    dataset = sink._dataset()  # noqa: SLF001
+
+    assert TIMESTAMP_FIELD in dataset.schema.names
+    assert ENTITY_BUCKET_FIELD in dataset.schema.names
 
 
 def test_iter_structured_lines_projection_applies_defaults_from_real_dataset(

@@ -32,6 +32,7 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
     ENTITY_CHRONOLOGY_INDEX_FILENAME,
+    STRUCTURED_BATCH_SCHEMA,
     EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
@@ -304,9 +305,14 @@ class ParquetStructuredSink(StructuredSink):
         Returns:
             ds.Dataset: PyArrow dataset over the structured parquet cache.
         """
+        # Give Arrow the full row schema up front so projection and filter
+        # binding do not depend on fragment inference over the hive partition
+        # directory structure. The materialised dataset always carries these
+        # structured fields, even when a scan only asks for a subset.
         return ds.dataset(
             self.structured_data_cache(self.dataset_name),
             format="parquet",
+            schema=STRUCTURED_BATCH_SCHEMA,
             exclude_invalid_files=True,
             partitioning=ds.partitioning(
                 schema=pa.schema([pa.field(ENTITY_BUCKET_FIELD, pa.int32())]),
