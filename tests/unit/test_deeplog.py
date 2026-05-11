@@ -1285,7 +1285,7 @@ def test_deeplog_next_event_prediction_counts_warmup_for_one_continuous_stream()
 
 
 def test_deeplog_next_event_prediction_counts_independent_segments() -> None:
-    """Independent segments should each pay their own DeepLog warm-up cost."""
+    """Independent segments should include the short-session padding decision."""
     detector = _deeplog_next_event_detector(history_size=10)
 
     for length in [100, 50, 5]:
@@ -1302,14 +1302,14 @@ def test_deeplog_next_event_prediction_counts_independent_segments() -> None:
 
     assert next_event_prediction is not None
     assert next_event_prediction.totals.events_seen == 155
-    assert next_event_prediction.totals.events_eligible == 130
-    assert next_event_prediction.totals.coverage == pytest.approx(130 / 155)
-    assert next_event_prediction.exclusions.insufficient_history == 25
+    assert next_event_prediction.totals.events_eligible == 131
+    assert next_event_prediction.totals.coverage == pytest.approx(131 / 155)
+    assert next_event_prediction.exclusions.insufficient_history == 24
     assert next_event_prediction.segment_diagnostics is not None
     assert next_event_prediction.segment_diagnostics.segment_count == 3
     assert (
         next_event_prediction.segment_diagnostics.expected_insufficient_history_from_segments
-        == 25
+        == 24
     )
 
 
