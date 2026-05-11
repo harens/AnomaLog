@@ -954,10 +954,10 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert spec.template_parser is IdentityTemplateParser
 
 
-def test_wuyifan18_deepcase_preprocessed_config_uses_exact_raw_entry_boundary() -> None:
-    """The DeepCASE config should reuse the same exact-boundary dataset."""
+def test_wuyifan18_preprocessed_manifest_exposes_only_the_deeplog_bundle() -> None:
+    """The checked-in HDFS manifest should only expose the DeepLog bundle."""
     repo_root = Path(__file__).resolve().parents[2]
-    deepcase_sweep_path = (
+    sweep_path = (
         repo_root
         / "experiments"
         / "configs"
@@ -965,21 +965,17 @@ def test_wuyifan18_deepcase_preprocessed_config_uses_exact_raw_entry_boundary() 
         / "hdfs_wuyifan18_deeplog_preprocessed.toml"
     )
 
-    bundle = next(
-        bundle
-        for bundle in load_experiment_bundles(deepcase_sweep_path)
-        if bundle.model.name == "deepcase"
-    )
+    bundles = load_experiment_bundles(sweep_path)
 
+    assert [bundle.model.name for bundle in bundles] == ["deeplog_default"]
+    bundle = bundles[0]
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
-    assert bundle.dataset_path == deepcase_sweep_path
-    assert bundle.model_path == deepcase_sweep_path
-    assert isinstance(bundle.model, DeepCaseModelConfig)
-    assert bundle.model.context_length == 10
-    assert bundle.model.timeout_seconds == 86_400
-    assert bundle.model.hidden_size == 128
+    assert bundle.dataset_path == sweep_path
+    assert bundle.model_path == sweep_path
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.model.name == "deeplog_default"
 
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
@@ -1188,25 +1184,25 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
             "openstack_train:2017-01-01 00:00",
             "train",
             0,
-            ["Build start", "Build done"],
+            ["INFO nova.compute Build start", "INFO nova.compute Build done"],
         ),
         (
             "openstack_train:2017-01-01 00:01",
             "train",
             0,
-            ["Delete start"],
+            ["INFO nova.compute Delete start"],
         ),
         (
             "openstack_test_normal:2017-01-01 00:02",
             "test",
             0,
-            ["Build start"],
+            ["INFO nova.compute Build start"],
         ),
         (
             "openstack_test_abnormal:2017-01-01 00:03",
             "test",
             1,
-            ["Libvirt error"],
+            ["INFO nova.compute Libvirt error"],
         ),
     ]
     split_signatures = [
@@ -1245,34 +1241,14 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl_entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 2
-    assert {bundle.model.name for bundle in hdfs_bundles} == {
-        "deeplog_default",
-        "deepcase",
-    }
+    assert len(hdfs_bundles) == 1
+    assert {bundle.model.name for bundle in hdfs_bundles} == {"deeplog_default"}
     assert len(bgl_extension_bundles) == 3
     assert {bundle.model.name for bundle in bgl_extension_bundles} == {
         "template_frequency_default",
         "naive_bayes_default",
         "deepcase",
     }
-
-    deepcase_bundle = next(
-        bundle for bundle in hdfs_bundles if bundle.model.name == "deepcase"
-    )
-    assert isinstance(deepcase_bundle.model, DeepCaseModelConfig)
-    assert deepcase_bundle.model.random_seed == 0
-    assert isinstance(deepcase_bundle.dataset.sequence, EntitySequenceConfig)
-    assert deepcase_bundle.model.epochs == 100
-    assert deepcase_bundle.model.context_length == 10
-    assert deepcase_bundle.model.timeout_seconds == 86_400
-    assert deepcase_bundle.model.hidden_size == 128
-    assert deepcase_bundle.model.label_smoothing_delta == pytest.approx(0.1)
-    assert deepcase_bundle.model.confidence_threshold == pytest.approx(0.2)
-    assert deepcase_bundle.model.eps == pytest.approx(0.1)
-    assert deepcase_bundle.model.min_samples == 5
-    assert isinstance(deepcase_bundle.dataset.sequence, EntitySequenceConfig)
-    assert deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False
 
     bgl_deepcase_bundle = next(
         bundle for bundle in bgl_extension_bundles if bundle.model.name == "deepcase"

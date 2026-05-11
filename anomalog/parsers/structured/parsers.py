@@ -252,9 +252,10 @@ class OpenStackDeepLogParser(StructuredParser):
 
     Input rows are expected in the derived-source format:
     `<split_name>\\t<label>\\t<raw_openstack_line>`.
-    The parser maps each row into the canonical structured schema and uses a
-    split-scoped one-minute bucket as the `entity_id`, matching the paper's
-    OpenStack minute sessioning workflow.
+    The parser maps each row into the canonical structured schema, retains the
+    log level and component in the message text, and uses a split-scoped
+    one-minute bucket as the `entity_id`, matching the paper's OpenStack
+    minute sessioning workflow.
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the built-in parser.
@@ -273,9 +274,9 @@ class OpenStackDeepLogParser(StructuredParser):
         (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
         (?P<pid>\S+)\s+
         (?P<level>[A-Z]+)\s+
-        (?P<component>\S+)\s+
-        \[(?P<addr>[^\]]*)\]\s+
-        (?P<content>.*?)
+        (?P<component>\S+)
+        (?:\s+\[(?P<addr>[^\]]*)\])?
+        (?:\s+(?P<content>.*))?
         \s*$
         """,
         re.VERBOSE,
@@ -325,7 +326,9 @@ class OpenStackDeepLogParser(StructuredParser):
         return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
             entity_id=entity_id,
-            untemplated_message_text=data["content"].strip(),
+            untemplated_message_text=(
+                f"{data['level']} {data['component']} {(data['content'] or '').strip()}"
+            ).strip(),
             anomalous=label,
         )
 

@@ -56,7 +56,10 @@ The checked-in dataset-manifest set is split by dataset family:
   file-boundary reproduction probe. It materialises LogHub's OpenStack archive,
   parses with Spell (`tau=0.5`), builds the DeepLog event-id vocabulary from
   `openstack_normal1.log`, and then evaluates `openstack_normal2.log` and
-  `openstack_abnormal.log` on the same exact boundary.
+  `openstack_abnormal.log` on the same exact boundary. The OpenStack parser
+  keeps the log level and component in the template input and now preserves
+  traceback and terminal error rows that only differ by the absence of an
+  address field.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix on entity-grouped

@@ -77,7 +77,50 @@ def test_openstack_deeplog_parser_groups_by_split_scoped_minute() -> None:
     assert parsed is not None
     assert parsed.entity_id == "openstack_train:2017-01-01 00:00"
     assert parsed.anomalous == 0
-    assert parsed.untemplated_message_text == "Build complete"
+    assert parsed.untemplated_message_text == "INFO nova.compute Build complete"
+
+
+@pytest.mark.parametrize(
+    ("raw_line", "expected_entity_id", "expected_message"),
+    [
+        (
+            (
+                "openstack_test_normal\t0\t"
+                "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
+                "2931 ERROR oslo_service.periodic_task "
+                "Traceback (most recent call last):"
+            ),
+            "openstack_test_normal:2017-05-16 03:19",
+            "ERROR oslo_service.periodic_task Traceback (most recent call last):",
+        ),
+        (
+            (
+                "openstack_test_abnormal\t1\t"
+                "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
+                "2931 ERROR oslo_service.periodic_task"
+            ),
+            "openstack_test_abnormal:2017-05-16 03:19",
+            "ERROR oslo_service.periodic_task",
+        ),
+    ],
+)
+def test_openstack_deeplog_parser_accepts_rows_without_addresses(
+    raw_line: str,
+    expected_entity_id: str,
+    expected_message: str,
+) -> None:
+    """OpenStack traceback and terminal error rows should still parse.
+
+    Args:
+        raw_line (str): Labelled OpenStack row to parse.
+        expected_entity_id (str): Minute-bucket entity id expected from the row.
+        expected_message (str): Message text expected after parsing.
+    """
+    parsed = OpenStackDeepLogParser().parse_line(raw_line)
+
+    assert parsed is not None
+    assert parsed.entity_id == expected_entity_id
+    assert parsed.untemplated_message_text == expected_message
 
 
 def test_structured_parser_registry_rejects_unknown_names() -> None:
