@@ -1454,6 +1454,39 @@ def test_deeplog_next_event_predictions_reset_after_run_metrics() -> None:
     )
 
 
+def test_predict_short_session_padding_fidelity_scores_last_event() -> None:
+    """Short-session fidelity mode should score one padded key decision."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=10,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            short_session_padding_fidelity=True,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    outcome = detector.predict(_sequence(templates=["A", "B", "D"]))
+
+    assert outcome.findings
+    assert outcome.findings[0].event_index == 2
+    assert outcome.findings[0].key_model_finding is not None
+
+
 def test_predict_flags_parameter_model_anomalies() -> None:
     """Sequence-level DeepLog output should fire when a parameter model fires."""
     detector = DeepLogDetector(

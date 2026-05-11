@@ -65,6 +65,11 @@ extensions:
 - Unknown target templates:
   treated as key-model anomalies because the trained vocabulary contains no
   probability for the observed template.
+- Short sessions (optional fidelity mode):
+  `short_session_padding_fidelity = true` enables one padded top-`g` key
+  decision for sessions shorter than `history_size + 1`, mirroring the
+  original DeepLog prediction script behaviour that pads short test sessions
+  before scoring.
 - Next-event diagnostics:
   default to `full_dataset` so the diagnostic output is directly comparable
   with DeepCASE. The diagnostic vocabulary policy is configurable on
@@ -143,6 +148,12 @@ This section keeps the short version in the main DeepLog note:
 
 - the reproduction configs now use generic split modes, not a DeepLog-only
   pipeline;
+- for the official preprocessed HDFS regime, split-file prefixes are now used
+  directly to assign train/test membership for entity sequences, avoiding an
+  extra raw-entry split indirection while keeping the same preset surface;
+- the same direct split-prefix assignment now applies to the preprocessed
+  OpenStack regime (`openstack_train`, `openstack_test_normal`,
+  `openstack_test_abnormal`) for the same reason;
 - `sequence.split.mode` supports `raw_entry_prefix_count`,
   `raw_entry_prefix_fraction`, and `raw_entry_prefix_normal_fraction`;
 - `sequence.split.application_order` makes split-before-grouping explicit;
