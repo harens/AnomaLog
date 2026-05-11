@@ -155,8 +155,8 @@ This section keeps the short version in the main DeepLog note:
   OpenStack regime (`openstack_train`, `openstack_test_normal`,
   `openstack_test_abnormal`) for the same reason;
 - the OpenStack parser now retains `level` and `component` in the template
-  input and accepts traceback/error continuation rows that omit the address
-  field, rather than dropping them as malformed;
+  input, groups by VM `instance_id`, and drops rows that do not expose a
+  session handle;
 - `sequence.split.mode` supports `raw_entry_prefix_count`,
   `raw_entry_prefix_fraction`, and `raw_entry_prefix_normal_fraction`;
 - `sequence.split.application_order` makes split-before-grouping explicit;

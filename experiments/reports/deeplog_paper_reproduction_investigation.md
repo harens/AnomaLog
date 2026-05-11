@@ -41,6 +41,48 @@ config; parameter-value detection remains available for the OpenStack-style
 diagnostic path, but the HDFS table in the paper reports the next-key detector
 only.
 
+## OpenStack
+
+The OpenStack evidence is split between the paper and the public
+reproduction code:
+
+- the paper states that OpenStack sessions are grouped by VM `instance_id`;
+- the public reproduction example in `nailo2c/deeplog` instead resamples the
+  parsed log stream into 1-minute buckets after Spell parsing;
+- the locally available LogHub `OpenStack.tar.gz` archive does not expose an
+  instance identifier on every row, so a strict paper-faithful parser can only
+  recover a subset of rows.
+
+The current repository therefore keeps the DeepLog OpenStack preset on the
+paper side: it groups by `instance_id` and skips rows that do not expose one.
+That is the more defensible interpretation of the paper, but it also means the
+local archive does not match the paper's quoted counts.
+
+Observed counts on the current archive with the strict instance-id parser:
+
+| Quantity | Count |
+| --- | ---: |
+| raw rows | 207,820 |
+| rows with an explicit instance token | 53,618 |
+| train entity groups | 557 |
+| normal test entity groups | 1,315 |
+| abnormal test entity groups | 198 |
+| total entity groups | 2,069 |
+
+Paper target counts:
+
+| Quantity | Paper |
+| --- | ---: |
+| train normal sessions | 831 |
+| test normal sessions | 5,990 |
+| test abnormal sessions | 453 |
+| vocabulary size | 40 |
+
+The gap is therefore dominated by dataset/source mismatch, not by the DeepLog
+scoring logic. The next faithful step would be to recover the exact paper corpus
+or a reconstruction that yields the target counts before tuning any detector
+behaviour.
+
 ## BGL
 
 Current data and paper counts:

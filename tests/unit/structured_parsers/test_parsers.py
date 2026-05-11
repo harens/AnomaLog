@@ -66,61 +66,44 @@ def test_structured_parser_registry_resolves_builtins() -> None:
     }
 
 
-def test_openstack_deeplog_parser_groups_by_split_scoped_minute() -> None:
-    """OpenStack parser should create one-minute split-scoped entity buckets."""
+def test_openstack_deeplog_parser_uses_instance_id_for_entity() -> None:
+    """OpenStack parser should prefer the VM instance id as the entity key."""
     parser = OpenStackDeepLogParser()
     parsed = parser.parse_line(
         "openstack_train\t0\t100 2017-01-01 00:00:30.000 1 INFO nova.compute "
-        "[instance-0001] Build complete",
+        "[instance: b9000564-fe1a-409b-b8cc-1e88b294cd1d] Build complete",
     )
 
     assert parsed is not None
-    assert parsed.entity_id == "openstack_train:2017-01-01 00:00"
+    assert parsed.entity_id == "b9000564-fe1a-409b-b8cc-1e88b294cd1d"
     assert parsed.anomalous == 0
     assert parsed.untemplated_message_text == "INFO nova.compute Build complete"
 
 
 @pytest.mark.parametrize(
-    ("raw_line", "expected_entity_id", "expected_message"),
+    "raw_line",
     [
         (
-            (
-                "openstack_test_normal\t0\t"
-                "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
-                "2931 ERROR oslo_service.periodic_task "
-                "Traceback (most recent call last):"
-            ),
-            "openstack_test_normal:2017-05-16 03:19",
-            "ERROR oslo_service.periodic_task Traceback (most recent call last):",
+            "openstack_test_normal\t0\t"
+            "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
+            "2931 ERROR oslo_service.periodic_task Traceback (most recent call last):"
         ),
         (
-            (
-                "openstack_test_abnormal\t1\t"
-                "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
-                "2931 ERROR oslo_service.periodic_task"
-            ),
-            "openstack_test_abnormal:2017-05-16 03:19",
-            "ERROR oslo_service.periodic_task",
+            "openstack_test_abnormal\t1\t"
+            "nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 03:19:45.356 "
+            "2931 ERROR oslo_service.periodic_task"
         ),
     ],
 )
-def test_openstack_deeplog_parser_accepts_rows_without_addresses(
+def test_openstack_deeplog_parser_skips_rows_without_instance_handles(
     raw_line: str,
-    expected_entity_id: str,
-    expected_message: str,
 ) -> None:
-    """OpenStack traceback and terminal error rows should still parse.
+    """OpenStack rows without an instance id should be skipped.
 
     Args:
-        raw_line (str): Labelled OpenStack row to parse.
-        expected_entity_id (str): Minute-bucket entity id expected from the row.
-        expected_message (str): Message text expected after parsing.
+        raw_line (str): Labelled OpenStack row lacking an instance id.
     """
-    parsed = OpenStackDeepLogParser().parse_line(raw_line)
-
-    assert parsed is not None
-    assert parsed.entity_id == expected_entity_id
-    assert parsed.untemplated_message_text == expected_message
+    assert OpenStackDeepLogParser().parse_line(raw_line) is None
 
 
 def test_structured_parser_registry_rejects_unknown_names() -> None:

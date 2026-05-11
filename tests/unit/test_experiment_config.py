@@ -1132,15 +1132,20 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
         tmp_path (Path): Per-test filesystem sandbox for the synthetic config tree.
     """
     train_text = (
-        "100 2017-01-01 00:00:10.000 1 INFO nova.compute [instance-a] Build start\n"
-        "101 2017-01-01 00:00:40.000 1 INFO nova.compute [instance-a] Build done\n"
-        "102 2017-01-01 00:01:05.000 1 INFO nova.compute [instance-a] Delete start\n"
+        "100 2017-01-01 00:00:10.000 1 INFO nova.compute "
+        "[instance: instance-a] Build start\n"
+        "101 2017-01-01 00:00:40.000 1 INFO nova.compute "
+        "[instance: instance-a] Build done\n"
+        "102 2017-01-01 00:01:05.000 1 INFO nova.compute "
+        "[instance: instance-b] Delete start\n"
     )
     normal_text = (
-        "200 2017-01-01 00:02:05.000 2 INFO nova.compute [instance-b] Build start\n"
+        "200 2017-01-01 00:02:05.000 2 INFO nova.compute "
+        "[instance: instance-c] Build start\n"
     )
     abnormal_text = (
-        "300 2017-01-01 00:03:05.000 3 INFO nova.compute [instance-c] Libvirt error\n"
+        "300 2017-01-01 00:03:05.000 3 INFO nova.compute "
+        "[instance: instance-d] Libvirt error\n"
     )
     _source_root, archive_path, train_entry_count = (
         _write_openstack_labelled_raw_archive(
@@ -1208,25 +1213,25 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
 
     expected = [
         (
-            "openstack_train:2017-01-01 00:00",
+            "instance-a",
             "train",
             0,
             ["INFO nova.compute Build start", "INFO nova.compute Build done"],
         ),
         (
-            "openstack_train:2017-01-01 00:01",
+            "instance-b",
             "train",
             0,
             ["INFO nova.compute Delete start"],
         ),
         (
-            "openstack_test_normal:2017-01-01 00:02",
+            "instance-c",
             "test",
             0,
             ["INFO nova.compute Build start"],
         ),
         (
-            "openstack_test_abnormal:2017-01-01 00:03",
+            "instance-d",
             "test",
             1,
             ["INFO nova.compute Libvirt error"],

@@ -253,9 +253,10 @@ class OpenStackDeepLogParser(StructuredParser):
     Input rows are expected in the derived-source format:
     `<split_name>\\t<label>\\t<raw_openstack_line>`.
     The parser maps each row into the canonical structured schema, retains the
-    log level and component in the message text, and uses a split-scoped
-    one-minute bucket as the `entity_id`, matching the paper's OpenStack
-    minute sessioning workflow.
+    log level and component in the message text, and uses the VM
+    `instance_id` as the `entity_id`, matching the session semantics described
+    in the paper. Rows that do not expose an instance identifier are skipped
+    because there is no paper-faithful session key to recover from them.
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the built-in parser.
@@ -275,12 +276,37 @@ class OpenStackDeepLogParser(StructuredParser):
         (?P<pid>\S+)\s+
         (?P<level>[A-Z]+)\s+
         (?P<component>\S+)
-        (?:\s+\[(?P<addr>[^\]]*)\])?
-        (?:\s+(?P<content>.*))?
+        \s+\[(?P<addr>[^\]]+)\]
+        \s+(?P<content>.*\S)
         \s*$
         """,
         re.VERBOSE,
     )
+    _INSTANCE_ID_PATTERNS: ClassVar[tuple[re.Pattern[str], ...]] = (
+        re.compile(r"\[instance:\s*(?P<instance_id>[^\]]+?)\]"),
+        re.compile(r"\bfor instance (?P<instance_id>\S+)"),
+    )
+
+    @staticmethod
+    def _extract_instance_id(raw_payload: str) -> str | None:
+        """Return the OpenStack instance identifier, if the line exposes one.
+
+        Args:
+            raw_payload (str): Raw OpenStack payload text from the labelled
+                source row.
+
+        Returns:
+            str | None: Recognised instance identifier, or `None` when the
+                payload does not expose one.
+        """
+        for pattern in OpenStackDeepLogParser._INSTANCE_ID_PATTERNS:
+            match = pattern.search(raw_payload)
+            if match is None:
+                continue
+            instance_id = match.group("instance_id").strip()
+            if instance_id:
+                return instance_id
+        return None
 
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
@@ -300,7 +326,6 @@ class OpenStackDeepLogParser(StructuredParser):
             logger.warning("Cannot parse OpenStack labelled row: %r", s)
             return None
 
-        split_name = row_match.group("split")
         raw_payload = row_match.group("raw")
         label = int(row_match.group("label"))
 
@@ -319,9 +344,13 @@ class OpenStackDeepLogParser(StructuredParser):
                 raw_payload,
             )
             return None
-        dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
-        minute_bucket = dt.strftime("%Y-%m-%d %H:%M")
-        entity_id = f"{split_name}:{minute_bucket}"
+        entity_id = self._extract_instance_id(raw_payload)
+        if entity_id is None:
+            logger.warning(
+                "Skipping OpenStack row without instance identifier: %r",
+                raw_payload,
+            )
+            return None
 
         return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
