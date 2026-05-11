@@ -852,6 +852,8 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
         model (ExperimentModelConfig): Decoded model config.
         concrete_name (str): Deterministic label for the concrete run within the
             sweep.
+        run_group (str): Scheduling group used to batch compatible model runs
+            together inside one manifest.
         applied_overrides (dict[str, Any]): Fixed and axis overrides applied to
             derive the concrete run.
     """
@@ -865,6 +867,7 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
     dataset: DatasetVariantConfig
     model: ExperimentModelConfig
     concrete_name: str
+    run_group: str = "default"
     applied_overrides: dict[str, Any] = msgspec.field(default_factory=dict)
 
     def normalized_config(self) -> dict[str, object]:

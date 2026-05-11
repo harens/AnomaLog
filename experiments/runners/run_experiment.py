@@ -90,29 +90,18 @@ def run_experiment(
     if not bundles:
         msg = f"Manifest {config_path} did not expand to any concrete runs."
         raise ConfigError(msg)
-    max_workers = _resolve_max_workers(
-        requested_workers=bundles[0].sweep.max_workers,
-        bundle_count=len(bundles),
-    )
-    if max_workers == 1 or len(bundles) == 1:
-        return [
-            _run_bundle(
-                bundle,
+    results: list[Path] = []
+    for bundle_indexes in _group_bundle_indexes_by_run_group(bundles):
+        results.extend(
+            _run_bundle_group(
+                config_path=config_path,
+                bundles=bundles,
+                bundle_indexes=bundle_indexes,
                 force=force,
                 write_predictions=write_predictions,
-            )
-            for bundle in bundles
-        ]
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        return list(
-            executor.map(
-                _run_bundle_from_manifest_payload,
-                [
-                    (config_path, index, force, write_predictions)
-                    for index in range(len(bundles))
-                ],
             ),
         )
+    return results
 
 
 def _resolve_max_workers(
@@ -134,6 +123,57 @@ def _run_bundle_from_manifest_payload(
     config_path, index, force, write_predictions = payload
     bundle = load_experiment_bundles(config_path)[index]
     return _run_bundle(bundle, force=force, write_predictions=write_predictions)
+
+
+def _group_bundle_indexes_by_run_group(
+    bundles: list[ExperimentBundle],
+) -> list[list[int]]:
+    grouped_indexes: dict[str, list[int]] = {}
+    run_group_order: list[str] = []
+    for index, bundle in enumerate(bundles):
+        run_group = getattr(bundle, "run_group", "default")
+        if not isinstance(run_group, str):
+            msg = f"Unsupported run_group value: {run_group!r}"
+            raise TypeError(msg)
+        if run_group not in grouped_indexes:
+            run_group_order.append(run_group)
+            grouped_indexes[run_group] = []
+        grouped_indexes[run_group].append(index)
+    return [grouped_indexes[run_group] for run_group in run_group_order]
+
+
+def _run_bundle_group(
+    *,
+    config_path: Path,
+    bundles: list[ExperimentBundle],
+    bundle_indexes: list[int],
+    force: bool,
+    write_predictions: bool,
+) -> list[Path]:
+    grouped_bundles = [bundles[index] for index in bundle_indexes]
+    max_workers = _resolve_max_workers(
+        requested_workers=grouped_bundles[0].sweep.max_workers,
+        bundle_count=len(grouped_bundles),
+    )
+    if max_workers == 1 or len(grouped_bundles) == 1:
+        return [
+            _run_bundle(
+                bundle,
+                force=force,
+                write_predictions=write_predictions,
+            )
+            for bundle in grouped_bundles
+        ]
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        return list(
+            executor.map(
+                _run_bundle_from_manifest_payload,
+                [
+                    (config_path, index, force, write_predictions)
+                    for index in bundle_indexes
+                ],
+            ),
+        )
 
 
 def _run_bundle(

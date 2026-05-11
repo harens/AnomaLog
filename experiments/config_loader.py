@@ -383,6 +383,7 @@ def _build_concrete_bundle(
         model_config,
         repo_root=context.experiments_root.parent,
     )
+    run_group = _resolve_run_group(model_config)
     model_overrides_obj = model_config.get("overrides", {})
     if not isinstance(model_overrides_obj, dict):
         msg = "model overrides must be a TOML table."
@@ -419,6 +420,7 @@ def _build_concrete_bundle(
         dataset=dataset,
         model=model,
         concrete_name=concrete_name,
+        run_group=run_group,
         applied_overrides=applied_overrides,
     )
 
@@ -449,10 +451,21 @@ def _resolve_model_config(
             {
                 key: value
                 for key, value in model_config.items()
-                if key not in {"overrides", "axes"}
+                if key not in {"overrides", "axes", "run_group"}
             },
         )
     return model
+
+
+def _resolve_run_group(model_config: dict[str, object]) -> str:
+    run_group = model_config.get("run_group", "default")
+    if not isinstance(run_group, str):
+        msg = "model `run_group` must be a string."
+        raise ConfigError(msg)
+    if not run_group:
+        msg = "model `run_group` must not be empty."
+        raise ConfigError(msg)
+    return run_group
 
 
 TConfig = TypeVar("TConfig")

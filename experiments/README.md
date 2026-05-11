@@ -26,6 +26,11 @@ results root, and can expand into multiple concrete runs through validated
 override axes. The `[[models]]` table array keeps the common case short: the
 dataset owns the experiment shape, and the model configs remain shared under
 `configs/models/`.
+If a manifest mixes heavyweight and lightweight detectors, give the relevant
+`[[models]]` entries different `run_group` values. The runner executes one
+group at a time, but still uses `max_workers` within each group, so
+lightweight models can run in parallel while memory-heavy runs such as
+DeepLog and DeepCASE stay isolated.
 Manifest execution defaults `max_workers` to `"auto"`, which uses up to the
 concrete run count and local CPU count. Set an explicit positive integer when a
 manifest needs a stricter cap.
@@ -140,6 +145,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Local-output materialisation also guards against stale Prefect cache hits
   that point at an incompatible storage base path, so reruns keep working
   after a checkout moves or a local storage root changes.
+- Prefect-backed materialisations use a versioned cache namespace under the
+  user cache root, with a stable shared result-storage base, so cached dataset
+  preprocessing does not inherit run-specific `PREFECT_HOME` paths.
 - Cold dataset builds are serialised per dataset namespace
   (`dataset_name` plus cache roots), so multi-process runs do not race while
   materialising the shared AnomaLog dataset cache for the first time.
@@ -219,6 +227,9 @@ split fixed and vary only values that should not alter the file boundary if you
 want a regression test against accidental split drift. Add `max_workers = 2`
 or another positive integer only when the default `"auto"` parallelism is too
 aggressive for a particular backend or machine.
+Use `run_group = "..."` on individual `[[models]]` entries when a manifest
+contains a mixture of heavy and light detectors. The group name is only a
+scheduling hint, not part of the detector config itself.
 
 If the manifest needs a Slurm submission wrapper, add a matching entry to
 `slurm/jobs.toml` and regenerate the checked-in `.sbatch` files.

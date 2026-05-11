@@ -19,9 +19,12 @@ cache_root = ".cache/bgl_entity"
 
 [[models]]
 ref = "template_frequency_default"
+run_group = "baselines"
 
 [[models]]
 ref = "naive_bayes_default"
+run_group = "baselines"
 
 [[models]]
 ref = "deepcase"
+run_group = "deepcase"

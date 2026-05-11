@@ -6,7 +6,7 @@ import logging
 from argparse import Namespace
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from typing_extensions import Self
 
@@ -255,6 +255,7 @@ def test_run_experiment_submits_plain_worker_payloads(
 
     monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
     monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
     result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
 
     assert result == [tmp_path / "result-0", tmp_path / "result-1"]
@@ -262,6 +263,98 @@ def test_run_experiment_submits_plain_worker_payloads(
         (tmp_path / "sweep.toml", 0, True, False),
         (tmp_path / "sweep.toml", 1, True, False),
     ]
+
+
+def test_run_experiment_batches_groups_sequentially(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Separate run groups should not execute in the same worker pool.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading, the worker
+            pool, and the serial runner so the test can inspect scheduling.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+
+    class _IndexedBundle(Protocol):
+        index: int
+
+    expected_max_workers = 2
+    bundles = [
+        SimpleNamespace(
+            index=0,
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=1,
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=2,
+            run_group="deepcase",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+    ]
+    submitted_payloads: list[list[tuple[Path, int, bool, bool]]] = []
+    serial_runs: list[int] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        def map(
+            self,
+            func: object,
+            payloads: list[tuple[Path, int, bool, bool]],
+        ) -> list[Path]:
+            assert self.max_workers == expected_max_workers
+            del func
+            submitted_payloads.append(payloads)
+            return [tmp_path / f"parallel-{index}" for index in range(len(payloads))]
+
+    def _run_bundle(
+        bundle: _IndexedBundle,
+        *,
+        force: bool = False,
+        write_predictions: bool = False,
+    ) -> Path:
+        del force, write_predictions
+        serial_runs.append(bundle.index)
+        return tmp_path / f"serial-{bundle.index}"
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner, "_run_bundle", _run_bundle)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [
+        tmp_path / "parallel-0",
+        tmp_path / "parallel-1",
+        tmp_path / "serial-2",
+    ]
+    assert submitted_payloads == [
+        [
+            (tmp_path / "sweep.toml", 0, True, False),
+            (tmp_path / "sweep.toml", 1, True, False),
+        ],
+    ]
+    assert serial_runs == [2]
 
 
 def test_run_bundle_rebuilds_sequence_views_for_each_stage(

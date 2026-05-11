@@ -17,9 +17,11 @@ cache_root = ".cache/openstack_deeplog_preprocessed"
 
 [[models]]
 ref = "deeplog_default"
+run_group = "deeplog"
 
 [models.overrides]
 "model.parameter_detection_enabled" = false
 
 [[models]]
 ref = "deepcase"
+run_group = "deepcase"

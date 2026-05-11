@@ -394,6 +394,33 @@ def test_load_experiment_bundles_support_deeplog_model_configs(
     assert bundle.dataset.preset == "bgl"
 
 
+def test_load_experiment_bundles_preserves_model_run_group(
+    tmp_path: Path,
+) -> None:
+    """Inline model entries should keep their scheduling group metadata.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
+    sweep_path = _write_config_tree(
+        tmp_path,
+        sweep_name="bgl_grouped_models",
+        dataset=(
+            "bgl_entity_grouped",
+            ('name = "bgl_entity_grouped"\ndataset_name = "BGL"\npreset = "bgl"\n'),
+        ),
+        model=(
+            "template_frequency_default",
+            'name = "template_frequency_default"\ndetector = "template_frequency"\n',
+        ),
+        sweep_body_suffix='run_group = "baselines"\n',
+    )
+    bundle = _load_one_bundle(sweep_path)
+
+    assert bundle.run_group == "baselines"
+    assert bundle.model.name == "template_frequency_default"
+
+
 @pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_expands_model_and_dataset_axes(
     tmp_path: Path,
@@ -1264,3 +1291,43 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
     assert bgl_deepcase_bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
     assert bgl_deepcase_bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
     assert bgl_deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False
+
+
+def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
+    """Mixed manifests should separate heavyweight models into their own groups."""
+    repo_root = Path(__file__).resolve().parents[2]
+
+    bgl_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "bgl_entity_chronological.toml",
+    )
+    hdfs_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs_v1_entity_chronological.toml",
+    )
+    openstack_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "openstack_deeplog_preprocessed.toml",
+    )
+
+    assert {bundle.run_group for bundle in bgl_bundles} == {
+        "baselines",
+        "deepcase",
+    }
+    assert {bundle.run_group for bundle in hdfs_bundles} == {
+        "baselines",
+        "deepcase",
+    }
+    assert {bundle.run_group for bundle in openstack_bundles} == {
+        "deeplog",
+        "deepcase",
+    }
