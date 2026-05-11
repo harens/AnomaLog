@@ -7,6 +7,7 @@ from typing import ClassVar
 
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 from prefect.logging import disable_run_logger
 from typing_extensions import override
@@ -452,6 +453,37 @@ def test_count_entities_by_label_uses_grouped_rows_when_scanning_is_unavailable(
     )
 
     assert (normal_entities, total_entities) == (1, 2)
+
+
+def test_sink_repairs_corrupted_parquet_cache_before_reading(
+    tmp_path: Path,
+) -> None:
+    """A corrupt structured-parquet cache should be rebuilt before reads.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+
+    corrupt_file = next(
+        sink.structured_data_cache(sink.dataset_name).rglob("*.parquet"),
+    )
+    corrupt_file.write_bytes(b"not parquet")
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+
+    assert (normal_entities, total_entities) == (1, 2)
+    rebuilt_file = next(
+        sink.structured_data_cache(sink.dataset_name).rglob("*.parquet"),
+    )
+    metadata = pq.read_metadata(rebuilt_file)
+    assert metadata.num_rows > 0
 
 
 def test_sink_entity_grouping_merges_buckets_chronologically(

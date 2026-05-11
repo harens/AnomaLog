@@ -2,6 +2,7 @@
 
 import heapq
 import json
+import shutil
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import ClassVar
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from anomalog.cache import (
     CachePathsConfig,
@@ -89,12 +91,19 @@ class ParquetStructuredSink(StructuredSink):
         """
         return self.cache_paths.cache_root / dataset_name / self.cache_dir
 
-    def write_structured_lines(self, _workers: int | None = None) -> bool:
+    def write_structured_lines(
+        self,
+        _workers: int | None = None,
+        *,
+        refresh_cache: bool = False,
+    ) -> bool:
         """Parse raw logs and persist structured lines to Parquet.
 
         Args:
             _workers (int | None): Reserved worker-count override. Currently
                 unused by this sink implementation.
+            refresh_cache (bool): Whether to force Prefect to ignore any cached
+                materialisation result and rebuild the parquet cache.
 
         Returns:
             bool: Whether any anomalous rows were observed during parsing.
@@ -102,6 +111,7 @@ class ParquetStructuredSink(StructuredSink):
         base_extract_structured_components = materialize(
             self.structured_data_cache(self.dataset_name),
             asset_deps=[asset_from_local_path(self.raw_dataset_path)],
+            refresh_cache=refresh_cache,
         )(extract_structured_components)
 
         return base_extract_structured_components(
@@ -305,6 +315,7 @@ class ParquetStructuredSink(StructuredSink):
         Returns:
             ds.Dataset: PyArrow dataset over the structured parquet cache.
         """
+        self._repair_structured_cache_if_needed()
         # Give Arrow the full row schema up front so projection and filter
         # binding do not depend on fragment inference over the hive partition
         # directory structure. The materialised dataset always carries these
@@ -319,6 +330,48 @@ class ParquetStructuredSink(StructuredSink):
                 flavor="hive",
             ),
         )
+
+    def _repair_structured_cache_if_needed(self) -> None:
+        """Rebuild the structured parquet cache if any parquet file is invalid.
+
+        The structured cache can be left in a partially written state after an
+        interrupted or stale Prefect materialisation. PyArrow will otherwise
+        ignore unreadable files when `exclude_invalid_files=True`, which can make
+        the cache look empty and surface as downstream zero-train failures.
+        """
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        if not cache_dir.exists():
+            return
+
+        parquet_files = list(cache_dir.rglob("*.parquet"))
+        if not parquet_files:
+            return
+
+        invalid_file = next(
+            (path for path in parquet_files if self._is_invalid_parquet_file(path)),
+            None,
+        )
+        if invalid_file is None:
+            return
+
+        shutil.rmtree(cache_dir)
+        self.write_structured_lines(refresh_cache=True)
+
+    @staticmethod
+    def _is_invalid_parquet_file(path: Path) -> bool:
+        """Return whether a parquet file cannot be read by PyArrow.
+
+        Args:
+            path (Path): Parquet fragment to validate.
+
+        Returns:
+            bool: `True` when PyArrow cannot read the file metadata.
+        """
+        try:
+            pq.read_metadata(path)
+        except (OSError, pa.ArrowInvalid, ValueError):
+            return True
+        return False
 
     # Statistics helpers
     def count_rows(self) -> int:
