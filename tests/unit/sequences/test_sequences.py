@@ -687,6 +687,95 @@ def test_entity_sequences_raw_entry_prefix_fraction_uses_ceiling_cutoff() -> Non
     assert split_summary.test_raw_entry_count == expected_test_raw_entry_count
 
 
+def test_entity_sequences_infer_split_from_preprocessed_prefixes() -> None:
+    """Preprocessed split-file prefixes should map directly to split labels."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=None,
+            entity_id="hdfs_train:0",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=None,
+            entity_id="hdfs_test_normal:0",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=None,
+            entity_id="hdfs_test_abnormal:0",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            train_frac=1.0,
+            test_frac=0.0,
+        ),
+    )
+
+    assert [sequence.sole_entity_id for sequence in sequences] == [
+        "hdfs_train:0",
+        "hdfs_test_normal:0",
+        "hdfs_test_abnormal:0",
+    ]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+
+
+def test_entity_sequences_infer_split_from_openstack_preprocessed_prefixes() -> None:
+    """OpenStack preprocessed prefixes should map directly to split labels."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=None,
+            entity_id="openstack_train:2017-01-01 00:00",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=None,
+            entity_id="openstack_test_normal:2017-01-01 00:01",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=None,
+            entity_id="openstack_test_abnormal:2017-01-01 00:02",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+        ),
+    )
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+
+
 def test_chronological_stream_raw_entry_normal_fraction_excludes_early_anomalies() -> (
     None
 ):

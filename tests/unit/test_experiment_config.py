@@ -940,15 +940,8 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert bundle.dataset.template_parser == "identity"
     assert bundle.dataset_path == deeplog_sweep_path
     assert bundle.model_path == deeplog_sweep_path
-    assert bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
-    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert isinstance(bundle.dataset.sequence.split, RawEntryPrefixCountSplitConfig)
-    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
-    assert bundle.dataset.sequence.split.train_entry_count == 95_125
-    assert bundle.dataset.sequence.split.straddling_group_policy.value == (
-        "split_partial_sequences"
-    )
+    assert bundle.dataset.sequence.split is None
     assert bundle.dataset.sequence.train_on_normal_entities_only is False
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.history_size == 10
@@ -957,6 +950,7 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert bundle.model.hidden_size == 64
     assert bundle.model.epochs == 300
     assert bundle.model.batch_size == 2048
+    assert bundle.model.short_session_padding_fidelity is True
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
 
@@ -1098,18 +1092,12 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.template_parser == "identity"
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
-    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
-    assert bundle.dataset.sequence.split is not None
-    assert isinstance(bundle.dataset.sequence.split, RawEntryPrefixCountSplitConfig)
-    assert bundle.dataset.sequence.split.application_order == ("before_grouping")
-    assert bundle.dataset.sequence.split.straddling_group_policy == (
-        "split_partial_sequences"
-    )
-    assert bundle.dataset.sequence.split.train_entry_count == 95_125
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+    assert bundle.dataset.sequence.split is None
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.name == "deeplog_default"
     assert bundle.model.parameter_detection_enabled is False
+    assert bundle.model.short_session_padding_fidelity is True
     assert bundle.model_path == sweep_path
     assert bundle.dataset_path == sweep_path
 
@@ -1285,8 +1273,7 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
     assert deepcase_bundle.model.confidence_threshold == pytest.approx(0.2)
     assert deepcase_bundle.model.eps == pytest.approx(0.1)
     assert deepcase_bundle.model.min_samples == 5
-    assert deepcase_bundle.dataset.sequence.train_fraction == pytest.approx(1.0)
-    assert deepcase_bundle.dataset.sequence.test_fraction == pytest.approx(0.0)
+    assert isinstance(deepcase_bundle.dataset.sequence, EntitySequenceConfig)
     assert deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False
 
     bgl_deepcase_bundle = next(

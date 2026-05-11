@@ -1500,8 +1500,11 @@ class EntitySequenceBuilder(SequenceBuilder):
                 entity_is_anomalous = entity_id is not None and is_anomalous_label(
                     label_for_group(entity_id),
                 )
+                prefixed_split_label = _split_label_from_prefixed_entity_id(entity_id)
                 if entity_id is None:
                     split_label = SplitLabel.TRAIN
+                elif prefixed_split_label is not None and self.split_mode is None:
+                    split_label = prefixed_split_label
                 elif self.train_on_normal_entities_only and entity_is_anomalous:
                     split_label = SplitLabel.IGNORED
                 elif self.split_mode in {
@@ -1532,7 +1535,10 @@ class EntitySequenceBuilder(SequenceBuilder):
             entity_is_anomalous = entity_id is not None and is_anomalous_label(
                 label_for_group(entity_id),
             )
-            if window_id >= test_start_index:
+            prefixed_split_label = _split_label_from_prefixed_entity_id(entity_id)
+            if prefixed_split_label is not None and self.split_mode is None:
+                split_label = prefixed_split_label
+            elif window_id >= test_start_index:
                 split_label = SplitLabel.TEST
             elif self.train_on_normal_entities_only:
                 split_label = (
@@ -1563,6 +1569,32 @@ class EntitySequenceBuilder(SequenceBuilder):
                 ):
                     normals_seen_in_train += 1
                 yield seq
+
+
+def _split_label_from_prefixed_entity_id(entity_id: str | None) -> SplitLabel | None:
+    """Return a split label from known preprocessed-session entity prefixes.
+
+    Args:
+        entity_id (str | None): Entity id to inspect.
+
+    Returns:
+        SplitLabel | None: Derived split label, or `None` when no known
+            prefix is present.
+    """
+    if entity_id is None:
+        return None
+    prefix = entity_id.split(":", 1)[0].strip().lower()
+    if not prefix:
+        return None
+    # For post-processed pre-split datasets, entity ids are prefixed with the
+    # split file alias (for example `hdfs_train:*`, `openstack_test_normal:*`).
+    # We infer train/test directly from that alias instead of hardcoding
+    # dataset-specific names in the sequence builder.
+    if "train" in prefix:
+        return SplitLabel.TRAIN
+    if "test" in prefix:
+        return SplitLabel.TEST
+    return None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
