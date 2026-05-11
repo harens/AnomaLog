@@ -26,4 +26,6 @@ do not share a worker pool with the lighter baselines.
 The wrappers resolve the repository root from `SLURM_SUBMIT_DIR` when the
 job is launched through `sbatch`, and they point `uv` at `SLURM_TMPDIR` if it
 is available. That avoids writing caches into the Slurm spool directory on
-clusters where the generated script itself is staged elsewhere.
+clusters where the generated script itself is staged elsewhere. Prefect's
+local result storage is pinned to `${PREFECT_ROOT}/storage`, while
+`PREFECT_HOME` remains per-run for the local database.

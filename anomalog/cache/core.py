@@ -242,7 +242,18 @@ CACHE_POLICY = (
     + CacheKeyFnPolicy(cache_key_fn=cache_class_key_fn)
 ).configure(key_storage=CachePathsConfig().cache_root / "prefect")
 
-task = partial(_task, persist_result=True, cache_policy=CACHE_POLICY)
+_RESULT_STORAGE = (
+    # Keep Prefect result files under a stable shared base so cache hits do not
+    # inherit run-specific PREFECT_HOME paths.
+    CachePathsConfig().cache_root / "prefect" / "storage"
+)
+
+task = partial(
+    _task,
+    persist_result=True,
+    cache_policy=CACHE_POLICY,
+    result_storage=_RESULT_STORAGE,
+)
 
 
 def materialize(
@@ -273,12 +284,15 @@ def materialize(
     """
 
     def _decorate(func: Callable[P, R]) -> Callable[P, R]:
+        resolved_task_kwargs = dict(task_kwargs)
+        result_storage = resolved_task_kwargs.pop("result_storage", _RESULT_STORAGE)
         materialized = _prefect_materialize(
             asset_from_local_path(output_path),
             persist_result=True,
             cache_policy=CACHE_POLICY,
             asset_deps=asset_deps,
-            **task_kwargs,
+            result_storage=result_storage,
+            **resolved_task_kwargs,
         )(func)
 
         def _run(*args: P.args, **kwargs: P.kwargs) -> R:

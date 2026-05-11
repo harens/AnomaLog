@@ -14,6 +14,7 @@ from prefect.logging import disable_run_logger
 from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
 from anomalog.cache import files as cache_files
 from anomalog.cache.core import dataset_build_lock, dataset_build_lock_path
+from anomalog.cache.core import task as cache_task
 from anomalog.cache.files import AssetDepsFingerprintPolicy
 from tests.unit.helpers import task_run_context
 
@@ -229,6 +230,51 @@ def test_materialize_reruns_function_when_prefect_cached_result_is_stale(
     with disable_run_logger():
         assert _build() == "rebuilt"
     assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_and_task_use_shared_result_storage_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prefect result storage should be pinned to the shared cache namespace.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the fabricated asset.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialisation so
+            the test can inspect the forwarded task options directly.
+    """
+    expected_basepath = CachePathsConfig().cache_root / "prefect" / "storage"
+    result_storage = cache_task.keywords["result_storage"]
+
+    assert Path(result_storage) == expected_basepath
+
+    captured: dict[str, object] = {}
+
+    def _capture_materialize(
+        *_args: object,
+        **kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        captured.update(kwargs)
+
+        def _decorate(func: ZeroArgFn) -> ZeroArgFn:
+            return func
+
+        return _decorate
+
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _capture_materialize,
+    )
+
+    @materialize(tmp_path / "demo.txt")
+    def _build() -> str:
+        return "demo"
+
+    _build()
+
+    captured_result_storage = captured["result_storage"]
+    assert isinstance(captured_result_storage, (str, Path))
+    assert Path(captured_result_storage) == expected_basepath
 
 
 def test_dataset_build_lock_path_changes_with_cache_namespace(tmp_path: Path) -> None:

@@ -138,7 +138,7 @@ def render_slurm_script(
             "",
             'export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"',
             'export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"',
-            'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_HOME}/storage"',
+            'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"',
             (
                 'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
                 '${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"'

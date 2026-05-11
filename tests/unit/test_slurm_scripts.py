@@ -53,6 +53,10 @@ def test_render_slurm_script_uses_sweep_stem_and_relative_config_path(
         '"$UV_CACHE_DIR"' in rendered.content
     )
     assert (
+        'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"'
+        in rendered.content
+    )
+    assert (
         '  --config "experiments/configs/datasets/example.toml" \\' in rendered.content
     )
     assert "  --force" in rendered.content

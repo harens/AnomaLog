@@ -15,7 +15,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"
 export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"
-export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_HOME}/storage"
+export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"
 export PREFECT_API_DATABASE_CONNECTION_URL="sqlite+aiosqlite:///${PREFECT_HOME}/prefect.db"
 # export PREFECT_TASKS_REFRESH_CACHE=true

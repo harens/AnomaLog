@@ -148,6 +148,8 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Prefect-backed materialisations use a versioned cache namespace under the
   user cache root, with a stable shared result-storage base, so cached dataset
   preprocessing does not inherit run-specific `PREFECT_HOME` paths.
+  The generated Slurm wrappers pin that base to `${PREFECT_ROOT}/storage`
+  while keeping `PREFECT_HOME` separate for the local Prefect database.
 - Cold dataset builds are serialised per dataset namespace
   (`dataset_name` plus cache roots), so multi-process runs do not race while
   materialising the shared AnomaLog dataset cache for the first time.
