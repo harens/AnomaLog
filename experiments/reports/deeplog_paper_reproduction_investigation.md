@@ -114,6 +114,18 @@ boundary losses remain inspectable in machine-readable form.
   scoring are event-level, and the only remaining gap for the fuller paper is
   the missing online update path.
 
+## Duplicate sessions in official preprocessed HDFS
+
+The official `wuyifan18/DeepLog/data` session files include substantial
+duplicate full-session lines in both test splits.
+
+- `hdfs_test_normal`: 553,366 rows, 14,177 unique session lines
+- `hdfs_test_abnormal`: 16,838 rows, 4,123 unique session lines
+
+For reproduction clarity, this repository does not mutate those files during
+dataset materialisation. Any deduplication should be treated as an explicit
+evaluation policy and reported as such.
+
 ## New Configs
 
 - HDFS:
