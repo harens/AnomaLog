@@ -470,7 +470,7 @@ class DeepLogModelConfig(
                 "produce one top-g decision using left-padded history."
             ),
         ),
-    ] = False
+    ] = True
 
     def build_detector(self) -> DeepLogDetector:
         """Construct a DeepLog detector for experiment execution.

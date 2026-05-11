@@ -20,7 +20,6 @@ ref = "deeplog_default"
 
 [models.overrides]
 "model.parameter_detection_enabled" = false
-"model.short_session_padding_fidelity" = true
 
 [[models]]
 ref = "deepcase"

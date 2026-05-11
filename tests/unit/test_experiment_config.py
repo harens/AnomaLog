@@ -950,7 +950,6 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert bundle.model.hidden_size == 64
     assert bundle.model.epochs == 300
     assert bundle.model.batch_size == 2048
-    assert bundle.model.short_session_padding_fidelity is True
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
 
@@ -1097,7 +1096,6 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.name == "deeplog_default"
     assert bundle.model.parameter_detection_enabled is False
-    assert bundle.model.short_session_padding_fidelity is True
     assert bundle.model_path == sweep_path
     assert bundle.dataset_path == sweep_path
 
