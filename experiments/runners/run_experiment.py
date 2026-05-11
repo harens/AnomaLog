@@ -182,17 +182,13 @@ def _run_bundle(
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
         logger.info("Building dataset %s", bundle.dataset.dataset_name)
         templated = dataset_spec.build()
-        sequences = bundle.dataset.sequence.apply(templated)
+        sequence_view_for_summary = bundle.dataset.sequence.apply(templated)
         logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
-        split_counts_hint = sequences.split_count_hint()
-        train_sequence_count_hint = (
-            None if split_counts_hint is None else split_counts_hint.train_count
-        )
-        score_sequence_count_hint = (
-            None if split_counts_hint is None else split_counts_hint.test_count
-        )
+        split_counts_hint = sequence_view_for_summary.split_count_hint()
         model_summary = run_model(
-            sequence_factory=lambda: iter(sequences),
+            sequence_factory=lambda: iter(
+                bundle.dataset.sequence.apply(templated),
+            ),
             config=bundle.model,
             prediction_output=PredictionOutputConfig(
                 predictions_path=result_paths.predictions_path,
@@ -202,21 +198,24 @@ def _run_bundle(
             progress_plan=RunProgressPlan(
                 train=(
                     None
-                    if train_sequence_count_hint is None
+                    if split_counts_hint is None
                     else ProgressHint(
-                        total=train_sequence_count_hint,
-                        unit=sequences.train_sequence_count_unit_hint(),
+                        total=split_counts_hint.train_count,
+                        unit=sequence_view_for_summary.train_sequence_count_unit_hint(),
                     )
                 ),
                 score=(
                     None
-                    if score_sequence_count_hint is None
-                    else ProgressHint(total=score_sequence_count_hint)
+                    if split_counts_hint is None
+                    else ProgressHint(
+                        total=split_counts_hint.test_count,
+                    )
                 ),
             ),
         )
+        sequences_for_split_summary = bundle.dataset.sequence.apply(templated)
         split_summary = build_sequence_split_summary(
-            sequences,
+            sequences_for_split_summary,
             sequence_summary=model_summary.sequence_summary,
         )
         train_on_normal_entities_only = split_summary.train_on_normal_entities_only
@@ -246,7 +245,7 @@ def _run_bundle(
             )
         metric_report = build_run_metrics_report(
             bundle=bundle,
-            sequences=sequences,
+            sequences=bundle.dataset.sequence.apply(templated),
             model_summary=model_summary,
         )
         _log_metric_report(logger, metric_report)
@@ -254,10 +253,11 @@ def _run_bundle(
             "Model run complete with %s sequences",
             model_summary.sequence_summary.sequence_count,
         )
+        sequences_for_outputs = bundle.dataset.sequence.apply(templated)
         write_run_outputs(
             bundle=bundle,
             templated=templated,
-            sequences=sequences,
+            sequences=sequences_for_outputs,
             model_summary=model_summary,
             result_paths=result_paths,
         )
