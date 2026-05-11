@@ -190,6 +190,9 @@ def dataset_build_lock(
 ) -> FileLock:
     """Return the coarse cross-process lock for one dataset build namespace.
 
+    The lock is singleton-backed so the same thread can re-enter the namespace
+    while a build flow reads from the cache it just materialised.
+
     Args:
         dataset_name (str): Dataset identifier whose build namespace should be
             locked.
@@ -198,7 +201,10 @@ def dataset_build_lock(
     Returns:
         FileLock: Lock guarding all dataset build work for that namespace.
     """
-    return FileLock(dataset_build_lock_path(dataset_name, cache_paths=cache_paths))
+    return FileLock(
+        dataset_build_lock_path(dataset_name, cache_paths=cache_paths),
+        is_singleton=True,
+    )
 
 
 def asset_from_local_path(path: Path) -> Asset:

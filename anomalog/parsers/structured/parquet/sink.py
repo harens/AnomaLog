@@ -14,11 +14,8 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from anomalog.cache import (
-    CachePathsConfig,
-    asset_from_local_path,
-    materialize,
-)
+from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
+from anomalog.cache.core import dataset_build_lock
 from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
@@ -337,25 +334,31 @@ class ParquetStructuredSink(StructuredSink):
         The structured cache can be left in a partially written state after an
         interrupted or stale Prefect materialisation. PyArrow will otherwise
         ignore unreadable files when `exclude_invalid_files=True`, which can make
-        the cache look empty and surface as downstream zero-train failures.
+        the cache look empty and surface as downstream zero-train failures. The
+        repair itself is serialised under the dataset-build lock so concurrent
+        model runs do not delete and rebuild the same cache namespace at once.
         """
         cache_dir = self.structured_data_cache(self.dataset_name)
         if not cache_dir.exists():
             return
 
-        parquet_files = list(cache_dir.rglob("*.parquet"))
-        if not parquet_files:
-            return
+        with dataset_build_lock(self.dataset_name, cache_paths=self.cache_paths):
+            if not cache_dir.exists():
+                return
 
-        invalid_file = next(
-            (path for path in parquet_files if self._is_invalid_parquet_file(path)),
-            None,
-        )
-        if invalid_file is None:
-            return
+            parquet_files = list(cache_dir.rglob("*.parquet"))
+            if not parquet_files:
+                return
 
-        shutil.rmtree(cache_dir)
-        self.write_structured_lines(refresh_cache=True)
+            invalid_file = next(
+                (path for path in parquet_files if self._is_invalid_parquet_file(path)),
+                None,
+            )
+            if invalid_file is None:
+                return
+
+            shutil.rmtree(cache_dir)
+            self.write_structured_lines(refresh_cache=True)
 
     @staticmethod
     def _is_invalid_parquet_file(path: Path) -> bool:

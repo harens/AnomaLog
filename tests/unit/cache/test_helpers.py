@@ -1,6 +1,7 @@
 """Additional tests for cache helper functions."""
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
@@ -341,3 +342,22 @@ def test_dataset_build_lock_blocks_other_processes_for_same_namespace(
         process.join(timeout=5)
 
     assert process.exitcode == 0
+
+
+def test_dataset_build_lock_allows_reentrant_acquisition_for_same_namespace(
+    tmp_path: Path,
+) -> None:
+    """The namespace lock should be reusable within one build flow.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache namespace paths.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(dataset_build_lock("demo", cache_paths=cache_paths))
+        stack.enter_context(dataset_build_lock("demo", cache_paths=cache_paths))
+        assert True

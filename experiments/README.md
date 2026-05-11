@@ -156,6 +156,10 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Structured parquet materialisation now writes a tiny entity chronology
   sidecar alongside the parquet partitions, so entity-grouped readers can
   reuse first-seen ordering without rescanning all rows.
+  If a cached parquet fragment is unreadable, the sink rebuilds that dataset
+  namespace under the same dataset-build lock before any model sees it, rather
+  than letting one model observe an empty train prefix while another repairs
+  the cache.
 - Concrete runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved manifest, dataset, and model config.

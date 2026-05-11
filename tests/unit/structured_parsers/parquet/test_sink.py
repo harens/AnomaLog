@@ -29,6 +29,7 @@ from anomalog.parsers.structured.parquet.writer_worker import (
     WriterConfig,
     extract_structured_components,
 )
+from anomalog.sequences import EntitySequenceBuilder
 from tests.unit.helpers import structured_line
 
 
@@ -477,8 +478,21 @@ def test_sink_repairs_corrupted_parquet_cache_before_reading(
     normal_entities, total_entities = sink.count_entities_by_label(
         lambda entity_id: 1 if entity_id == "node-a" else 0,
     )
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=lambda text: (text, []),
+            label_for_group=lambda entity_id: 1 if entity_id == "node-a" else 0,
+            train_frac=0.5,
+            test_frac=0.5,
+        ),
+    )
 
     assert (normal_entities, total_entities) == (1, 2)
+    assert [sequence.split_label.value for sequence in sequences] == [
+        "train",
+        "test",
+    ]
     rebuilt_file = next(
         sink.structured_data_cache(sink.dataset_name).rglob("*.parquet"),
     )
