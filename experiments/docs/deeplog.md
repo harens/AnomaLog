@@ -43,6 +43,17 @@ extensions:
   predictions. These diagnostics are separate from anomaly scoring and are
   exposed in run metrics for the full test scoring pass.
 
+### Paper, Script, And Repo
+
+The main place where the paper, the attached reproduction script, and this repo
+diverge is short-session handling:
+
+| Topic | Paper | Attached scripts | AnomaLog DeepLog |
+| --- | --- | --- | --- |
+| Short-session scoring | Fixed-length history windows; no explicit padding rule is stated | `LogKeyModel_predict.py` left-pads short test sessions so they still produce one decision | No padding: sessions shorter than `history_size + 1` yield no key decision, which matches the paper more closely |
+| Training windows | Sliding windows from normal sequences | `LogKeyModel_train.py` also uses sliding windows only | Same core training shape, expressed through AnomaLog's sequence abstractions |
+| Benchmark scope | HDFS key-model benchmark; parameter modelling is described separately | Key-model script only | Key model plus optional parameter anomaly modelling, richer diagnostics, and explicit run metrics |
+
 ## Remaining Gaps Vs The Paper
 
 - No workflow diagnosis or workflow/FSA construction.
@@ -65,11 +76,12 @@ extensions:
 - Unknown target templates:
   treated as key-model anomalies because the trained vocabulary contains no
   probability for the observed template.
-- Short sessions (optional fidelity mode):
-  `short_session_padding_fidelity = true` enables one padded top-`g` key
-  decision for sessions shorter than `history_size + 1`, mirroring the
-  original DeepLog prediction script behaviour that pads short test sessions
-  before scoring.
+- Short sessions:
+  this implementation does not left-pad short sessions. Sessions shorter than
+  `history_size + 1` therefore do not yield a key-model decision, matching
+  the fixed-window interpretation in the paper more closely. The attached
+  legacy prediction script behaves differently and pads short sessions before
+  scoring.
 - Next-event diagnostics:
   default to `full_dataset` so the diagnostic output is directly comparable
   with DeepCASE. The diagnostic vocabulary policy is configurable on
@@ -154,9 +166,10 @@ This section keeps the short version in the main DeepLog note:
 - the same direct split-prefix assignment now applies to the preprocessed
   OpenStack regime (`openstack_train`, `openstack_test_normal`,
   `openstack_test_abnormal`) for the same reason;
-- the OpenStack parser now retains `level` and `component` in the template
-  input, groups by VM `instance_id`, and drops rows that do not expose a
-  session handle;
+- the OpenStack parser now mines template content from the raw message body,
+  prefixes recovered VM `instance_id` values with the split name so the file
+  boundary survives grouping, and drops rows that do not expose a session
+  handle;
 - `sequence.split.mode` supports `raw_entry_prefix_count`,
   `raw_entry_prefix_fraction`, and `raw_entry_prefix_normal_fraction`;
 - `sequence.split.application_order` makes split-before-grouping explicit;
