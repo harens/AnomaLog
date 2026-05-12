@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import msgspec
 import numpy as np
 import pytest
@@ -74,6 +76,13 @@ EXPECTED_WORKLOAD_REDUCTION = pytest.approx(0.375)
 EXPECTED_WORKLOAD_OVERALL = pytest.approx(0.3)
 EXPECTED_WORKLOAD_SEMI_AUTOMATIC_REDUCTION = pytest.approx(1.0)
 EXPECTED_WORKLOAD_SEMI_AUTOMATIC_OVERALL = pytest.approx(0.8)
+EXPECTED_MANUAL_TOTAL_CONTEXTUAL_SEQUENCE_COUNT = 100
+EXPECTED_MANUAL_COVERED_CONTEXTUAL_SEQUENCE_COUNT = 80
+EXPECTED_MANUAL_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT = 20
+EXPECTED_MANUAL_ALERT_COUNT = 40
+EXPECTED_SEMI_AUTOMATIC_TOTAL_CONTEXTUAL_SEQUENCE_COUNT = 40
+EXPECTED_SEMI_AUTOMATIC_COVERED_CONTEXTUAL_SEQUENCE_COUNT = 30
+EXPECTED_SEMI_AUTOMATIC_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT = 10
 ConfigValue = str | int | float | bool | None
 
 
@@ -885,6 +894,109 @@ def test_deepcase_workload_reduction_metrics_apply_paper_formulas() -> None:
     assert semi_automatic.coverage == EXPECTED_WORKLOAD_COVERAGE
     assert semi_automatic.reduction == EXPECTED_WORKLOAD_SEMI_AUTOMATIC_REDUCTION
     assert semi_automatic.overall == EXPECTED_WORKLOAD_SEMI_AUTOMATIC_OVERALL
+
+
+def test_deepcase_run_metrics_use_fit_and_prediction_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase workload summaries should draw counts from the correct stage.
+
+    Manual mode should use fit-time clustering counts, while semi-automatic
+    mode should use prediction-time event counts. This keeps the workload
+    summaries aligned with the paper's Table X definitions instead of the
+    sequence-level anomaly wrapper.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the internal diagnostics
+            snapshot with a deterministic fixture payload.
+    """
+    detector = _deepcase_detector_for_event_decision_tests()
+    detector.train_sample_count = 100
+    detector.clustered_sample_count = 80
+    detector.known_cluster_count = 4
+    detector.unknown_cluster_score_count = 20
+
+    event_decision_metrics = deepcase_shared.DeepCaseEventDecisionMetrics(
+        event_count=40,
+        event_auto_decision_count=30,
+        event_abstained_decision_count=10,
+        event_auto_coverage=0.75,
+        event_abstain_rate=0.25,
+        event_tp=9,
+        event_fp=3,
+        event_tn=12,
+        event_fn=6,
+        event_precision=0.75,
+        event_recall=0.6,
+        event_f1=0.6666666666666666,
+        event_accuracy=0.7,
+        event_predicted_normal_count=18,
+        event_predicted_anomalous_count=12,
+        event_true_normal_count=24,
+        event_true_anomalous_count=16,
+    )
+    diagnostics = deepcase_shared.DeepCasePredictionDiagnostics(
+        event_count=40,
+        confident_event_count=30,
+        abstained_event_count=10,
+        abstained_anomalous_label_count=4,
+        abstained_normal_label_count=6,
+        confident_anomaly_event_count=12,
+        sequence_confident_anomaly_count=1,
+        sequence_confident_normal_count=2,
+        sequence_abstained_count=0,
+        event_decision_metrics=event_decision_metrics,
+        reason_counts={"known_benign_cluster": 18, "not_confident_enough": 10},
+    )
+    monkeypatch.setattr(
+        detector,
+        "_prediction_diagnostics_state",
+        SimpleNamespace(
+            snapshot=lambda: diagnostics,
+            parent_sequence_fallback_count=0,
+        ),
+    )
+    monkeypatch.setattr(detector, "_next_event_prediction_state_snapshot", lambda: None)
+
+    metrics = detector.run_metrics(
+        run_metrics={
+            "test_sequence_count": 5,
+            "counted_predictions": 5,
+            "abstained_prediction_count": 0,
+            "ignored_sequence_count": 0,
+        },
+    )
+
+    manual = metrics.manual_workload_reduction
+    semi_automatic = metrics.semi_automatic_workload_reduction
+    assert manual is not None
+    assert semi_automatic is not None
+    assert manual.total_contextual_sequence_count == (
+        EXPECTED_MANUAL_TOTAL_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert manual.covered_contextual_sequence_count == (
+        EXPECTED_MANUAL_COVERED_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert manual.uncovered_contextual_sequence_count == (
+        EXPECTED_MANUAL_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert manual.alert_count == EXPECTED_MANUAL_ALERT_COUNT
+    assert manual.coverage == pytest.approx(0.8)
+    assert manual.reduction == pytest.approx(0.5)
+    assert manual.overall == pytest.approx(0.4)
+    assert semi_automatic.total_contextual_sequence_count == (
+        EXPECTED_SEMI_AUTOMATIC_TOTAL_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert semi_automatic.covered_contextual_sequence_count == (
+        EXPECTED_SEMI_AUTOMATIC_COVERED_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert semi_automatic.uncovered_contextual_sequence_count == (
+        EXPECTED_SEMI_AUTOMATIC_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT
+    )
+    assert semi_automatic.alert_count is None
+    assert semi_automatic.coverage == pytest.approx(0.75)
+    assert semi_automatic.reduction == pytest.approx(1.0)
+    assert semi_automatic.overall == pytest.approx(0.75)
 
 
 @pytest.mark.parametrize(

@@ -837,11 +837,15 @@ def build_workload_reduction_metrics(
 
     Args:
         mode (DeepCaseWorkloadMode): Manual or semi-automatic workload mode.
-        total_contextual_sequence_count (int): Total sequences considered.
-        covered_contextual_sequence_count (int): Sequences handled
+        total_contextual_sequence_count (int): Total contextual samples in the
+            chosen unit. Paper-style usage keeps this aligned with the same
+            unit as the covered and uncovered counts, typically training
+            samples for manual mode or scored event samples for semi-automatic
+            mode.
+        covered_contextual_sequence_count (int): Contextual samples handled
             automatically or by a learned cluster database.
-        uncovered_contextual_sequence_count (int): Sequences that still need
-            manual inspection.
+        uncovered_contextual_sequence_count (int): Contextual samples that
+            still need manual inspection.
         alert_sampling (DeepCaseWorkloadAlertSampling | None): Manual-mode
             alert sampling details. This is ignored for semi-automatic mode.
 

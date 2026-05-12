@@ -684,9 +684,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             if prediction_diagnostics is None
             else build_workload_reduction_metrics(
                 mode=DeepCaseWorkloadMode.MANUAL,
-                total_contextual_sequence_count=test_sequence_count,
-                covered_contextual_sequence_count=auto_decision_count,
-                uncovered_contextual_sequence_count=abstained_prediction_count,
+                total_contextual_sequence_count=self.train_sample_count,
+                covered_contextual_sequence_count=self.clustered_sample_count,
+                uncovered_contextual_sequence_count=self.unknown_cluster_score_count,
                 alert_sampling=DeepCaseWorkloadAlertSampling(
                     cluster_count=self.known_cluster_count,
                     alerts_per_cluster=10,
@@ -698,9 +698,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             if prediction_diagnostics is None
             else build_workload_reduction_metrics(
                 mode=DeepCaseWorkloadMode.SEMI_AUTOMATIC,
-                total_contextual_sequence_count=test_sequence_count,
-                covered_contextual_sequence_count=auto_decision_count,
-                uncovered_contextual_sequence_count=abstained_prediction_count,
+                total_contextual_sequence_count=prediction_diagnostics.event_count,
+                covered_contextual_sequence_count=prediction_diagnostics.confident_event_count,
+                uncovered_contextual_sequence_count=prediction_diagnostics.abstained_event_count,
                 alert_sampling=DeepCaseWorkloadAlertSampling(
                     cluster_count=self.known_cluster_count,
                     alerts_per_cluster=10,

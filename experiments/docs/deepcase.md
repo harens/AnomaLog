@@ -130,6 +130,26 @@ and `semi_automatic_workload_reduction`. Those summaries encode the paper's
 alert, coverage, reduction, and overall calculations, and should be used for
 Table X style reporting instead of the shared anomaly F1 wrapper.
 
+Manual mode uses fit-time clustering counts from the training split:
+
+- `total_contextual_sequence_count`: event-centred training samples processed
+  during fit
+- `covered_contextual_sequence_count`: training samples assigned to a
+  non-noise cluster
+- `uncovered_contextual_sequence_count`: training samples left unclustered or
+  unscored
+
+Semi-automatic mode uses prediction-time event counts from the scored split:
+
+- `total_contextual_sequence_count`: scored contextual event samples
+- `covered_contextual_sequence_count`: confident automatic event decisions
+- `uncovered_contextual_sequence_count`: abstained event samples
+
+That split keeps the workload metrics aligned with the paper's manual and
+semi-automatic definitions. It also avoids the old behaviour where the
+reported coverage could accidentally mirror the sequence-level anomaly
+wrapper.
+
 The anomaly detector itself remains unchanged.
 
 The model should be run with entity grouping:
