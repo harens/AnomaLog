@@ -67,7 +67,7 @@ def test_structured_parser_registry_resolves_builtins() -> None:
 
 
 def test_openstack_deeplog_parser_uses_instance_id_for_entity() -> None:
-    """OpenStack parser should prefer the VM instance id as the entity key."""
+    """OpenStack parser should namespace the VM instance id by the split."""
     parser = OpenStackDeepLogParser()
     parsed = parser.parse_line(
         "openstack_train\t0\t100 2017-01-01 00:00:30.000 1 INFO nova.compute "
@@ -75,9 +75,9 @@ def test_openstack_deeplog_parser_uses_instance_id_for_entity() -> None:
     )
 
     assert parsed is not None
-    assert parsed.entity_id == "b9000564-fe1a-409b-b8cc-1e88b294cd1d"
+    assert parsed.entity_id == "openstack_train:b9000564-fe1a-409b-b8cc-1e88b294cd1d"
     assert parsed.anomalous == 0
-    assert parsed.untemplated_message_text == "INFO nova.compute Build complete"
+    assert parsed.untemplated_message_text == "Build complete"
 
 
 @pytest.mark.parametrize(

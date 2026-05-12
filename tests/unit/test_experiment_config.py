@@ -1213,28 +1213,28 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
 
     expected = [
         (
-            "instance-a",
+            "openstack_train:instance-a",
             "train",
             0,
-            ["INFO nova.compute Build start", "INFO nova.compute Build done"],
+            ["Build start", "Build done"],
         ),
         (
-            "instance-b",
+            "openstack_train:instance-b",
             "train",
             0,
-            ["INFO nova.compute Delete start"],
+            ["Delete start"],
         ),
         (
-            "instance-c",
+            "openstack_test_normal:instance-c",
             "test",
             0,
-            ["INFO nova.compute Build start"],
+            ["Build start"],
         ),
         (
-            "instance-d",
+            "openstack_test_abnormal:instance-d",
             "test",
             1,
-            ["INFO nova.compute Libvirt error"],
+            ["Libvirt error"],
         ),
     ]
     split_signatures = [

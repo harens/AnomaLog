@@ -54,16 +54,20 @@ reproduction code:
   recover a subset of rows.
 
 The current repository therefore keeps the DeepLog OpenStack preset on the
-paper side: it groups by `instance_id` and skips rows that do not expose one.
-That is the more defensible interpretation of the paper, but it also means the
-local archive does not match the paper's quoted counts.
+paper side: it groups by `instance_id`, namespaces each recovered instance by
+the source-file split, and skips rows that do not expose one. That is the more
+defensible interpretation of the paper, but it also means the local archive
+does not match the paper's quoted counts.
 
 Observed counts on the current archive with the strict instance-id parser:
 
 | Quantity | Count |
 | --- | ---: |
 | raw rows | 207,820 |
+| parseable rows | 207,636 |
 | rows with an explicit instance token | 53,618 |
+| rows without an explicit instance token | 154,018 |
+| unparseable rows | 184 |
 | train entity groups | 557 |
 | normal test entity groups | 1,315 |
 | abnormal test entity groups | 198 |
@@ -78,10 +82,14 @@ Paper target counts:
 | test abnormal sessions | 453 |
 | vocabulary size | 40 |
 
-The gap is therefore dominated by dataset/source mismatch, not by the DeepLog
-scoring logic. The next faithful step would be to recover the exact paper corpus
-or a reconstruction that yields the target counts before tuning any detector
-behaviour.
+The gap is therefore dominated by dataset/source mismatch and preprocessing
+scope, not by the DeepLog scoring logic. The released `nailo2c/deeplog`
+example does not use instance sessions at all: it Spell-parses the `Content`
+field and then resamples the parsed event stream into 1-minute buckets. That
+reproduction is useful as a reference implementation, but it is not the paper's
+session protocol. The next faithful step would be to recover the exact paper
+corpus or a reconstruction that yields the target counts before tuning any
+detector behaviour.
 
 ## BGL
 

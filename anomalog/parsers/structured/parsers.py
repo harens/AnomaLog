@@ -252,10 +252,10 @@ class OpenStackDeepLogParser(StructuredParser):
 
     Input rows are expected in the derived-source format:
     `<split_name>\\t<label>\\t<raw_openstack_line>`.
-    The parser maps each row into the canonical structured schema, retains the
-    log level and component in the message text, and uses the VM
-    `instance_id` as the `entity_id`, matching the session semantics described
-    in the paper. Rows that do not expose an instance identifier are skipped
+    The parser maps each row into the canonical structured schema, keeps the
+    raw message content only for template mining, and prefixes the recovered
+    VM `instance_id` with the file split so the session boundary remains
+    explicit. Rows that do not expose an instance identifier are skipped
     because there is no paper-faithful session key to recover from them.
 
     Attributes:
@@ -327,6 +327,7 @@ class OpenStackDeepLogParser(StructuredParser):
             return None
 
         raw_payload = row_match.group("raw")
+        split_name = row_match.group("split").strip()
         label = int(row_match.group("label"))
 
         match = self._OPENSTACK_RE.match(raw_payload)
@@ -351,13 +352,12 @@ class OpenStackDeepLogParser(StructuredParser):
                 raw_payload,
             )
             return None
+        entity_id = f"{split_name}:{entity_id}"
 
         return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
             entity_id=entity_id,
-            untemplated_message_text=(
-                f"{data['level']} {data['component']} {(data['content'] or '').strip()}"
-            ).strip(),
+            untemplated_message_text=(data["content"] or "").strip(),
             anomalous=label,
         )
 
