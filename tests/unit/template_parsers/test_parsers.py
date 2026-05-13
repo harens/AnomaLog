@@ -322,3 +322,75 @@ def test_spell_template_parser_trains_and_infers_with_fake_spellpy(
     template, parameters = parser.inference("Build vm-3 complete")
     assert template == "Build <*> complete"
     assert parameters == ["vm-3"]
+
+
+def test_spell_template_parser_streams_input_without_materialising_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser training should consume the input stream incrementally.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patches module imports and guards
+            against accidental `list(...)` materialisation during training.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+
+    class _FakeLogParser:
+        def __init__(
+            self,
+            *,
+            indir: str,
+            outdir: str,
+            log_format: str,
+            logmain: str,
+            tau: float,
+        ) -> None:
+            del indir, log_format, tau
+            self._outdir = Path(outdir)
+            self._logmain = logmain
+
+        def parse(self, _filename: str) -> None:
+            templates_path = self._outdir / f"{self._logmain}_templates.csv"
+            templates_path.write_text(
+                "EventId,EventTemplate,Occurrences\nE1,Build <*> complete,2\n",
+                encoding="utf-8",
+            )
+
+    def _forbid_list_materialisation(*_args: object, **_kwargs: object) -> None:
+        msg = "Spell training should not materialise the full input stream."
+        raise AssertionError(msg)
+
+    fake_spell_module = types.SimpleNamespace(LogParser=_FakeLogParser)
+    fake_spellpy_module = types.ModuleType("spellpy")
+    fake_spellpy_module.__dict__["spell"] = fake_spell_module
+    monkeypatch.setitem(sys.modules, "spellpy", fake_spellpy_module)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.list",
+        _forbid_list_materialisation,
+        raising=False,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(
+        lambda: iter(
+            [
+                "Build vm-1 complete",
+                "Build vm-2 complete",
+            ],
+        ),
+    )
+
+    raw_path = tmp_path / ".cache" / "spell" / "demo_spell_input.log"
+    assert raw_path.read_text(encoding="utf-8") == (
+        "Build vm-1 complete\nBuild vm-2 complete\n"
+    )
+    templates_path = (
+        tmp_path
+        / ".cache"
+        / "spell"
+        / "demo_spell_output"
+        / "demo_spell_input.log_templates.csv"
+    )
+    assert templates_path.exists()

@@ -339,18 +339,22 @@ class SpellTemplateParser(TemplateParser):
             msg = "Spell template parsing requires optional dependency 'spellpy'."
             raise ModuleNotFoundError(msg) from exc
 
-        log_lines = list(untemplated_text_iterator())
-        if not log_lines:
-            self._patterns = []
-            return
-
         log_dir = Path.cwd() / ".cache" / "spell"
         log_dir.mkdir(parents=True, exist_ok=True)
         dataset_prefix = self.dataset_name or "dataset"
         raw_path = log_dir / f"{dataset_prefix}_spell_input.log"
         outdir = log_dir / f"{dataset_prefix}_spell_output"
         outdir.mkdir(parents=True, exist_ok=True)
-        raw_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+        any_lines = False
+        with raw_path.open("w", encoding="utf-8") as handle:
+            for log_line in untemplated_text_iterator():
+                handle.write(log_line)
+                handle.write("\n")
+                any_lines = True
+        if not any_lines:
+            self._patterns = []
+            return
 
         parser = spell.LogParser(
             indir=str(log_dir),

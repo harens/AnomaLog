@@ -25,6 +25,8 @@ extensions:
 - One parameter LSTM per template when that template has at least one
   modelable numeric feature.
 - Per-feature normalisation for each template-specific parameter model.
+- Spell template training now streams the raw log text into Spell's temporary
+  input file instead of first buffering the full corpus in memory.
 - Optional inclusion of `dt_prev_ms` when normal training data for that
   template contains at least one non-null elapsed-time value.
 - Masked parameter vectors so missing values do not contribute to residual MSE.
