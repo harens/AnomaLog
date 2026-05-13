@@ -26,6 +26,8 @@ _DEFAULT_DATASETS = (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from experiments.config import DatasetVariantConfig
+
 
 def _parse_dataset_item(value: str) -> tuple[str, int]:
     dataset_ref, separator, history_size_raw = value.partition(":")
@@ -62,6 +64,23 @@ def _resolve_dataset_config_path(*, experiments_root: Path, dataset_ref: str) ->
             raise FileNotFoundError(msg)
         return resolved
     return _resolve_named_config(experiments_root / "configs" / "datasets", dataset_ref)
+
+
+def _decode_dataset_variant_config(obj: object) -> DatasetVariantConfig:
+    """Decode a dataset config or a dataset experiment matrix payload.
+
+    Args:
+        obj (object): Raw TOML object from a config file.
+
+    Returns:
+        DatasetVariantConfig: The embedded dataset config, regardless of whether
+            it was stored directly or under a top-level `[dataset]` table.
+    """
+    raw_config = _require_object_dict(obj)
+    dataset_obj = raw_config.get("dataset")
+    if isinstance(dataset_obj, dict):
+        return _decode_dataset_config(dataset_obj)
+    return _decode_dataset_config(raw_config)
 
 
 def _render_markdown(
@@ -303,7 +322,7 @@ def main() -> int:
             )
             dataset_config = _decode_toml_file(
                 dataset_config_path,
-                decode=_decode_dataset_config,
+                decode=_decode_dataset_variant_config,
             )
             report = audit_dataset_for_deeplog(
                 config=dataset_config,

@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import msgspec
 import pytest
 
 from experiments.audit.deeplog_data_audit import (
@@ -11,6 +14,7 @@ from experiments.audit.deeplog_data_audit import (
     aggregate_warmup_accounting,
     warmup_counts_for_sequence_length,
 )
+from experiments.runners.audit_deeplog_data import _decode_dataset_variant_config
 
 
 @pytest.mark.parametrize(
@@ -147,3 +151,31 @@ def test_hdfs_first_100k_policy_summary_distinguishes_straddlers() -> None:
     assert by_name["assign_by_last_event"].test_anomalous_sessions == 1
     assert by_name["normal_complete_sessions"].ignored_sessions == 0
     assert by_name["normal_complete_sessions"].test_anomalous_sessions == 1
+
+
+def test_decode_dataset_variant_config_accepts_nested_dataset_tables() -> None:
+    """The audit runner should accept the experiment-matrix DeepLog configs."""
+    repo_root = Path(__file__).resolve().parents[2]
+    matrix_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "openstack_deeplog_preprocessed.toml"
+    )
+    raw_matrix = msgspec.toml.decode(matrix_path.read_bytes())
+
+    matrix_config = _decode_dataset_variant_config(raw_matrix)
+    bare_config = _decode_dataset_variant_config(
+        {
+            "name": "bare_example",
+            "dataset_name": "BARE_EXAMPLE",
+            "preset": "hdfs_v1",
+            "template_parser": "identity",
+        },
+    )
+
+    assert matrix_config.dataset_name == "OPENSTACK_DEEPLOG_PREPROCESSED"
+    assert matrix_config.template_parser == "spell"
+    assert bare_config.dataset_name == "BARE_EXAMPLE"
+    assert bare_config.template_parser == "identity"
