@@ -6,14 +6,20 @@ from dataclasses import dataclass, field
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, ParamSpec, TypedDict, TypeVar
+from typing import Any, ParamSpec, Protocol, TypedDict, TypeVar
 
 from filelock import FileLock
 from platformdirs import user_cache_dir, user_data_dir
 from prefect import task as _task
 from prefect.assets import Asset, AssetProperties
 from prefect.assets import materialize as _prefect_materialize
-from prefect.cache_policies import INPUTS, TASK_SOURCE, CacheKeyFnPolicy
+from prefect.cache_policies import (
+    INPUTS,
+    TASK_SOURCE,
+    CacheKeyFnPolicy,
+    CachePolicy,
+)
+from prefect.context import TaskRunContext
 from typing_extensions import Unpack
 
 from anomalog.cache.classes import cache_class_key_fn
@@ -22,6 +28,17 @@ from .files import _ALLOWED, AssetDepsFingerprintPolicy
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+class _ResultStorageLike(Protocol):
+    """Protocol for result-storage objects that expose a filesystem base path.
+
+    Attributes:
+        basepath (str | Path | None): Filesystem base path used to resolve
+            cached result files.
+    """
+
+    basepath: str | Path | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,19 +257,88 @@ def asset_from_local_path(path: Path) -> Asset:
     )
 
 
-# TODO(harens): Allow users to set this, move into CachePathsConfig
-CACHE_POLICY = (
-    INPUTS
-    + TASK_SOURCE
-    + AssetDepsFingerprintPolicy()
-    + CacheKeyFnPolicy(cache_key_fn=cache_class_key_fn)
-).configure(key_storage=CachePathsConfig().cache_root / "prefect")
+def _resolve_result_storage_basepath(
+    result_storage: _ResultStorageLike | Path | str,
+) -> Path:
+    """Return the local filesystem base path for one Prefect result store.
 
+    Args:
+        result_storage (_ResultStorageLike | Path | str): Result storage
+            object or path-like value to resolve.
+
+    Prefect local filesystem storage serialises the base path into cached task
+    state. If that base moves between runs, the task cache must miss rather than
+    reuse a state that points at the old location.
+
+    Returns:
+        Path: Normalised base path used by the active result store.
+    """
+    basepath = getattr(result_storage, "basepath", None)
+    if basepath is not None:
+        return Path(basepath).expanduser().resolve()
+    return Path(str(result_storage)).expanduser().resolve()
+
+
+def _result_storage_cache_key_fn(
+    result_storage: _ResultStorageLike | Path | str,
+) -> Callable[[TaskRunContext, dict[str, object]], str]:
+    """Build a cache-key component for one result-storage base path.
+
+    Args:
+        result_storage (_ResultStorageLike | Path | str): Result storage
+            object or path-like value whose base path should influence cache
+            reuse.
+
+    Returns:
+        Callable[[TaskRunContext, dict[str, object]], str]: Prefect cache-key
+            function that fingerprints the resolved storage base path.
+    """
+    resolved_basepath = _resolve_result_storage_basepath(result_storage)
+
+    def _cache_key(
+        _context: TaskRunContext,
+        _params: dict[str, object],
+    ) -> str:
+        namespace = f"result_storage\n{resolved_basepath.as_posix()}"
+        return sha256(namespace.encode("utf-8")).hexdigest()
+
+    return _cache_key
+
+
+def _cache_policy_for_result_storage(
+    result_storage: _ResultStorageLike | Path | str,
+) -> CachePolicy:
+    """Return the shared cache policy for one local result-storage base.
+
+    Args:
+        result_storage (_ResultStorageLike | Path | str): Result storage
+            object or path-like value whose resolved base path should influence
+            cache reuse.
+
+    Returns:
+        CachePolicy: Cache policy that invalidates stale result-storage paths.
+    """
+    return (
+        INPUTS
+        + TASK_SOURCE
+        + AssetDepsFingerprintPolicy()
+        + CacheKeyFnPolicy(cache_key_fn=cache_class_key_fn)
+        + CacheKeyFnPolicy(
+            cache_key_fn=_result_storage_cache_key_fn(result_storage),
+        )
+    ).configure(
+        key_storage=CachePathsConfig().cache_root / "prefect",
+    )
+
+
+# TODO(harens): Allow users to set this, move into CachePathsConfig
 _RESULT_STORAGE = (
     # Keep Prefect result files under a stable shared base so cache hits do not
     # inherit run-specific PREFECT_HOME paths.
     CachePathsConfig().cache_root / "prefect" / "storage"
 )
+
+CACHE_POLICY = _cache_policy_for_result_storage(_RESULT_STORAGE)
 
 task = partial(
     _task,
@@ -292,10 +378,11 @@ def materialize(
     def _decorate(func: Callable[P, R]) -> Callable[P, R]:
         resolved_task_kwargs = dict(task_kwargs)
         result_storage = resolved_task_kwargs.pop("result_storage", _RESULT_STORAGE)
+        cache_policy = _cache_policy_for_result_storage(result_storage)
         materialized = _prefect_materialize(
             asset_from_local_path(output_path),
             persist_result=True,
-            cache_policy=CACHE_POLICY,
+            cache_policy=cache_policy,
             asset_deps=asset_deps,
             result_storage=result_storage,
             **resolved_task_kwargs,
