@@ -80,6 +80,74 @@ def test_openstack_deeplog_parser_uses_instance_id_for_entity() -> None:
     assert parsed.untemplated_message_text == "Build complete"
 
 
+def test_openstack_deeplog_parser_normalises_numeric_message_tokens() -> None:
+    """OpenStack parser should strip session markers before template mining."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_train\t0\t"
+        "100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[instance: 29d7b230-75ab-4140-81d8-7353d8f7e69b] "
+        "Attempting claim: memory 2048 MB, disk 20 GB, vcpus 1 CPU",
+    )
+
+    assert parsed is not None
+    assert parsed.entity_id == "openstack_train:29d7b230-75ab-4140-81d8-7353d8f7e69b"
+    assert parsed.untemplated_message_text == (
+        "Attempting claim: memory NUM MB, disk NUM GB, vcpus NUM CPU"
+    )
+
+
+def test_openstack_deeplog_parser_collapses_instance_storage_paths() -> None:
+    """OpenStack parser should collapse instance-store filenames to one key."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_train\t0\t"
+        "100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[instance: 29d7b230-75ab-4140-81d8-7353d8f7e69b] "
+        "Base or swap file too young to remove: "
+        "/var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742",
+    )
+
+    assert parsed is not None
+    assert parsed.untemplated_message_text == (
+        "Base or swap file too young to remove: INSTANCE_PATH"
+    )
+
+
+def test_openstack_deeplog_parser_preserves_http_path_structure() -> None:
+    """OpenStack parser should keep HTTP route structure after normalisation."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_train\t0\t"
+        "100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[instance: 29d7b230-75ab-4140-81d8-7353d8f7e69b] "
+        '10.11.10.1 "GET /v2/54fadb412c4e40cdbaed9335e4c35a9e/servers/detail '
+        'HTTP/1.1" status: 200 len: 1893 time: 0.2477829',
+    )
+
+    assert parsed is not None
+    assert parsed.untemplated_message_text == (
+        'IP "GET /v2/HEX/servers/detail HTTP/NUM" status: NUM len: NUM time: NUM'
+    )
+
+
+def test_openstack_deeplog_parser_preserves_pending_task_state() -> None:
+    """OpenStack parser should keep task-state text available to the template."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_test_normal\t0\t"
+        "100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[instance: 29d7b230-75ab-4140-81d8-7353d8f7e69b] "
+        "During sync_power_state the instance has a pending task "
+        "(networking). Skip.",
+    )
+
+    assert parsed is not None
+    assert parsed.untemplated_message_text == (
+        "During sync_power_state the instance has a pending task (networking). Skip."
+    )
+
+
 @pytest.mark.parametrize(
     "raw_line",
     [

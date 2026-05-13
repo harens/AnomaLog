@@ -73,6 +73,36 @@ Observed counts on the current archive with the strict instance-id parser:
 | abnormal test entity groups | 198 |
 | total entity groups | 2,069 |
 
+The main failure mode before this pass was that the `instance_id` marker was
+still leaking into the Spell input. Once that happens, each VM session tends
+to acquire its own template variant, and the key vocabulary explodes even
+though the session grouping itself is correct.
+
+Local audit of the current raw archive showed the problem directly:
+
+| Quantity | Before normalisation | After normalisation |
+| --- | ---: | ---: |
+| distinct inferred templates in train | 1,126 | 25 |
+| distinct inferred templates in test normal | 2,643 | 26 |
+| distinct inferred templates in test abnormal | 410 | 24 |
+| train/test template overlap | partial | complete |
+
+The normalisation step strips the leading `[instance: ...]` tag and
+canonicalises volatile UUID, IP, instance-storage filename, path-segment, hex,
+and numeric tokens before Spell mining. That is a key-only heuristic for the
+current OpenStack preset, not a paper-stated parameter policy. The archive
+also contains three distinct `pending task (...)` states (`spawning`,
+`deleting`, `networking`), which are best treated as observed task-state text
+rather than noise to be merged away.
+
+With that change, the strict instance-id view now trains on 25 stable OpenStack
+keys. The same normalisation on the relaxed all-row stream still exposes 433
+keys, which is a strong hint that the local corpus is not the same inventory as
+the paper's CloudLab OpenStack deployment. The instance-store filename
+collapse removes the obvious one-off key flood that was forcing the detector to
+mark every eligible test event as anomalous, but it does not make the local
+archive match the paper's 40-key target by itself.
+
 Paper target counts:
 
 | Quantity | Paper |
@@ -82,14 +112,21 @@ Paper target counts:
 | test abnormal sessions | 453 |
 | vocabulary size | 40 |
 
-The gap is therefore dominated by dataset/source mismatch and preprocessing
-scope, not by the DeepLog scoring logic. The released `nailo2c/deeplog`
-example does not use instance sessions at all: it Spell-parses the `Content`
-field and then resamples the parsed event stream into 1-minute buckets. That
-reproduction is useful as a reference implementation, but it is not the paper's
-session protocol. The next faithful step would be to recover the exact paper
-corpus or a reconstruction that yields the target counts before tuning any
-detector behaviour.
+The gap is still dominated by dataset/source mismatch and preprocessing scope.
+The consolidated template inventory audit is recorded separately in
+[DeepLog template inventory audit](deeplog_template_inventory_audit.md).
+The released `nailo2c/deeplog` example does not use instance sessions at all:
+it Spell-parses the `Content` field and then resamples the parsed event stream
+into 1-minute buckets. That reproduction is useful as a reference
+implementation, but it is not the paper's session protocol. The current fix
+keeps the paper-faithful `instance_id` grouping while removing the accidental
+session-token leakage into Spell. The next faithful step would be to recover
+the exact paper corpus or a reconstruction that yields the target counts
+before tuning any detector behaviour.
+
+To rerun the local preprocessing audit, use:
+
+`uv run python -m experiments.runners.audit_deeplog_data --dataset openstack_deeplog_preprocessed:10`
 
 ## BGL
 

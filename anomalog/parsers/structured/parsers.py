@@ -258,6 +258,12 @@ class OpenStackDeepLogParser(StructuredParser):
     explicit. Rows that do not expose an instance identifier are skipped
     because there is no paper-faithful session key to recover from them.
 
+    The mined template text is normalised further before Spell sees it: the
+    leading instance tag is removed and volatile identifiers such as UUIDs,
+    IP addresses, instance-storage filenames, path segments, and standalone
+    numeric values are canonicalised. That keeps session handles out of the
+    key vocabulary while preserving the underlying message shape.
+
     Attributes:
         name (ClassVar[str]): Registry/config name for the built-in parser.
     """
@@ -282,9 +288,33 @@ class OpenStackDeepLogParser(StructuredParser):
         """,
         re.VERBOSE,
     )
+    _INSTANCE_PREFIX_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\[instance:\s*(?P<instance_id>[^\]]+?)\]\s*",
+        re.IGNORECASE,
+    )
     _INSTANCE_ID_PATTERNS: ClassVar[tuple[re.Pattern[str], ...]] = (
         re.compile(r"\[instance:\s*(?P<instance_id>[^\]]+?)\]"),
         re.compile(r"\bfor instance (?P<instance_id>\S+)"),
+    )
+    _UUID_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+        re.IGNORECASE,
+    )
+    _IP_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+    )
+    _PATH_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?<!\S)/(?:[\w.-]+/)*[\w.-]+",
+    )
+    _INSTANCE_STORAGE_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?<!\S)/var/lib/nova/instances/[^)\s,.;:]+",
+    )
+    _HEX_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b[0-9a-f]{12,}\b",
+        re.IGNORECASE,
+    )
+    _NUM_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b\d+(?:\.\d+)?\b",
     )
 
     @staticmethod
@@ -307,6 +337,70 @@ class OpenStackDeepLogParser(StructuredParser):
             if instance_id:
                 return instance_id
         return None
+
+    @staticmethod
+    def _normalise_message_text(content: str) -> str:
+        """Canonicalise volatile OpenStack message text before templating.
+
+        Args:
+            content (str): Raw message body extracted from the OpenStack log
+                line.
+
+        Returns:
+            str: Canonicalised message text with session markers and volatile
+                identifiers replaced by stable placeholders.
+        """
+        text = OpenStackDeepLogParser._INSTANCE_PREFIX_RE.sub("", content).strip()
+        text = OpenStackDeepLogParser._UUID_RE.sub("UUID", text)
+        text = OpenStackDeepLogParser._IP_RE.sub("IP", text)
+        text = OpenStackDeepLogParser._normalise_path_tokens(text)
+        text = OpenStackDeepLogParser._INSTANCE_STORAGE_PATH_RE.sub(
+            "INSTANCE_PATH",
+            text,
+        )
+        text = OpenStackDeepLogParser._HEX_RE.sub("HEX", text)
+        return OpenStackDeepLogParser._NUM_RE.sub("NUM", text)
+
+    @staticmethod
+    def _normalise_path_tokens(text: str) -> str:
+        """Normalise path-like tokens without erasing their structure.
+
+        Args:
+            text (str): Text containing path-like tokens to canonicalise.
+
+        Returns:
+            str: Text with volatile path segments replaced by stable
+                placeholders.
+        """
+
+        def _normalise_path(match: re.Match[str]) -> str:
+            token = match.group(0)
+            suffix = ""
+            while token and token[-1] in ",.;:)]":
+                suffix = token[-1] + suffix
+                token = token[:-1]
+            segments = token.split("/")
+            normalised_segments = []
+            for segment in segments:
+                if not segment:
+                    normalised_segments.append(segment)
+                    continue
+                if OpenStackDeepLogParser._UUID_RE.fullmatch(segment):
+                    normalised_segments.append("UUID")
+                    continue
+                if OpenStackDeepLogParser._IP_RE.fullmatch(segment):
+                    normalised_segments.append("IP")
+                    continue
+                if OpenStackDeepLogParser._HEX_RE.fullmatch(segment):
+                    normalised_segments.append("HEX")
+                    continue
+                if re.fullmatch(r"\d+(?:\.\d+)?", segment):
+                    normalised_segments.append("NUM")
+                    continue
+                normalised_segments.append(segment)
+            return "/".join(normalised_segments) + suffix
+
+        return OpenStackDeepLogParser._PATH_RE.sub(_normalise_path, text)
 
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
@@ -357,7 +451,9 @@ class OpenStackDeepLogParser(StructuredParser):
         return BaseStructuredLine(
             timestamp_unix_ms=ts_ms,
             entity_id=entity_id,
-            untemplated_message_text=(data["content"] or "").strip(),
+            untemplated_message_text=self._normalise_message_text(
+                data["content"] or "",
+            ),
             anomalous=label,
         )
 
