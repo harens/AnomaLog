@@ -28,4 +28,7 @@ job is launched through `sbatch`, and they point `uv` at `SLURM_TMPDIR` if it
 is available. That avoids writing caches into the Slurm spool directory on
 clusters where the generated script itself is staged elsewhere. Prefect's
 local result storage is pinned to `${PREFECT_ROOT}/storage`, while
-`PREFECT_HOME` remains per-run for the local database.
+`PREFECT_HOME` remains per-run for the local database. The wrappers also
+raise `PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS` to 120 seconds so
+slower cluster nodes have more time to bring up Prefect's temporary API
+server before a dataset build starts.

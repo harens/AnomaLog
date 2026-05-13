@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from prefect import flow
@@ -17,6 +18,22 @@ if TYPE_CHECKING:
 
     from anomalog._runtime.models import TemplatedDatasetBuildRequest
     from anomalog.parsers.template import TemplatedDataset
+
+_PREFECT_EPHEMERAL_STARTUP_TIMEOUT_SECONDS = 120
+
+
+def _ensure_prefect_ephemeral_startup_timeout() -> None:
+    """Set a longer startup budget for Prefect's ephemeral API server.
+
+    Slurm nodes can take longer than Prefect's default 20 second window to
+    start the temporary API server that backs a flow run. A local dataset build
+    should fail for build reasons, not because the embedded server was slow to
+    become ready on a busy machine.
+    """
+    os.environ.setdefault(
+        "PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS",
+        str(_PREFECT_EPHEMERAL_STARTUP_TIMEOUT_SECONDS),
+    )
 
 
 def _materialize_dataset(
@@ -117,6 +134,7 @@ def build_templated_dataset(request: TemplatedDatasetBuildRequest) -> TemplatedD
     Returns:
         TemplatedDataset: Built dataset returned from the internal Prefect flow.
     """
+    _ensure_prefect_ephemeral_startup_timeout()
 
     @flow
     def _build_dataset_flow() -> TemplatedDataset:

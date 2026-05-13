@@ -57,6 +57,10 @@ def test_render_slurm_script_uses_sweep_stem_and_relative_config_path(
         in rendered.content
     )
     assert (
+        'export PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS="${'
+        'PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS:-120}"' in rendered.content
+    )
+    assert (
         '  --config "experiments/configs/datasets/example.toml" \\' in rendered.content
     )
     assert "  --force" in rendered.content

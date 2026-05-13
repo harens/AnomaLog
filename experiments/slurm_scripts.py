@@ -140,6 +140,10 @@ def render_slurm_script(
             'export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"',
             'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"',
             (
+                'export PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS="${'
+                'PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS:-120}"'
+            ),
+            (
                 'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
                 '${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"'
             ),
