@@ -9,41 +9,70 @@ from typing import Any
 
 import pytest
 
+from experiments.config import ExperimentBundle, load_experiment_bundles
+from experiments.models.deeplog.detector import DeepLogModelConfig
 from experiments.runners.run_experiment import run_experiment
 
 FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "deeplog"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "deeplog_bgl_fixture.log"
 EXPECTED_KEY_VOCABULARY_SIZE = 3
 EXPECTED_PARAMETER_MODEL_COUNT = 0
-PAPER_DEFAULT_HISTORY_SIZE = 10
-PAPER_DEFAULT_TOP_G = 9
-PAPER_DEFAULT_NUM_LAYERS = 2
-PAPER_DEFAULT_HIDDEN_SIZE = 64
 
 
 def _prepare_run_tree(tmp_path: Path) -> Path:
+    baseline_source = (
+        Path(__file__).resolve().parents[2]
+        / "experiments"
+        / "configs"
+        / "models"
+        / "template_frequency_default.toml"
+    )
     sweep_config = tmp_path / "experiments" / "configs" / "sweeps" / "deeplog_run.toml"
     dataset_config = (
         tmp_path / "experiments" / "configs" / "datasets" / "deeplog_dataset.toml"
     )
     model_config = tmp_path / "experiments" / "configs" / "models" / "deeplog.toml"
+    baseline_model_config = (
+        tmp_path
+        / "experiments"
+        / "configs"
+        / "models"
+        / "template_frequency_default.toml"
+    )
     log_path = tmp_path / "logs" / "deeplog_bgl.log"
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     sweep_config.parent.mkdir(parents=True, exist_ok=True)
     dataset_config.parent.mkdir(parents=True, exist_ok=True)
     model_config.parent.mkdir(parents=True, exist_ok=True)
+    baseline_model_config.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(FIXTURE_LOG, log_path)
     shutil.copy2(FIXTURE_ROOT / "deeplog_run.toml", sweep_config)
     shutil.copy2(FIXTURE_ROOT / "deeplog_dataset.toml", dataset_config)
     shutil.copy2(FIXTURE_ROOT / "deeplog.toml", model_config)
+    baseline_model_config.write_text(
+        baseline_source.read_text(encoding="utf-8") + "\nscore_threshold = 0.0\n",
+        encoding="utf-8",
+    )
     return sweep_config
+
+
+def _bundle_named(bundles: list[ExperimentBundle], detector: str) -> ExperimentBundle:
+    return next(bundle for bundle in bundles if bundle.model.detector == detector)
 
 
 def _read_predictions(run_dir: Path) -> list[dict[str, Any]]:
     lines = (run_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines]
+
+
+def _detector_name(run_dir: Path) -> str:
+    manifest = json.loads(
+        (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+    )
+    model_manifest = _object_dict(manifest["model_manifest"])
+    return str(model_manifest["detector"])
 
 
 def _object_dict(value: object) -> dict[str, Any]:
@@ -217,9 +246,11 @@ def _assert_deeplog_next_event_block(
 def _assert_deeplog_manifest(
     *,
     metrics: dict[str, Any],
-    sequence_config: dict[str, Any],
+    bundle: ExperimentBundle,
     manifest: dict[str, Any],
 ) -> None:
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    deeplog_model = bundle.model
     model_manifest_raw = manifest["model_manifest"]
     assert isinstance(model_manifest_raw, dict)
     model_manifest = {str(key): value for key, value in model_manifest_raw.items()}
@@ -231,24 +262,25 @@ def _assert_deeplog_manifest(
         parameter_models.append(
             {str(key): value for key, value in parameter_model.items()},
         )
-    assert model_manifest["detector"] == "deeplog"
-    assert model_manifest["history_size"] == PAPER_DEFAULT_HISTORY_SIZE
-    assert model_manifest["top_g"] == PAPER_DEFAULT_TOP_G
-    assert model_manifest["num_layers"] == PAPER_DEFAULT_NUM_LAYERS
-    assert model_manifest["hidden_size"] == PAPER_DEFAULT_HIDDEN_SIZE
+    assert model_manifest["detector"] == deeplog_model.detector
+    assert model_manifest["history_size"] == deeplog_model.history_size
+    assert model_manifest["top_g"] == deeplog_model.top_g
+    assert model_manifest["num_layers"] == deeplog_model.num_layers
+    assert model_manifest["hidden_size"] == deeplog_model.hidden_size
     assert model_manifest["train_key_vocabulary_size"] == EXPECTED_KEY_VOCABULARY_SIZE
     assert model_manifest["trained_parameter_model_count"] == (
         EXPECTED_PARAMETER_MODEL_COUNT
     )
-    assert model_manifest["include_elapsed_time"] is True
+    assert model_manifest["include_elapsed_time"] == deeplog_model.include_elapsed_time
     assert parameter_models == []
+    sequence_config = bundle.dataset.sequence
     sequence_split_summary = _object_dict(manifest["sequence_split_summary"])
     assert sequence_split_summary.get("train_on_normal_entities_only") is None
     assert sequence_split_summary["requested_train_fraction"] == pytest.approx(
-        sequence_config["train_fraction"],
+        sequence_config.train_fraction,
     )
     assert sequence_split_summary["requested_test_fraction"] == pytest.approx(
-        sequence_config["test_fraction"],
+        sequence_config.test_fraction,
     )
     ignored_sequence_count = _int_value(metrics, "ignored_sequence_count")
     train_sequence_count = _int_value(metrics, "train_sequence_count")
@@ -283,34 +315,55 @@ def _assert_deeplog_manifest(
     assert "event_level_detection" in manifest["available_metric_scopes"]
     assert "sequence_level_detection" in manifest["available_metric_scopes"]
     assert manifest["split_policy"]["train_fraction"] == pytest.approx(
-        sequence_config["train_fraction"],
+        sequence_config.train_fraction,
     )
     assert manifest["stream_segment_policy"]["mode"] == "continuous_event_stream"
 
 
-def test_run_experiment_with_deeplog_follows_paper_defaults(
+def test_run_experiment_with_deeplog_matches_resolved_config(
     tmp_path: Path,
 ) -> None:
-    """DeepLog runs should use the paper defaults and flag both anomaly modes.
+    """DeepLog runs should match the resolved config and flag both anomaly modes.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
     """
     sweep_config = _prepare_run_tree(tmp_path)
+    bundles = load_experiment_bundles(sweep_config)
+    deeplog_bundle = _bundle_named(bundles, "deeplog")
+    baseline_bundle = _bundle_named(bundles, "template_frequency")
 
-    [run_dir] = run_experiment(sweep_config, write_predictions=True)
+    run_dirs = run_experiment(sweep_config, write_predictions=True)
+    assert {_detector_name(run_dir) for run_dir in run_dirs} == {
+        deeplog_bundle.model.detector,
+        baseline_bundle.model.detector,
+    }
 
-    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
-    manifest = json.loads(
-        (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+    deeplog_run_dir = next(
+        run_dir
+        for run_dir in run_dirs
+        if _detector_name(run_dir) == deeplog_bundle.model.detector
     )
-    predictions = _read_predictions(run_dir)
-    run_log = (run_dir / "run.log").read_text(encoding="utf-8")
+    baseline_run_dir = next(
+        run_dir
+        for run_dir in run_dirs
+        if _detector_name(run_dir) == baseline_bundle.model.detector
+    )
+
+    metrics = json.loads((deeplog_run_dir / "metrics.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (deeplog_run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+    )
+    predictions = _read_predictions(deeplog_run_dir)
+    run_log = (deeplog_run_dir / "run.log").read_text(encoding="utf-8")
+    baseline_metrics = json.loads(
+        (baseline_run_dir / "metrics.json").read_text(encoding="utf-8"),
+    )
 
     _assert_deeplog_metrics(metrics)
     _assert_deeplog_manifest(
         metrics=metrics,
-        sequence_config=manifest["sequence_config"],
+        bundle=deeplog_bundle,
         manifest=manifest,
     )
 
@@ -334,3 +387,6 @@ def test_run_experiment_with_deeplog_follows_paper_defaults(
     assert "Fitting deeplog detector" in run_log
     assert "DeepLog resolved torch device:" in run_log
     assert "Primary metric scope: event_level_detection" in run_log
+    assert baseline_metrics["primary_metric_scope"] == "sequence_level_detection"
+    assert baseline_metrics["prediction_unit"] == "sequence"
+    assert baseline_metrics["label_unit"] == "sequence"

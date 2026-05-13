@@ -1,4 +1,4 @@
-"""Helpers for experiment-layer auditing and reproducibility checks."""
+"""Helpers for experiment and dataset auditing."""
 
 from experiments.audit.deepcase_audit import (
     validate_deepcase_bgl_extension_config,

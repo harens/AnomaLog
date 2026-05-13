@@ -1,5 +1,5 @@
 name = "bgl_deeplog_paper_1pct_normal_entry_stream_no_online"
-description = "DeepLog BGL paper reproduction for the 1% normal entry-stream setting without online update."
+description = "DeepLog BGL paper reproduction for the 1% normal entry-stream setting without online update, plus a template-frequency sanity baseline on the same split."
 
 [dataset]
 name = "bgl_deeplog_paper_1pct_normal_entry_stream_no_online"
@@ -27,6 +27,7 @@ cache_root = ".cache/bgl_entity"
 
 [[models]]
 ref = "deeplog_default"
+run_group = "deeplog"
 
 [models.overrides]
 "model.history_size" = 3
@@ -35,3 +36,7 @@ ref = "deeplog_default"
 "model.hidden_size" = 256
 "model.primary_metric_scope" = "event_level_detection"
 "model.secondary_metric_scopes" = ["next_event_prediction", "sequence_level_detection"]
+
+[[models]]
+ref = "template_frequency_default"
+run_group = "baselines"

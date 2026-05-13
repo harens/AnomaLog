@@ -30,3 +30,7 @@ straddling_group_policy = "split_partial_sequences"
 
 [[models]]
 ref = "deeplog"
+
+[[models]]
+ref = "template_frequency_default"
+run_group = "baselines"

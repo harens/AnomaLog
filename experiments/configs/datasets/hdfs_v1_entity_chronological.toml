@@ -1,5 +1,5 @@
 name = "hdfs_v1_entity_chronological"
-description = "HDFS v1 entity chronological experiment matrix."
+description = "HDFS v1 entity chronological experiment matrix with unsupervised, supervised, and label-aware sanity baselines."
 
 [dataset]
 name = "hdfs_v1_entity_chronological"
@@ -18,13 +18,16 @@ data_root = "data/hdfs_entity"
 cache_root = ".cache/hdfs_entity"
 
 [[models]]
+# Unsupervised sequence-level sanity baseline.
 ref = "template_frequency_default"
 run_group = "baselines"
 
 [[models]]
+# Supervised sequence-level sanity baseline.
 ref = "naive_bayes_default"
 run_group = "baselines"
 
 [[models]]
+# Label-aware DeepCASE reproduction.
 ref = "deepcase"
 run_group = "deepcase"

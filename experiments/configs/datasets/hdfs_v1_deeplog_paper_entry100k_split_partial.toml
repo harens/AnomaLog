@@ -1,5 +1,5 @@
 name = "hdfs_v1_deeplog_paper_entry100k_split_partial"
-description = "DeepLog HDFS paper reproduction with split-partial straddler handling across the key-only and full variants."
+description = "DeepLog HDFS paper reproduction with split-partial straddler handling across the key-only and full variants, plus a template-frequency sanity baseline on the same split."
 
 [dataset]
 name = "hdfs_v1_deeplog_paper_entry100k_split_partial"
@@ -26,6 +26,11 @@ cache_root = ".cache/hdfs_entity"
 
 [[models]]
 ref = "deeplog_default"
+run_group = "deeplog"
 
 [models.overrides]
 "model.parameter_detection_enabled" = false
+
+[[models]]
+ref = "template_frequency_default"
+run_group = "baselines"

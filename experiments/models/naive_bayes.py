@@ -1,4 +1,4 @@
-"""Naive Bayes detector over extracted template phrases."""
+"""Supervised Naive Bayes sanity baseline over extracted template phrases."""
 
 from __future__ import annotations
 
@@ -48,12 +48,19 @@ class NaiveBayesModelConfig(
     tag="naive_bayes",
     frozen=True,
 ):
-    """Multinomial Naive Bayes classifier over extracted template phrases."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
+    """Supervised multinomial Naive Bayes sanity baseline.
+
+    The detector learns class-conditional phrase likelihoods from labelled
+    training sequences, so it is useful as a label-separability check rather
+    than as a paper-faithful DeepLog or DeepCASE comparator.
+    """  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     top_k_phrases: Annotated[
         PositiveInt,
         msgspec.Meta(
-            description="Number of most informative phrases to report per prediction.",
+            description=(
+                "Number of most informative phrases to report per sequence prediction."
+            ),
         ),
     ] = 5
     anomalous_posterior_threshold: Annotated[
@@ -83,7 +90,11 @@ class NaiveBayesModelConfig(
 
 @dataclass(slots=True)
 class NaiveBayesDetector(SingleFitMixin, ExperimentDetector):
-    """Multinomial Naive Bayes classifier over extracted template phrases.
+    """Supervised multinomial Naive Bayes classifier over phrase n-grams.
+
+    The detector learns a phrase bag from sequence labels and then scores one
+    sequence at a time. That makes it a good corpus-separability sanity check,
+    but not a direct competitor to sequence-to-sequence or next-event models.
 
     Attributes:
         detector_name (ClassVar[str]): Stable detector name for manifests/logging.
@@ -121,11 +132,11 @@ class NaiveBayesDetector(SingleFitMixin, ExperimentDetector):
         progress: Progress,
         logger: logging.Logger | None = None,
     ) -> None:
-        """Fit class priors and phrase likelihoods from train sequences.
+        """Fit class priors and phrase likelihoods from labelled train sequences.
 
         Args:
             train_sequences (Iterable[TemplateSequence]): Training split
-                sequences.
+                sequences. Both normal and anomalous labels are required.
             progress (Progress): Progress reporter.
             logger (logging.Logger | None): Optional logger for fit diagnostics.
 

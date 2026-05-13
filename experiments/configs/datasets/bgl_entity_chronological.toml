@@ -1,5 +1,5 @@
 name = "bgl_entity_chronological"
-description = "BGL entity chronological experiment matrix."
+description = "BGL entity chronological experiment matrix with unsupervised, supervised, and label-aware sanity baselines."
 
 [dataset]
 name = "bgl_entity_chronological"
@@ -18,13 +18,16 @@ data_root = "data/bgl_entity"
 cache_root = ".cache/bgl_entity"
 
 [[models]]
+# Unsupervised sequence-level sanity baseline.
 ref = "template_frequency_default"
 run_group = "baselines"
 
 [[models]]
+# Supervised sequence-level sanity baseline.
 ref = "naive_bayes_default"
 run_group = "baselines"
 
 [[models]]
+# Label-aware DeepCASE reproduction.
 ref = "deepcase"
 run_group = "deepcase"

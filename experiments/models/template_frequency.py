@@ -1,4 +1,4 @@
-"""Template-frequency baseline detector."""
+"""Unsupervised template-frequency sanity baseline."""
 
 from __future__ import annotations
 
@@ -36,14 +36,19 @@ class TemplateFrequencyModelConfig(
     tag="template_frequency",
     frozen=True,
 ):
-    """Baseline detector using template frequencies from train sequences."""  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
+    """Unsupervised template-frequency sanity baseline.
+
+    The detector counts templates in the train prefix and turns unexpectedly
+    rare sequences into high anomaly scores. When the threshold is not fixed by
+    config, calibration uses normal training sequences only.
+    """  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     score_threshold: Annotated[
         NonNegativeFloat | None,
         msgspec.Meta(
             description=(
                 "Optional fixed anomaly score threshold. When omitted, the "
-                "detector calibrates from normal training scores."
+                "detector calibrates from normal training scores only."
             ),
         ),
     ] = None
@@ -76,7 +81,11 @@ class TemplateFrequencyModelConfig(
 
 @dataclass(slots=True)
 class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
-    """Baseline detector scoring sequences by train-set template frequencies.
+    """Unsupervised detector scoring sequences by train-set template frequency.
+
+    It is a lightweight sanity check for whether simple template statistics
+    already separate the labels, not a paper-faithful DeepLog/DeepCASE
+    reproduction.
 
     Attributes:
         detector_name (ClassVar[str]): Stable detector name for manifests/logging.
@@ -105,11 +114,12 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         progress: Progress,
         logger: logging.Logger | None = None,
     ) -> None:
-        """Fit template counts from train sequences.
+        """Fit template counts from train sequences and calibrate a threshold.
 
         Args:
             train_sequences (Iterable[TemplateSequence]): Training split
-                sequences.
+                sequences. Threshold calibration needs at least one normal
+                training sequence when the threshold is not configured.
             progress (Progress): Progress reporter.
             logger (logging.Logger | None): Optional logger for fit diagnostics.
 
@@ -121,19 +131,14 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         total_events = 0
         del logger
         calibration_sequences: list[TemplateSequence] = []
-        all_sequences: list[TemplateSequence] | None = (
-            [] if self.configured_score_threshold is None else None
-        )
         for sequence in progress.track(
             train_sequences,
             description=fit_stage_description(self.detector_name),
         ):
             counts.update(sequence.templates)
             total_events += len(sequence.templates)
-            if all_sequences is not None:
-                all_sequences.append(sequence)
-                if sequence.label == 0:
-                    calibration_sequences.append(sequence)
+            if self.configured_score_threshold is None and sequence.label == 0:
+                calibration_sequences.append(sequence)
         if total_events == 0:
             msg = "Cannot fit template_frequency detector with zero train events."
             raise ValueError(msg)
@@ -146,10 +151,11 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             return
 
         if not calibration_sequences:
-            if all_sequences is None:
-                msg = "template_frequency calibration requires replayable train data."
-                raise ValueError(msg)
-            calibration_sequences = all_sequences
+            msg = (
+                "template_frequency calibration requires at least one normal "
+                "training sequence."
+            )
+            raise ValueError(msg)
         calibration_scores = sorted(
             self.score(sequence) for sequence in calibration_sequences
         )

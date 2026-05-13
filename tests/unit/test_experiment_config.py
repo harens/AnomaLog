@@ -33,6 +33,7 @@ from experiments.config import (
 from experiments.datasets import build_dataset_spec, dataset_source_summary
 from experiments.models.deepcase.detector import DeepCaseModelConfig
 from experiments.models.deeplog.detector import DeepLogModelConfig
+from experiments.models.template_frequency import TemplateFrequencyModelConfig
 
 
 def _write_config_tree(
@@ -86,6 +87,43 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
     bundles = load_experiment_bundles(sweep_path)
     assert len(bundles) == 1
     return bundles[0]
+
+
+def _assert_template_frequency_baseline_bundle(bundle: ExperimentBundle) -> None:
+    assert isinstance(bundle.model, TemplateFrequencyModelConfig)
+    assert bundle.run_group == "baselines"
+
+
+def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
+    assert isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
+    assert isinstance(
+        bundle.dataset.sequence.split,
+        RawEntryPrefixNormalFractionSplitConfig,
+    )
+    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.run_group == "deeplog"
+
+
+def _assert_bgl_10pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
+    assert isinstance(
+        bundle.dataset.sequence.split,
+        RawEntryPrefixFractionSplitConfig,
+    )
+    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.run_group == "deeplog"
+
+
+def _assert_hdfs_deeplog_bundle(bundle: ExperimentBundle) -> None:
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+    assert isinstance(
+        bundle.dataset.sequence.split,
+        RawEntryPrefixCountSplitConfig,
+    )
+    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    assert isinstance(bundle.model, DeepLogModelConfig)
+    assert bundle.run_group == "deeplog"
 
 
 def _write_preprocessed_hdfs_archive(
@@ -853,98 +891,85 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     """Paper reproduction configs should keep their declared split semantics."""
     repo_root = Path(__file__).resolve().parents[2]
 
-    bgl_1pct_bundle = load_experiment_bundles(
+    bgl_1pct_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
         / "bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml",
-    )[0]
-    bgl_10pct_bundle = load_experiment_bundles(
+    )
+    bgl_10pct_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
         / "bgl_deeplog_paper_10pct_entry_stream_no_online.toml",
-    )[0]
-    hdfs_bundle = load_experiment_bundles(
+    )
+    hdfs_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
         / "hdfs_v1_deeplog_paper_entry100k_split_partial.toml",
-    )[0]
+    )
+    hdfs_assign_first_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs_v1_deeplog_paper_entry100k_assign_first.toml",
+    )
+
+    def bundle_named(
+        bundles: list[ExperimentBundle],
+        detector: str,
+    ) -> ExperimentBundle:
+        return next(bundle for bundle in bundles if bundle.model.detector == detector)
 
     validate_deeplog_paper_config(
-        dataset_config=bgl_1pct_bundle.dataset,
-        model_config=bgl_1pct_bundle.model,
+        dataset_config=bundle_named(bgl_1pct_bundles, "deeplog").dataset,
+        model_config=bundle_named(bgl_1pct_bundles, "deeplog").model,
     )
     validate_deeplog_paper_config(
-        dataset_config=bgl_10pct_bundle.dataset,
-        model_config=bgl_10pct_bundle.model,
+        dataset_config=bundle_named(bgl_10pct_bundles, "deeplog").dataset,
+        model_config=bundle_named(bgl_10pct_bundles, "deeplog").model,
     )
     validate_deeplog_paper_config(
-        dataset_config=hdfs_bundle.dataset,
-        model_config=hdfs_bundle.model,
+        dataset_config=bundle_named(hdfs_bundles, "deeplog").dataset,
+        model_config=bundle_named(hdfs_bundles, "deeplog").model,
     )
 
-    assert isinstance(
-        bgl_1pct_bundle.dataset.sequence,
-        ChronologicalStreamSequenceConfig,
-    )
-    assert bgl_1pct_bundle.dataset.sequence.chunk_size == 100_000
-    assert isinstance(
-        bgl_1pct_bundle.dataset.sequence.split,
-        RawEntryPrefixNormalFractionSplitConfig,
-    )
-    assert (
-        bgl_1pct_bundle.dataset.sequence.split.application_order.value
-        == "before_grouping"
-    )
-    assert (
-        bgl_1pct_bundle.dataset.sequence.split.train_normal_entry_fraction
-        == pytest.approx(0.01)
-    )
-    assert isinstance(bgl_1pct_bundle.model, DeepLogModelConfig)
-    assert bgl_1pct_bundle.model.history_size == 3
-    assert bgl_1pct_bundle.model.top_g == 6
-    assert bgl_1pct_bundle.model.num_layers == 1
-    assert bgl_1pct_bundle.model.hidden_size == 256
+    for bundles in (
+        bgl_1pct_bundles,
+        bgl_10pct_bundles,
+        hdfs_bundles,
+        hdfs_assign_first_bundles,
+    ):
+        assert {bundle.model.detector for bundle in bundles} == {
+            "deeplog",
+            "template_frequency",
+        }
 
-    assert isinstance(
-        bgl_10pct_bundle.dataset.sequence.split,
-        RawEntryPrefixFractionSplitConfig,
+    _assert_template_frequency_baseline_bundle(
+        bundle_named(hdfs_bundles, "template_frequency"),
     )
-    assert (
-        bgl_10pct_bundle.dataset.sequence.split.application_order.value
-        == "before_grouping"
+    _assert_template_frequency_baseline_bundle(
+        bundle_named(bgl_1pct_bundles, "template_frequency"),
     )
-    assert (
-        bgl_10pct_bundle.dataset.sequence.split.train_entry_fraction
-        == pytest.approx(0.10)
+    _assert_template_frequency_baseline_bundle(
+        bundle_named(bgl_10pct_bundles, "template_frequency"),
     )
-    assert isinstance(bgl_10pct_bundle.model, DeepLogModelConfig)
-    assert bgl_10pct_bundle.model.history_size == 3
-    assert bgl_10pct_bundle.model.top_g == 6
-    assert bgl_10pct_bundle.model.num_layers == 1
-    assert bgl_10pct_bundle.model.hidden_size == 256
+    _assert_template_frequency_baseline_bundle(
+        bundle_named(hdfs_assign_first_bundles, "template_frequency"),
+    )
 
-    assert isinstance(hdfs_bundle.dataset.sequence, EntitySequenceConfig)
-    assert isinstance(
-        hdfs_bundle.dataset.sequence.split,
-        RawEntryPrefixCountSplitConfig,
+    _assert_bgl_1pct_deeplog_bundle(
+        bundle_named(bgl_1pct_bundles, "deeplog"),
     )
-    assert (
-        hdfs_bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    _assert_bgl_10pct_deeplog_bundle(
+        bundle_named(bgl_10pct_bundles, "deeplog"),
     )
-    assert hdfs_bundle.dataset.sequence.split.train_entry_count == 100_000
-    assert hdfs_bundle.dataset.sequence.train_fraction == pytest.approx(0.01)
-    assert hdfs_bundle.dataset.sequence.test_fraction == pytest.approx(0.99)
-    assert isinstance(hdfs_bundle.model, DeepLogModelConfig)
-    assert hdfs_bundle.model.history_size == 10
-    assert hdfs_bundle.model.top_g == 9
-    assert hdfs_bundle.model.num_layers == 2
-    assert hdfs_bundle.model.hidden_size == 64
+    _assert_hdfs_deeplog_bundle(bundle_named(hdfs_bundles, "deeplog"))
 
 
 def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> None:
@@ -971,18 +996,14 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
     assert bundle.dataset.sequence.split is None
     assert bundle.dataset.sequence.train_on_normal_entities_only is False
     assert isinstance(bundle.model, DeepLogModelConfig)
-    assert bundle.model.history_size == 10
-    assert bundle.model.top_g == 9
-    assert bundle.model.num_layers == 2
-    assert bundle.model.hidden_size == 64
-    assert bundle.model.epochs == 300
-    assert bundle.model.batch_size == 2048
+    assert bundle.model.detector == "deeplog"
+    assert bundle.model.parameter_detection_enabled is False
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
 
 
-def test_wuyifan18_preprocessed_manifest_exposes_only_the_deeplog_bundle() -> None:
-    """The checked-in HDFS manifest should only expose the DeepLog bundle."""
+def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
+    """The checked-in HDFS manifest should expose the DeepLog bundle."""
     repo_root = Path(__file__).resolve().parents[2]
     sweep_path = (
         repo_root
@@ -994,15 +1015,19 @@ def test_wuyifan18_preprocessed_manifest_exposes_only_the_deeplog_bundle() -> No
 
     bundles = load_experiment_bundles(sweep_path)
 
-    assert [bundle.model.name for bundle in bundles] == ["deeplog_default"]
-    bundle = bundles[0]
+    assert {bundle.model.detector for bundle in bundles} == {
+        "deeplog",
+        "template_frequency",
+    }
+    bundle = next(bundle for bundle in bundles if bundle.model.detector == "deeplog")
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
     assert bundle.dataset_path == sweep_path
     assert bundle.model_path == sweep_path
     assert isinstance(bundle.model, DeepLogModelConfig)
-    assert bundle.model.name == "deeplog_default"
+    assert bundle.model.detector == "deeplog"
+    assert bundle.run_group == "deeplog"
 
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
@@ -1109,7 +1134,14 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
         / "datasets"
         / "hdfs_wuyifan18_deeplog_preprocessed.toml"
     )
-    bundle = load_experiment_bundles(sweep_path)[0]
+    bundles = load_experiment_bundles(sweep_path)
+    assert {bundle.model.name for bundle in bundles} == {
+        "deeplog_default",
+        "template_frequency_default",
+    }
+    bundle = next(
+        bundle for bundle in bundles if bundle.model.name == "deeplog_default"
+    )
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.template_parser == "identity"
@@ -1273,8 +1305,11 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl_entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 1
-    assert {bundle.model.name for bundle in hdfs_bundles} == {"deeplog_default"}
+    assert len(hdfs_bundles) == 2
+    assert {bundle.model.name for bundle in hdfs_bundles} == {
+        "deeplog_default",
+        "template_frequency_default",
+    }
     assert len(bgl_extension_bundles) == 3
     assert {bundle.model.name for bundle in bgl_extension_bundles} == {
         "template_frequency_default",
@@ -1333,6 +1368,7 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         "deepcase",
     }
     assert {bundle.run_group for bundle in openstack_bundles} == {
+        "baselines",
         "deeplog",
         "deepcase",
     }

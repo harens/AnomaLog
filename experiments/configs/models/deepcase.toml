@@ -1,6 +1,7 @@
 name = "deepcase"
 detector = "deepcase"
 primary_metric_scope = "sequence_level_detection"
+description = "Label-aware DeepCASE reproduction config: event labels are used when available, with sequence labels as the fallback."
 context_length = 10
 timeout_seconds = 86400
 hidden_size = 128

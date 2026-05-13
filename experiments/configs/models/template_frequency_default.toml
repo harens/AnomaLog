@@ -1,4 +1,4 @@
 name = "template_frequency_default"
 detector = "template_frequency"
 smoothing = 1.0
-description = "Baseline detector that scores sequences by mean negative log template likelihood."
+description = "Unsupervised sequence-level sanity baseline using mean negative log template likelihood."

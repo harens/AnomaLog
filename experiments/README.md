@@ -78,6 +78,10 @@ benchmarked on the same dataset family, keep them in the same manifest or use
 fixed overrides rather than letting a shared dataset preset imply the wrong
 training contract.
 
+The DeepLog reproduction manifests also carry a template-frequency sanity
+baseline on the same split, so the paper target is always compared against a
+simple sequence-statistics floor.
+
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
 `sequence.train_on_normal_entities_only` is only available for entity-grouped
@@ -98,6 +102,16 @@ The same fixed-holdout contract is available for fixed-window and time-window
 sequence configs through the `sequence.train_fraction` and
 `sequence.test_fraction` pair. The defaults are `0.2` and `0.8`, respectively,
 so omitted values still preserve the same fixed suffix behaviour.
+
+The baseline supervision split is intentional:
+
+- Naive Bayes is supervised at the sequence level.
+- Template Frequency is unsupervised apart from optional normal-score calibration.
+- DeepCASE is label-aware during fit and falls back to sequence labels when event labels are missing.
+- DeepLog is normal-only at fit time, with labels used for eligibility bookkeeping and evaluation rather than class-target learning.
+
+Treat the baseline scores as checks on corpus separability and template
+statistics rather than as direct competitors to DeepLog or DeepCASE.
 
 When `sequence.train_on_normal_entities_only = true`, the requested
 `train_fraction` still applies to the full entity population. Anomalous
@@ -134,6 +148,8 @@ uv run python -m experiments.runners.audit_deeplog_data
 
 The DeepCASE paper-readiness report is checked in at
 `experiments/reports/deepcase_reproduction_readiness.md`.
+The baseline sanity report is checked in at
+`experiments/reports/baseline_sanity_report.md`.
 
 ## Caching Strategy
 
