@@ -83,6 +83,7 @@ EXPECTED_MANUAL_ALERT_COUNT = 40
 EXPECTED_SEMI_AUTOMATIC_TOTAL_CONTEXTUAL_SEQUENCE_COUNT = 40
 EXPECTED_SEMI_AUTOMATIC_COVERED_CONTEXTUAL_SEQUENCE_COUNT = 30
 EXPECTED_SEMI_AUTOMATIC_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT = 10
+EXPECTED_MASKED_BATCH_SAMPLE_COUNT = 2
 ConfigValue = str | int | float | bool | None
 
 
@@ -1462,6 +1463,56 @@ def test_deepcase_predict_all_batches_multiple_sequences(
         [0.0],
     ]
     assert [outcome.abstained_event_count for _, outcome in outcomes] == [0, 0]
+
+
+def test_deepcase_predict_all_batches_respects_evaluation_event_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase bulk scoring should slice scores by emitted prediction samples.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces batch prediction so the test
+            can isolate AnomaLog's regrouping logic for masked prediction
+            batches.
+    """
+    train_sequence = _sequence(templates=["A", "B", "C"])
+    first_test_sequence = TemplateSequence(
+        events=[
+            ("A", [], None),
+            ("B", [], None),
+        ],
+        label=0,
+        entity_ids=["entity-1"],
+        window_id=0,
+        split_label=SplitLabel.TEST,
+        evaluation_event_mask=(False, True),
+    )
+    second_test_sequence = _sequence(
+        templates=["C"],
+        split_label=SplitLabel.TEST,
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(name="deepcase", epochs=1, iterations=100),
+    )
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))
+
+    def _fake_predict_batch(batch: DeepCaseSampleBatch) -> list[float]:
+        assert batch.sample_count == EXPECTED_MASKED_BATCH_SAMPLE_COUNT
+        return [MALICIOUS_SCORE, 0.0]
+
+    monkeypatch.setattr(detector, "_predict_batch", _fake_predict_batch)
+
+    outcomes = list(detector.predict_all((first_test_sequence, second_test_sequence)))
+
+    assert [
+        [finding.raw_score for finding in outcome.findings] for _, outcome in outcomes
+    ] == [
+        [MALICIOUS_SCORE],
+        [0.0],
+    ]
+    assert [outcome.predicted_label for _, outcome in outcomes] == [1, 0]
+    assert [outcome.score for _, outcome in outcomes] == [MALICIOUS_SCORE, 0.0]
 
 
 def test_deepcase_next_event_predictions_reset_between_bulk_runs(

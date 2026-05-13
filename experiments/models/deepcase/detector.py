@@ -582,7 +582,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         buffered_sample_count = 0
         for sequence in sequences:
             buffered_sequences.append(sequence)
-            buffered_sample_count += len(sequence.events)
+            buffered_sample_count += _prediction_sample_count(sequence)
             if buffered_sample_count < self._prediction_chunk_sample_limit():
                 continue
             yield from self._predict_sequence_chunk(buffered_sequences)
@@ -802,7 +802,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         raw_scores = self._predict_batch(batch)
         score_offset = 0
         for sequence in sequences:
-            sample_count = len(sequence.events)
+            sample_count = _prediction_sample_count(sequence)
             sequence_scores = raw_scores[score_offset : score_offset + sample_count]
             findings = _findings_from_scores(
                 batch=batch,
@@ -896,8 +896,11 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
         for sequence in sequences:
-            for event_index, template in enumerate(sequence.templates):
-                batch_index = sample_offset + event_index
+            for batch_sample_offset, event_index in enumerate(
+                _prediction_sample_indexes(sequence),
+            ):
+                batch_index = sample_offset + batch_sample_offset
+                template = sequence.templates[event_index]
                 state.record_observation(
                     actual_label=template,
                     predicted_labels=_top_event_templates(
@@ -913,7 +916,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
                         ]
                     ),
                 )
-            sample_offset += len(sequence.events)
+            sample_offset += _prediction_sample_count(sequence)
 
     def _predict_next_event_batch(self, batch: DeepCaseSampleBatch) -> torch.Tensor:
         """Run the diagnostic-only Context Builder next-event pass.
@@ -1049,6 +1052,43 @@ def _normalise_next_event_confidence(confidence: torch.Tensor) -> torch.Tensor:
         return confidence
     msg = f"Unexpected DeepCase confidence shape: {tuple(confidence.shape)}"
     raise ValueError(msg)
+
+
+def _prediction_sample_count(sequence: TemplateSequence) -> int:
+    """Return how many prediction samples one sequence contributes.
+
+    DeepCASE prediction batches may exclude some events via
+    ``evaluation_event_mask`` while still keeping the parent sequence intact.
+    Score slicing must follow the emitted sample count rather than the raw
+    event count; otherwise later sequences consume the wrong score segment.
+
+    Args:
+        sequence (TemplateSequence): Sequence being scored.
+
+    Returns:
+        int: Number of event-centred samples emitted for prediction.
+    """
+    if sequence.evaluation_event_mask is None:
+        return len(sequence.events)
+    return sum(1 for is_eligible in sequence.evaluation_event_mask if is_eligible)
+
+
+def _prediction_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    """Return prediction-time event indexes for one sequence.
+
+    Args:
+        sequence (TemplateSequence): Sequence being scored.
+
+    Returns:
+        list[int]: Event indexes emitted by DeepCASE prediction batching.
+    """
+    if sequence.evaluation_event_mask is None:
+        return list(range(len(sequence.events)))
+    return [
+        event_index
+        for event_index, is_eligible in enumerate(sequence.evaluation_event_mask)
+        if is_eligible
+    ]
 
 
 def _top_event_templates(
