@@ -137,10 +137,13 @@ def _anomalous_parameter_findings(
     return anomalous_findings
 
 
-def _assert_deeplog_metrics(metrics: dict[str, Any]) -> None:
+def _assert_deeplog_metrics(
+    metrics: dict[str, Any],
+    expected_k_values: list[int],
+) -> None:
     _assert_deeplog_metric_metadata(metrics)
     _assert_deeplog_sequence_counts(metrics)
-    _assert_deeplog_metric_blocks(metrics)
+    _assert_deeplog_metric_blocks(metrics, expected_k_values)
 
 
 def _assert_deeplog_metric_metadata(metrics: dict[str, Any]) -> None:
@@ -173,12 +176,15 @@ def _assert_deeplog_sequence_counts(metrics: dict[str, Any]) -> None:
     )
 
 
-def _assert_deeplog_metric_blocks(metrics: dict[str, Any]) -> None:
+def _assert_deeplog_metric_blocks(
+    metrics: dict[str, Any],
+    expected_k_values: list[int],
+) -> None:
     metric_blocks_raw = metrics["metric_blocks"]
     assert isinstance(metric_blocks_raw, dict)
     metric_blocks = {str(key): value for key, value in metric_blocks_raw.items()}
     _assert_deeplog_event_block(metric_blocks)
-    _assert_deeplog_next_event_block(metric_blocks, metrics)
+    _assert_deeplog_next_event_block(metric_blocks, metrics, expected_k_values)
     _assert_deeplog_sequence_block(metric_blocks)
 
 
@@ -202,6 +208,7 @@ def _assert_deeplog_sequence_block(metric_blocks: dict[str, Any]) -> None:
 def _assert_deeplog_next_event_block(
     metric_blocks: dict[str, Any],
     metrics: dict[str, Any],
+    expected_k_values: list[int],
 ) -> None:
     next_event_prediction = _object_dict(metric_blocks["next_event_prediction"])
     assert next_event_prediction["status"] == "valid"
@@ -223,7 +230,7 @@ def _assert_deeplog_next_event_block(
     )
     assert _int_value(totals, "events_eligible") > 0
     assert 0.0 < _float_value(totals, "coverage") <= 1.0
-    assert 1 in _list_value(top_k, "k_values")
+    assert _list_value(top_k, "k_values") == expected_k_values
     assert "1" in hit_count
     assert "1" in accuracy
     assert any(_int_value(hit_count, key) > 0 for key in hit_count)
@@ -265,6 +272,7 @@ def _assert_deeplog_manifest(
     assert model_manifest["detector"] == deeplog_model.detector
     assert model_manifest["history_size"] == deeplog_model.history_size
     assert model_manifest["top_g"] == deeplog_model.top_g
+    assert model_manifest["top_g_values"] == list(deeplog_model.top_g_values)
     assert model_manifest["num_layers"] == deeplog_model.num_layers
     assert model_manifest["hidden_size"] == deeplog_model.hidden_size
     assert model_manifest["train_key_vocabulary_size"] == EXPECTED_KEY_VOCABULARY_SIZE
@@ -338,11 +346,13 @@ def test_run_experiment_with_deeplog_matches_resolved_config(
         deeplog_bundle.model.detector,
         baseline_bundle.model.detector,
     }
+    deeplog_model = deeplog_bundle.model
+    assert isinstance(deeplog_model, DeepLogModelConfig)
 
     deeplog_run_dir = next(
         run_dir
         for run_dir in run_dirs
-        if _detector_name(run_dir) == deeplog_bundle.model.detector
+        if _detector_name(run_dir) == deeplog_model.detector
     )
     baseline_run_dir = next(
         run_dir
@@ -360,7 +370,7 @@ def test_run_experiment_with_deeplog_matches_resolved_config(
         (baseline_run_dir / "metrics.json").read_text(encoding="utf-8"),
     )
 
-    _assert_deeplog_metrics(metrics)
+    _assert_deeplog_metrics(metrics, list(deeplog_model.top_g_values))
     _assert_deeplog_manifest(
         metrics=metrics,
         bundle=deeplog_bundle,

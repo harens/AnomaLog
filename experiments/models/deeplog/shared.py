@@ -181,6 +181,8 @@ class DeepLogKeyFinding(msgspec.Struct, frozen=True):
         actual_template (str): Observed next log-key template.
         actual_probability (float | None): Probability assigned to the
             observed template, if available.
+        actual_rank (int | None): Rank position of the observed template among
+            the full fitted vocabulary, if the model could score it.
         is_anomalous (bool): Whether the key-model decision is anomalous.
         is_oov (bool): Whether the observed template was out of vocabulary.
         top_predictions (list[DeepLogTopPrediction]): Ranked top predictions.
@@ -191,6 +193,7 @@ class DeepLogKeyFinding(msgspec.Struct, frozen=True):
     unknown_history_templates: list[str]
     actual_template: str
     actual_probability: float | None
+    actual_rank: int | None
     is_anomalous: bool
     is_oov: bool
     top_predictions: list[DeepLogTopPrediction]
@@ -263,7 +266,9 @@ class DeepLogManifest(ModelManifest, frozen=True):
         parameter_validation_policy (str): Policy used when validating parameter
             model inputs.
         history_size (int): Key-model history length.
-        top_g (int): Number of top key predictions treated as normal.
+        top_g (int): Maximum top key predictions treated as normal.
+        top_g_values (list[int]): Replay cut-offs used to evaluate the accepted
+            key window across multiple `g` values.
         num_layers (int): LSTM layer count used by DeepLog models.
         hidden_size (int): Shared LSTM hidden size.
         epochs (int): Training epochs.
@@ -273,7 +278,7 @@ class DeepLogManifest(ModelManifest, frozen=True):
         gaussian_confidence (float): Confidence level used for Gaussian bounds.
         parameter_detection_enabled (bool): Whether the parameter branch was
             fitted and applied during the run.
-        include_elapsed_time (bool): Whether elapsed time is modeled as a
+        include_elapsed_time (bool): Whether elapsed time is modelled as a
             parameter feature.
         train_key_vocabulary_size (int): Key-model vocabulary size from training.
         trained_parameter_model_count (int): Number of per-template parameter
@@ -299,6 +304,7 @@ class DeepLogManifest(ModelManifest, frozen=True):
     parameter_validation_policy: str
     history_size: int
     top_g: int
+    top_g_values: list[int]
     num_layers: int
     hidden_size: int
     epochs: int

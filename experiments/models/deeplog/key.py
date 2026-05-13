@@ -78,6 +78,26 @@ class _KeyTrainingRun:
     device: torch.device
 
 
+@dataclass(frozen=True, slots=True)
+class _KeyEventScoreInput:
+    """Materialised inputs for one key-model event score.
+
+    Attributes:
+        templates (list[str]): Full template sequence being scored.
+        target_index (int): Target index within the scored sequence.
+        probabilities (torch.Tensor): Model probabilities for the target
+            event.
+        actual_rank (int | None): Exact rank of the observed key, if known.
+        prefix_length (int): Number of carried-over prefix templates.
+    """
+
+    templates: list[str]
+    target_index: int
+    probabilities: torch.Tensor
+    actual_rank: int | None
+    prefix_length: int
+
+
 def fit_key_model(
     *,
     training_corpus: NormalTrainingCorpus,
@@ -312,6 +332,7 @@ def score_key_sequence(
                 unknown_history_templates=unknown_history_templates,
                 actual_template=templates[target_index],
                 actual_probability=None,
+                actual_rank=None,
                 is_anomalous=True,
                 is_oov=templates[target_index] not in context.template_to_index,
                 top_predictions=[],
@@ -335,45 +356,53 @@ def score_key_sequence(
             context.model(history_tensor),
             dim=1,
         ).cpu()
+    rank_positions_by_event = torch.argsort(
+        torch.argsort(probabilities_by_event, dim=1, descending=True),
+        dim=1,
+    )
 
-    for target_index, probabilities in zip(
-        known_target_indexes,
-        probabilities_by_event,
-        strict=True,
+    for event_position, (target_index, probabilities) in enumerate(
+        zip(known_target_indexes, probabilities_by_event, strict=True),
     ):
         findings[target_index] = _score_key_event(
-            templates=templates,
-            target_index=target_index,
-            probabilities=probabilities,
+            score_input=_KeyEventScoreInput(
+                templates=templates,
+                target_index=target_index,
+                probabilities=probabilities,
+                actual_rank=(
+                    None
+                    if templates[target_index] not in context.template_to_index
+                    else int(
+                        rank_positions_by_event[
+                            event_position,
+                            context.template_to_index[templates[target_index]],
+                        ],
+                    )
+                    + 1
+                ),
+                prefix_length=prefix_length,
+            ),
             context=context,
-            prefix_length=prefix_length,
         )
     return findings
 
 
 def _score_key_event(
     *,
-    templates: list[str],
-    target_index: int,
-    probabilities: torch.Tensor,
+    score_input: _KeyEventScoreInput,
     context: KeyScoringContext,
-    prefix_length: int = 0,
 ) -> DeepLogKeyFinding:
     """Build one key-model finding from predicted next-key probabilities.
 
     Args:
-        templates (list[str]): Full template sequence being scored.
-        target_index (int): Absolute index of the target event in `templates`.
-        probabilities (torch.Tensor): Model probabilities for the next-key
-            vocabulary at this target position.
+        score_input (_KeyEventScoreInput): Materialised event-scoring inputs.
         context (KeyScoringContext): Fitted key-model state and settings.
-        prefix_length (int): Number of carried-over prefix templates.
 
     Returns:
         DeepLogKeyFinding: Serialised decision payload for one target event.
     """
-    absolute_target_index = target_index + prefix_length
-    history_templates = templates[
+    absolute_target_index = score_input.target_index + score_input.prefix_length
+    history_templates = score_input.templates[
         absolute_target_index - context.history_size : absolute_target_index
     ]
     unknown_history_templates = [
@@ -381,10 +410,10 @@ def _score_key_event(
         for template in history_templates
         if template not in context.template_to_index
     ]
-    actual_template = templates[absolute_target_index]
+    actual_template = score_input.templates[absolute_target_index]
     actual_index = context.template_to_index.get(actual_template)
     top_probabilities, top_indexes = _top_key_predictions(
-        probabilities=probabilities,
+        probabilities=score_input.probabilities,
         vocabulary_size=len(context.template_to_index),
         top_g=context.top_g,
     )
@@ -401,15 +430,16 @@ def _score_key_event(
     ]
     is_oov = actual_index is None
     actual_probability = (
-        None if actual_index is None else float(probabilities[actual_index])
+        None if actual_index is None else float(score_input.probabilities[actual_index])
     )
     top_index_set = {int(index) for index in top_indexes.tolist()}
     return DeepLogKeyFinding(
-        event_index=target_index,
+        event_index=score_input.target_index,
         history_templates=history_templates,
         unknown_history_templates=unknown_history_templates,
         actual_template=actual_template,
         actual_probability=actual_probability,
+        actual_rank=score_input.actual_rank,
         is_anomalous=is_oov or (actual_index not in top_index_set),
         is_oov=is_oov,
         top_predictions=top_predictions,

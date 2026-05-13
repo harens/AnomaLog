@@ -47,11 +47,15 @@ from experiments.models.next_event_metrics import (
 # DeepLog lives in `experiments/`, outside the configured `--cov=anomalog`
 # target. These tests still protect the experiment-layer detector contract.
 pytestmark = pytest.mark.allow_no_new_coverage
-ConfigValue = str | int | float | bool | None
+ConfigValue = str | int | float | bool | None | tuple[int, ...] | list[int]
 
 
 def _deep_log_config(**values: ConfigValue) -> DeepLogModelConfig:
-    raw_config = {"name": "deeplog", **values}
+    raw_config: dict[str, ConfigValue] = {"name": "deeplog"}
+    raw_config.update(values)
+    top_g = raw_config.pop("top_g", None)
+    if "top_g_values" not in raw_config and isinstance(top_g, int):
+        raw_config["top_g_values"] = tuple(range(1, top_g + 1))
     try:
         return decode_experiment_model_config(
             raw_config,
@@ -68,6 +72,14 @@ def test_deeplog_model_config_defaults_next_event_policy() -> None:
     config = _deep_log_config(name="deeplog")
 
     assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+
+
+def test_deeplog_model_config_defaults_top_g_values() -> None:
+    """DeepLog should default to the paper's replay cut-offs."""
+    config = _deep_log_config(name="deeplog")
+
+    assert config.top_g_values == (1, 3, 5, 7, 9, 11)
+    assert config.top_g == 11
 
 
 def test_deeplog_model_config_accepts_full_dataset_next_event_policy() -> None:
@@ -92,6 +104,12 @@ def test_deeplog_model_config_accepts_parameter_detection_disabled() -> None:
     )
 
     assert config.parameter_detection_enabled is False
+
+
+def test_deeplog_model_config_rejects_empty_top_g_values() -> None:
+    """DeepLog should require at least one replay cut-off."""
+    with pytest.raises(ConfigError, match="at least one"):
+        _deep_log_config(name="deeplog", top_g_values=())
 
 
 def _sequence(
@@ -215,6 +233,8 @@ def test_score_key_sequence_uses_ranked_top_g_candidates() -> None:
 
     assert top_two.is_anomalous is False
     assert top_one.is_anomalous is True
+    assert top_two.actual_rank == 2
+    assert top_one.actual_rank == 2
     assert [prediction.template for prediction in top_two.top_predictions] == ["C", "D"]
 
 
@@ -232,6 +252,7 @@ def test_score_key_sequence_marks_oov_targets_as_anomalous() -> None:
     assert finding.is_oov is True
     assert finding.is_anomalous is True
     assert finding.actual_probability is None
+    assert finding.actual_rank is None
     assert finding.unknown_history_templates == []
 
 
@@ -251,6 +272,7 @@ def test_score_key_sequence_records_oov_history_templates() -> None:
     assert finding.actual_template == "C"
     assert finding.unknown_history_templates == ["UNSEEN"]
     assert finding.actual_probability is None
+    assert finding.actual_rank is None
     assert finding.top_predictions == []
 
 
@@ -1084,14 +1106,81 @@ def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> No
         "1": 1,
         "2": 3,
         "3": 3,
+        "4": 3,
         "5": 3,
     }
     assert next_event_prediction.top_k.accuracy == {
         "1": pytest.approx(1 / 4),
         "2": pytest.approx(3 / 4),
         "3": pytest.approx(3 / 4),
+        "4": pytest.approx(3 / 4),
         "5": pytest.approx(3 / 4),
     }
+
+
+def test_deeplog_top_g_replay_tracks_multiple_g_values_without_refitting() -> None:
+    """DeepLog should replay exact-rank key outcomes across all configured g."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g_values=(1, 3, 5),
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[3.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    detector.predict(_sequence(templates=["A", "A", "B"], label=0))
+    detector.predict(_sequence(templates=["A", "A", "C"], label=1))
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 2})
+    replay = metrics.top_g_replay
+
+    assert replay is not None
+    assert replay.task == "top_g_replay"
+    assert replay.configured_top_g == 5
+    assert replay.top_g_values == [1, 3, 5]
+    assert replay.event_count == 2
+    assert replay.sequence_count == 2
+    assert replay.normal_sequence_count == 1
+    assert replay.anomalous_sequence_count == 1
+    assert [point.top_g for point in replay.points] == [1, 3, 5]
+
+    first_point, second_point, third_point = replay.points
+    assert first_point.event_hit_count == 0
+    assert first_point.event_accuracy == pytest.approx(0.0)
+    assert first_point.tp == 1
+    assert first_point.tn == 0
+    assert first_point.fp == 1
+    assert first_point.fn == 0
+    assert second_point.top_g == 3
+    assert third_point.top_g == 5
+    assert first_point.precision == pytest.approx(0.5)
+    assert first_point.recall == pytest.approx(1.0)
+    assert first_point.f1 == pytest.approx(2 / 3)
+    assert first_point.accuracy == pytest.approx(0.5)
+
+    assert second_point.event_hit_count == 2
+    assert second_point.event_accuracy == pytest.approx(1.0)
+    assert second_point.tp == 0
+    assert second_point.tn == 1
+    assert second_point.fp == 0
+    assert second_point.fn == 1
+    assert second_point.precision == pytest.approx(0.0)
+    assert second_point.recall == pytest.approx(0.0)
+    assert second_point.f1 == pytest.approx(0.0)
+    assert second_point.accuracy == pytest.approx(0.5)
 
 
 def test_deeplog_event_level_metrics_follow_event_labels() -> None:
@@ -1929,6 +2018,7 @@ def test_sequence_prediction_serialises_deeplog_details() -> None:
 
     assert '"triggered_by_key_model":true' in encoded
     assert '"findings"' in encoded
+    assert '"actual_rank":2' in encoded
 
 
 def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
@@ -1990,6 +2080,8 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
     assert manifest.parameter_validation_policy.startswith("per-template temporal")
     assert manifest.parameter_detection_enabled is True
     assert manifest.history_size == detector.config.history_size
+    assert manifest.top_g == detector.config.top_g
+    assert manifest.top_g_values == list(detector.config.top_g_values)
     assert manifest.trained_parameter_model_count == 1
     assert manifest.skipped_parameter_model_count == 1
     assert (

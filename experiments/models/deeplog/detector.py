@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
@@ -96,6 +97,8 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
     Attributes:
         next_event_prediction (NextEventPredictionDiagnostics | None): Latest
             key-model next-event diagnostics.
+        top_g_replay (DeepLogTopGReplayDiagnostics | None): Exact-rank replay
+            curve for the key model across the configured `g` cut-offs.
         event_level_detection (DeepLogEventLevelDetectionDiagnostics | None):
             Event-level anomaly metrics derived from labelled log entries.
         sequence_trigger_breakdown (DeepLogSequenceTriggerBreakdown | None):
@@ -105,6 +108,7 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
+    top_g_replay: DeepLogTopGReplayDiagnostics | None
     event_level_detection: DeepLogEventLevelDetectionDiagnostics | None
     sequence_trigger_breakdown: DeepLogSequenceTriggerBreakdown | None
 
@@ -174,6 +178,62 @@ class DeepLogSequenceTriggerBreakdown(msgspec.Struct, frozen=True):
     neither_anomalous_sequences: int
 
 
+class DeepLogTopGReplayPoint(msgspec.Struct, frozen=True):
+    """One point on the DeepLog replay curve for a specific top-`g`.
+
+    Attributes:
+        top_g (int): DeepLog acceptance window under replay.
+        event_hit_count (int): Eligible next-event predictions whose observed
+            key landed inside the top-`g` set.
+        event_accuracy (float): Event-level hit rate at this `g`.
+        tp (int): True positives under the session-level any-miss rule.
+        tn (int): True negatives under the session-level any-miss rule.
+        fp (int): False positives under the session-level any-miss rule.
+        fn (int): False negatives under the session-level any-miss rule.
+        precision (float): Session-level precision at this `g`.
+        recall (float): Session-level recall at this `g`.
+        f1 (float): Session-level F1 at this `g`.
+        accuracy (float): Session-level accuracy at this `g`.
+    """
+
+    top_g: int
+    event_hit_count: int
+    event_accuracy: float
+    tp: int
+    tn: int
+    fp: int
+    fn: int
+    precision: float
+    recall: float
+    f1: float
+    accuracy: float
+
+
+class DeepLogTopGReplayDiagnostics(msgspec.Struct, frozen=True):
+    """DeepLog top-`g` replay curve derived from one scored run.
+
+    Attributes:
+        task (str): Stable task label for downstream reporting.
+        configured_top_g (int): Maximum replay cut-off used by the fitted model.
+        top_g_values (list[int]): Explicit replay cut-offs configured for the run.
+        event_count (int): Number of eligible next-event predictions replayed.
+        sequence_count (int): Number of scored test sequences replayed.
+        normal_sequence_count (int): Number of replayed normal test sequences.
+        anomalous_sequence_count (int): Number of replayed anomalous sequences.
+        points (list[DeepLogTopGReplayPoint]): Replay metrics for each
+            configured `g` value.
+    """
+
+    task: str
+    configured_top_g: int
+    top_g_values: list[int]
+    event_count: int
+    sequence_count: int
+    normal_sequence_count: int
+    anomalous_sequence_count: int
+    points: list[DeepLogTopGReplayPoint]
+
+
 @dataclass(slots=True)
 class DeepLogStreamContext:
     """Cached history carried between chronological stream boundaries.
@@ -191,6 +251,139 @@ class DeepLogStreamContext:
         str,
         list[tuple[list[str], int | None]],
     ] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _KeyTopGReplayState:
+    """Track exact-rank replay data for the DeepLog key model.
+
+    Attributes:
+        event_rank_counts (Counter[int | None]): Exact-rank histogram across
+            eligible next-event predictions. `None` captures events that are
+            anomalous for every `g`.
+        normal_sequence_rank_counts (Counter[int | None]): Exact-rank
+            histogram for normal sequences.
+        anomalous_sequence_rank_counts (Counter[int | None]): Exact-rank
+            histogram for anomalous sequences.
+        event_count (int): Number of eligible next-event predictions seen.
+        sequence_count (int): Number of scored test sequences seen.
+        normal_sequence_count (int): Number of normal scored test sequences.
+        anomalous_sequence_count (int): Number of anomalous scored test
+            sequences.
+    """
+
+    event_rank_counts: Counter[int | None] = field(default_factory=Counter)
+    normal_sequence_rank_counts: Counter[int | None] = field(
+        default_factory=Counter,
+    )
+    anomalous_sequence_rank_counts: Counter[int | None] = field(
+        default_factory=Counter,
+    )
+    event_count: int = 0
+    sequence_count: int = 0
+    normal_sequence_count: int = 0
+    anomalous_sequence_count: int = 0
+
+    def record_sequence(
+        self,
+        *,
+        sequence: TemplateSequence,
+        key_findings: dict[int, DeepLogKeyFinding],
+    ) -> None:
+        """Record exact-rank data for one scored test sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence being replayed.
+            key_findings (dict[int, DeepLogKeyFinding]): Key-model findings for
+                the sequence.
+        """
+        self.sequence_count += 1
+        sequence_worst_rank: int | None = 0
+        for key_finding in key_findings.values():
+            self.event_count += 1
+            self.event_rank_counts[key_finding.actual_rank] += 1
+            if key_finding.actual_rank is None:
+                sequence_worst_rank = None
+            elif sequence_worst_rank is not None:
+                sequence_worst_rank = max(sequence_worst_rank, key_finding.actual_rank)
+        if is_anomalous_label(sequence.label):
+            self.anomalous_sequence_count += 1
+            self.anomalous_sequence_rank_counts[sequence_worst_rank] += 1
+        else:
+            self.normal_sequence_count += 1
+            self.normal_sequence_rank_counts[sequence_worst_rank] += 1
+
+    def snapshot(
+        self,
+        *,
+        top_g_values: tuple[int, ...],
+    ) -> DeepLogTopGReplayDiagnostics | None:
+        """Return replay metrics for the configured top-`g` values.
+
+        Args:
+            top_g_values (tuple[int, ...]): Explicit top-`g` cut-offs used by the
+                fitted model.
+
+        Returns:
+            DeepLogTopGReplayDiagnostics | None: Replay curve for the configured
+            `g` values, or `None` when no sequences were scored.
+        """
+        if self.sequence_count <= 0:
+            return None
+        points: list[DeepLogTopGReplayPoint] = []
+        for top_g in top_g_values:
+            event_hit_count = _rank_hit_count(
+                rank_counts=self.event_rank_counts,
+                top_g=top_g,
+            )
+            normal_predicted_normal = _rank_hit_count(
+                rank_counts=self.normal_sequence_rank_counts,
+                top_g=top_g,
+            )
+            anomalous_predicted_normal = _rank_hit_count(
+                rank_counts=self.anomalous_sequence_rank_counts,
+                top_g=top_g,
+            )
+            tn = normal_predicted_normal
+            fp = self.normal_sequence_count - tn
+            fn = anomalous_predicted_normal
+            tp = self.anomalous_sequence_count - fn
+            precision = tp / (tp + fp) if (tp + fp) else 0.0
+            recall = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = (
+                2 * precision * recall / (precision + recall)
+                if (precision + recall)
+                else 0.0
+            )
+            points.append(
+                DeepLogTopGReplayPoint(
+                    top_g=top_g,
+                    event_hit_count=event_hit_count,
+                    event_accuracy=(
+                        event_hit_count / self.event_count if self.event_count else 0.0
+                    ),
+                    tp=tp,
+                    tn=tn,
+                    fp=fp,
+                    fn=fn,
+                    precision=precision,
+                    recall=recall,
+                    f1=f1,
+                    accuracy=(
+                        (tp + tn) / self.sequence_count if self.sequence_count else 0.0
+                    ),
+                ),
+            )
+        return DeepLogTopGReplayDiagnostics(
+            task="top_g_replay",
+            configured_top_g=top_g_values[-1],
+            top_g_values=list(top_g_values),
+            event_count=self.event_count,
+            sequence_count=self.sequence_count,
+            normal_sequence_count=self.normal_sequence_count,
+            anomalous_sequence_count=self.anomalous_sequence_count,
+            points=points,
+        )
 
 
 @dataclass(slots=True)
@@ -358,14 +551,14 @@ class DeepLogModelConfig(
             "In the paper, the history size `h` is set to 10.",
         ),
     ] = 10
-    top_g: Annotated[
-        PositiveInt,
+    top_g_values: Annotated[
+        tuple[PositiveInt, ...],
         msgspec.Meta(
-            description="Number of top next-key predictions accepted as normal. "
-            "In the paper, `g` is set to 9, but evaluates values from 7 to 12 "
-            "in Figure 8.",
+            min_length=1,
+            description="DeepLog replay cut-offs for evaluating the top-g rule. "
+            "The paper reports the sequence-level rule across 1, 3, 5, 7, 9, and 11.",
         ),
-    ] = 9
+    ] = (1, 3, 5, 7, 9, 11)
     num_layers: Annotated[
         PositiveInt,
         msgspec.Meta(
@@ -470,6 +663,11 @@ class DeepLogModelConfig(
         """
         return DeepLogDetector(config=self)
 
+    @property
+    def top_g(self) -> int:
+        """Return the maximum configured top-g cut-off."""
+        return max(self.top_g_values)
+
 
 @dataclass(slots=True)
 class DeepLogDetector(SingleFitMixin, ExperimentDetector):
@@ -512,6 +710,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     scored_parameter_event_count: int = 0
     device: torch.device = field(default_factory=lambda: torch.device("cpu"))
     _next_event_prediction_state: NextEventPredictionState | None = field(
+        default=None,
+        repr=False,
+    )
+    _key_top_g_replay_state: _KeyTopGReplayState | None = field(
         default=None,
         repr=False,
     )
@@ -641,6 +843,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._stream_context = stream_context if stream_context_enabled else None
         self._sequence_trigger_breakdown_applicable = True
         self._reset_next_event_prediction_state()
+        self._reset_key_top_g_replay_state()
         self._reset_event_level_state()
         self._mark_fit_complete()
 
@@ -683,6 +886,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 top_g=self.config.top_g,
             ),
             prefix_templates=self._prediction_prefix_templates(sequence),
+        )
+        self._record_key_top_g_replay(
+            sequence=sequence,
+            key_findings=key_findings,
         )
         self._record_next_event_predictions(
             sequence=sequence,
@@ -816,6 +1023,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             ),
             history_size=self.config.history_size,
             top_g=self.config.top_g,
+            top_g_values=list(self.config.top_g_values),
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,
             epochs=self.config.epochs,
@@ -877,6 +1085,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         next_event_prediction = self._next_event_prediction_state_snapshot(
             segment_diagnostics=segment_diagnostics,
         )
+        top_g_replay = self._key_top_g_replay_state_snapshot()
         event_level_detection = self._event_level_state_snapshot()
         sequence_trigger_breakdown = (
             self._sequence_trigger_breakdown_snapshot()
@@ -885,12 +1094,14 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         )
         self._stream_context = None
         self._reset_next_event_prediction_state()
+        self._reset_key_top_g_replay_state()
         self._reset_event_level_state()
         self._reset_sequence_trigger_breakdown()
         self._reset_next_event_prediction_segment_state()
         self._sequence_trigger_breakdown_applicable = True
         return DeepLogRunMetrics(
             next_event_prediction=next_event_prediction,
+            top_g_replay=top_g_replay,
             event_level_detection=event_level_detection,
             sequence_trigger_breakdown=sequence_trigger_breakdown,
         )
@@ -927,11 +1138,20 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 history_is_known=not key_finding.unknown_history_templates,
             )
 
+    def _record_key_top_g_replay(
+        self,
+        *,
+        sequence: TemplateSequence,
+        key_findings: dict[int, DeepLogKeyFinding],
+    ) -> None:
+        state = self._ensure_key_top_g_replay_state()
+        state.record_sequence(sequence=sequence, key_findings=key_findings)
+
     def _ensure_next_event_prediction_state(self) -> NextEventPredictionState:
         state = self._next_event_prediction_state
         if state is None:
             state = NextEventPredictionState.create(
-                k_values=_next_event_k_values(self.config.top_g),
+                k_values=_next_event_k_values(self.config.top_g_values),
                 vocabulary_policy=self.config.vocabulary_policy,
             )
             self._next_event_prediction_state = state
@@ -940,9 +1160,20 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     def _reset_next_event_prediction_state(self) -> None:
         """Reset next-event diagnostics before a fresh scoring run."""
         self._next_event_prediction_state = NextEventPredictionState.create(
-            k_values=_next_event_k_values(self.config.top_g),
+            k_values=_next_event_k_values(self.config.top_g_values),
             vocabulary_policy=self.config.vocabulary_policy,
         )
+
+    def _ensure_key_top_g_replay_state(self) -> _KeyTopGReplayState:
+        state = self._key_top_g_replay_state
+        if state is None:
+            state = _KeyTopGReplayState()
+            self._key_top_g_replay_state = state
+        return state
+
+    def _reset_key_top_g_replay_state(self) -> None:
+        """Reset exact-rank replay state before a fresh scoring run."""
+        self._key_top_g_replay_state = _KeyTopGReplayState()
 
     def _reset_next_event_prediction_segment_state(self) -> None:
         """Reset segment diagnostics before a fresh scoring run."""
@@ -1066,6 +1297,20 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         if state is None:
             return None
         return state.snapshot(segment_diagnostics=segment_diagnostics)
+
+    def _key_top_g_replay_state_snapshot(
+        self,
+    ) -> DeepLogTopGReplayDiagnostics | None:
+        """Return exact-rank replay diagnostics for the latest run.
+
+        Returns:
+            DeepLogTopGReplayDiagnostics | None: Replay curve for the latest
+            scoring run, or `None` when no test sequences were scored.
+        """
+        state = self._key_top_g_replay_state
+        if state is None:
+            return None
+        return state.snapshot(top_g_values=self.config.top_g_values)
 
     def _event_level_state_snapshot(
         self,
@@ -1254,16 +1499,34 @@ def _fraction(numerator: int, denominator: int) -> float:
     return numerator / denominator
 
 
-def _next_event_k_values(top_g: int) -> tuple[int, ...]:
+def _next_event_k_values(top_g_values: tuple[int, ...]) -> tuple[int, ...]:
     """Return the DeepLog next-event reporting cut-offs.
 
     Args:
-        top_g (int): DeepLog top-g reporting threshold from the config.
+        top_g_values (tuple[int, ...]): DeepLog top-g reporting thresholds from
+            the config.
 
     Returns:
-        tuple[int, ...]: Ordered top-k cut-offs up to `top_g`.
+        tuple[int, ...]: Ordered top-k cut-offs configured for the run.
     """
-    return tuple(sorted({k for k in (1, 2, 3, 5, top_g) if 0 < k <= top_g}))
+    return top_g_values
+
+
+def _rank_hit_count(*, rank_counts: Counter[int | None], top_g: int) -> int:
+    """Return the number of observations whose exact rank is within `top_g`.
+
+    Args:
+        rank_counts (Counter[int | None]): Exact-rank histogram to replay.
+        top_g (int): Acceptance threshold being evaluated.
+
+    Returns:
+        int: Number of observations whose exact rank is at most `top_g`.
+    """
+    return sum(
+        count
+        for rank, count in rank_counts.items()
+        if rank is not None and rank <= top_g
+    )
 
 
 _SEQUENCE_LABEL_COUNT_ATTRS: tuple[str, str] = (

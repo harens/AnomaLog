@@ -147,6 +147,7 @@ history-target pairs, not from a global pooled slice across templates.
 | Residual scoring | Compare predicted and observed parameter vectors with MSE | `experiments/models/deeplog/`: `_MaskedRegressionLoss`, `_masked_mse`, `_parameter_pair_residual`, `_score_parameter_sequence` | implemented | Both training loss and calibration/inference residuals use the same target mask semantics. |
 | Gaussian calibration | Model validation residuals with a Gaussian and threshold anomalies by confidence bounds | `experiments/models/deeplog/`: `GaussianThreshold`, `fit_gaussian_threshold`, `build_parameter_datasets`, `_fit_parameter_models` | implemented | Residuals come from per-series temporal validation tails; the exact calibration mechanics are repository-defined. |
 | Sequence anomaly decision | Flag an event when either the key model or parameter model fires | `experiments/models/deeplog/`: `DeepLogDetector.predict`, `parameter_anomaly_score` | implemented | Follows the paper's detection order: check the key model first, then score parameters only for events whose key is accepted as normal. The HDFS paper-reproduction config disables parameter detection entirely because the paper's HDFS benchmark reports the key model only. |
+| Top-`g` replay analysis | Re-evaluate the key model against multiple configured acceptance thresholds without re-fitting | `experiments/models/deeplog/`: `DeepLogModelConfig.top_g_values`, `DeepLogKeyFinding.actual_rank`, `DeepLogDetector.run_metrics` | implemented | The detector records the exact rank of each scored key so the run summary can replay the paper rule for every configured `g` cut-off without retraining. |
 | Diagnosis output | Explain anomalies with workflow-aware diagnosis | `experiments/models/deeplog/`: `DeepLogEventFinding`, `DeepLogPredictionOutcome` | partial | The repo exposes event-level triggers, not the paper's workflow diagnosis system. |
 | Workflow construction / diagnosis | Separate tasks and construct workflows or FSAs for diagnosis | not implemented | not implemented | Explicitly out of scope for this pass. |
 | Online false-positive updates | Incrementally adapt the model after false positives | not implemented | not implemented | Explicitly out of scope for this pass. |
@@ -168,8 +169,11 @@ This section keeps the short version in the main DeepLog note:
   `openstack_test_abnormal`) for the same reason;
 - the OpenStack parser now mines template content from the raw message body,
   prefixes recovered VM `instance_id` values with the split name so the file
-  boundary survives grouping, and drops rows that do not expose a session
-  handle;
+  boundary survives grouping, strips the leading session tag before Spell, and
+  canonicalises volatile UUID, IP, instance-storage filename, path-segment,
+  hex, and numeric tokens in the current OpenStack preset;
+  the archive's `pending task (...)` states are kept visible for audit and
+  future parameter modelling rather than being merged away;
 - `sequence.split.mode` supports `raw_entry_prefix_count`,
   `raw_entry_prefix_fraction`, and `raw_entry_prefix_normal_fraction`;
 - `sequence.split.application_order` makes split-before-grouping explicit;
@@ -202,4 +206,5 @@ This section keeps the short version in the main DeepLog note:
 ### Where To Look Next
 
 - Audit and count details: [DeepLog paper reproduction report](../reports/deeplog_paper_reproduction_investigation.md)
+  and [DeepLog template inventory audit](../reports/deeplog_template_inventory_audit.md)
 - Audit command: `uv run python -m experiments.runners.audit_deeplog_data`

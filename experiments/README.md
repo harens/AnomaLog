@@ -146,7 +146,8 @@ The checked-in Slurm wrappers live under `slurm/` and are generated from
 `slurm/jobs.toml`. They keep a 1:1 mapping with the dataset manifests and can
 be refreshed with `uv run python -m experiments.slurm_scripts`.
 
-To audit dataset/split readiness for DeepLog paper reproduction:
+To audit dataset/split readiness for DeepLog paper reproduction, including the
+embedded dataset tables in the DeepLog experiment matrices:
 
 ```bash
 uv run python -m experiments.runners.audit_deeplog_data
@@ -220,7 +221,10 @@ Each concrete run writes a deterministic directory under `experiments/results/<c
 - `metrics.json`: task-aware detector metrics, including the selected
   `primary_metric_scope`, canonical scoped metric blocks, and run-level
   evaluation metadata such as `evaluation_unit`, `prediction_unit`,
-  `label_unit`, and split policy details at the top level.
+  `label_unit`, and split policy details at the top level. DeepLog runs also
+  record an exact-rank `top_g_replay` curve using the configured paper
+  cut-offs, so you can inspect multiple top-`g` thresholds from one fitted
+  model without re-running inference.
 - `predictions.jsonl`: optional test-sequence outputs, including detector
   scores and any emitted key phrases when `--write-predictions` is supplied
 - `environment.json`: Python, platform, package, and git metadata

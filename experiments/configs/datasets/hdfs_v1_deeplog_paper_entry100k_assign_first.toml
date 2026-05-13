@@ -29,6 +29,8 @@ ref = "deeplog_default"
 run_group = "deeplog"
 
 [models.overrides]
+# Paper default top-g for this HDFS benchmark is 9; we replay the curve up to
+# that cut-off so the run summary still shows multiple thresholds.
 "model.parameter_detection_enabled" = false
 
 [[models]]
