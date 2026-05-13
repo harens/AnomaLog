@@ -28,6 +28,23 @@ class _AssetContext:
     direct_asset_dependencies: list[Asset]
 
 
+@dataclass(frozen=True)
+class _GroupedFailureError(RuntimeError):
+    """Minimal group-like wrapper for stale-cache regression tests.
+
+    Attributes:
+        message (str): Human-readable wrapper message.
+        exceptions (tuple[BaseException, ...]): Wrapped failures exposed via a
+            group-like attribute so the cache helper can recurse through them.
+    """
+
+    message: str
+    exceptions: tuple[BaseException, ...]
+
+    def __post_init__(self) -> None:
+        super().__init__(self.message)
+
+
 class _FallbackAsset(Asset):
     url: str
 
@@ -221,6 +238,57 @@ def test_materialize_reruns_function_when_prefect_cached_result_is_stale(
     monkeypatch.setattr(
         "anomalog.cache.core._prefect_materialize",
         _raise_stale_path_error,
+    )
+
+    @materialize(output_path)
+    def _build() -> str:
+        output_path.write_text("hello", encoding="utf-8")
+        return "rebuilt"
+
+    with disable_run_logger():
+        assert _build() == "rebuilt"
+    assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_reruns_function_when_prefect_cached_result_is_stale_in_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-output materialisation should unwrap grouped stale cache failures.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that simulates a wrapped stale filesystem result.
+    """
+
+    def _raise_stale_path_group(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                message = (
+                    "Provided path /old/run/storage is outside of the base path "
+                    "/new/run/storage."
+                )
+                group_message = "task run failed"
+                raise _GroupedFailureError(
+                    group_message,
+                    (
+                        RuntimeError("Task run failed with exception"),
+                        ValueError(message),
+                    ),
+                )
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _raise_stale_path_group,
     )
 
     @materialize(output_path)

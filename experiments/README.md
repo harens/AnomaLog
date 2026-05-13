@@ -145,6 +145,9 @@ alongside the other result artefacts.
 The checked-in Slurm wrappers live under `slurm/` and are generated from
 `slurm/jobs.toml`. They keep a 1:1 mapping with the dataset manifests and can
 be refreshed with `uv run python -m experiments.slurm_scripts`.
+They also export a longer `PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS`
+value so the temporary Prefect API server has more time to start on slower
+cluster nodes.
 
 To audit dataset/split readiness for DeepLog paper reproduction, including the
 embedded dataset tables in the DeepLog experiment matrices:
@@ -167,7 +170,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   when their inputs and upstream assets have not changed.
 - Local-output materialisation also guards against stale Prefect cache hits
   that point at an incompatible storage base path, so reruns keep working
-  after a checkout moves or a local storage root changes.
+  after a checkout moves or a local storage root changes, even when Prefect
+  wraps the underlying storage error in a chained exception or
+  `ExceptionGroup`.
 - Prefect-backed materialisations use a versioned cache namespace under the
   user cache root, with a stable shared result-storage base, so cached dataset
   preprocessing does not inherit run-specific `PREFECT_HOME` paths.

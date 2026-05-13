@@ -304,7 +304,7 @@ def materialize(
         def _run(*args: P.args, **kwargs: P.kwargs) -> R:
             try:
                 result = materialized(*args, **kwargs)
-            except ValueError as exc:
+            except Exception as exc:
                 if not _is_stale_materialize_cache_error(exc):
                     raise
                 return func(*args, **kwargs)
@@ -317,18 +317,50 @@ def materialize(
     return _decorate
 
 
-def _is_stale_materialize_cache_error(exc: ValueError) -> bool:
+def _is_stale_materialize_cache_error(exc: BaseException) -> bool:
     """Return whether Prefect rejected a cached result from another base path.
 
-    Prefect local filesystem result storage raises `ValueError` when a cached
-    result points outside the active storage base path. That can happen after a
-    checkout moves or when old cache metadata survives a storage-root change.
+    Prefect local filesystem result storage raises an error when a cached result
+    points outside the active storage base path. That can happen after a checkout
+    moves or when old cache metadata survives a storage-root change. Prefect may
+    wrap that error in a chained exception or an `ExceptionGroup`, so we inspect
+    the whole failure tree.
 
     Args:
-        exc (ValueError): Exception raised while reading the cached result.
+        exc (BaseException): Exception raised while reading the cached result.
 
     Returns:
         bool: Whether the error should trigger a direct rerun of the wrapped
             function.
     """
-    return "outside of the base path" in str(exc)
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        if "outside of the base path" in str(current):
+            return True
+
+        group_exceptions = getattr(current, "exceptions", None)
+        if isinstance(group_exceptions, (tuple, list)):
+            stack.extend(
+                exc for exc in group_exceptions if isinstance(exc, BaseException)
+            )
+
+        cause = getattr(current, "__cause__", None)
+        if isinstance(cause, BaseException):
+            stack.append(cause)
+
+        context = getattr(current, "__context__", None)
+        if isinstance(context, BaseException) and not getattr(
+            current,
+            "__suppress_context__",
+            False,
+        ):
+            stack.append(context)
+
+    return False
