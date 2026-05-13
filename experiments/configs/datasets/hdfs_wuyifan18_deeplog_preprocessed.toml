@@ -1,12 +1,12 @@
 name = "hdfs_wuyifan18_deeplog_preprocessed"
-description = "DeepLog and DeepCASE HDFS reproduction on the wuyifan18 preprocessed session files with the exact hdfs_train / hdfs_test file boundary, plus a template-frequency sanity baseline."
+description = "DeepLog and DeepCASE HDFS reproduction on the wuyifan18 preprocessed session files with the exact hdfs_train / hdfs_test file boundary, plus template-frequency and Markov sanity baselines."
 
 [dataset]
 name = "hdfs_wuyifan18_preprocessed_exact_boundary"
 dataset_name = "HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED"
 preset = "hdfs_wuyifan18_deeplog_preprocessed"
 template_parser = "identity"
-description = "DeepLog and DeepCASE HDFS reproduction config using the wuyifan18 preprocessed session files and the exact hdfs_train / hdfs_test file boundary, plus a template-frequency sanity baseline."
+description = "DeepLog and DeepCASE HDFS reproduction config using the wuyifan18 preprocessed session files and the exact hdfs_train / hdfs_test file boundary, plus template-frequency and Markov sanity baselines."
 
 [dataset.sequence]
 grouping = "entity"
@@ -24,6 +24,10 @@ run_group = "deeplog"
 
 [[models]]
 ref = "template_frequency_default"
+run_group = "baselines"
+
+[[models]]
+ref = "markov_default"
 run_group = "baselines"
 
 # [[models]]

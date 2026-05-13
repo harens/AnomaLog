@@ -1,12 +1,12 @@
 name = "openstack_deeplog_preprocessed"
-description = "DeepLog OpenStack reproduction on LogHub OpenStack.tar.gz with Spell parsing over message content, instance_id sessions prefixed by split name, file-boundary train/test splits, and a template-frequency sanity baseline. Rows without an instance id are dropped."
+description = "DeepLog OpenStack reproduction on LogHub OpenStack.tar.gz with Spell parsing over canonicalised message content, instance_id sessions prefixed by split name, file-boundary train/test splits, and template-frequency and Markov sanity baselines. Rows without an instance id are dropped."
 
 [dataset]
 name = "openstack_deeplog_preprocessed"
 dataset_name = "OPENSTACK_DEEPLOG_PREPROCESSED"
 preset = "openstack_deeplog_preprocessed"
 template_parser = "spell"
-description = "DeepLog OpenStack reproduction config using Spell (tau=0.5) over raw content, split-prefixed instance_id sessioning, the normal1 / normal2 / abnormal file boundary, and a template-frequency sanity baseline. Rows without an instance id are dropped."
+description = "DeepLog OpenStack reproduction config using Spell (tau=0.5) over canonicalised raw content, split-prefixed instance_id sessioning, the normal1 / normal2 / abnormal file boundary, and template-frequency and Markov sanity baselines. Rows without an instance id are dropped."
 
 [dataset.sequence]
 grouping = "entity"
@@ -24,6 +24,10 @@ run_group = "deeplog"
 
 [[models]]
 ref = "template_frequency_default"
+run_group = "baselines"
+
+[[models]]
+ref = "markov_default"
 run_group = "baselines"
 
 [[models]]

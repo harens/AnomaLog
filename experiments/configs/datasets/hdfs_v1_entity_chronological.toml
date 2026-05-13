@@ -1,5 +1,5 @@
 name = "hdfs_v1_entity_chronological"
-description = "HDFS v1 entity chronological experiment matrix with unsupervised, supervised, and label-aware sanity baselines."
+description = "HDFS v1 entity chronological experiment matrix with unsupervised, supervised, Markov, and label-aware sanity baselines."
 
 [dataset]
 name = "hdfs_v1_entity_chronological"
@@ -25,6 +25,11 @@ run_group = "baselines"
 [[models]]
 # Supervised sequence-level sanity baseline.
 ref = "naive_bayes_default"
+run_group = "baselines"
+
+[[models]]
+# Normal-only sequence-order sanity baseline.
+ref = "markov_default"
 run_group = "baselines"
 
 [[models]]

@@ -33,6 +33,7 @@ from experiments.config import (
 from experiments.datasets import build_dataset_spec, dataset_source_summary
 from experiments.models.deepcase.detector import DeepCaseModelConfig
 from experiments.models.deeplog.detector import DeepLogModelConfig
+from experiments.models.markov import MarkovModelConfig
 from experiments.models.template_frequency import TemplateFrequencyModelConfig
 
 
@@ -91,6 +92,11 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
 
 def _assert_template_frequency_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, TemplateFrequencyModelConfig)
+    assert bundle.run_group == "baselines"
+
+
+def _assert_markov_baseline_bundle(bundle: ExperimentBundle) -> None:
+    assert isinstance(bundle.model, MarkovModelConfig)
     assert bundle.run_group == "baselines"
 
 
@@ -539,6 +545,7 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
             {
                 "template_frequency_default",
                 "naive_bayes_default",
+                "markov_default",
                 "deepcase",
             },
         ),
@@ -548,6 +555,7 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
             {
                 "template_frequency_default",
                 "naive_bayes_default",
+                "markov_default",
                 "deepcase",
             },
         ),
@@ -939,16 +947,24 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         model_config=bundle_named(hdfs_bundles, "deeplog").model,
     )
 
-    for bundles in (
-        bgl_1pct_bundles,
-        bgl_10pct_bundles,
-        hdfs_bundles,
-        hdfs_assign_first_bundles,
-    ):
-        assert {bundle.model.detector for bundle in bundles} == {
-            "deeplog",
-            "template_frequency",
-        }
+    assert {bundle.model.detector for bundle in bgl_1pct_bundles} == {
+        "deeplog",
+        "template_frequency",
+    }
+    assert {bundle.model.detector for bundle in bgl_10pct_bundles} == {
+        "deeplog",
+        "template_frequency",
+    }
+    assert {bundle.model.detector for bundle in hdfs_bundles} == {
+        "deeplog",
+        "template_frequency",
+        "markov",
+    }
+    assert {bundle.model.detector for bundle in hdfs_assign_first_bundles} == {
+        "deeplog",
+        "template_frequency",
+        "markov",
+    }
 
     _assert_template_frequency_baseline_bundle(
         bundle_named(hdfs_bundles, "template_frequency"),
@@ -962,6 +978,8 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     _assert_template_frequency_baseline_bundle(
         bundle_named(hdfs_assign_first_bundles, "template_frequency"),
     )
+    _assert_markov_baseline_bundle(bundle_named(hdfs_bundles, "markov"))
+    _assert_markov_baseline_bundle(bundle_named(hdfs_assign_first_bundles, "markov"))
 
     _assert_bgl_1pct_deeplog_bundle(
         bundle_named(bgl_1pct_bundles, "deeplog"),
@@ -1018,6 +1036,7 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
     assert {bundle.model.detector for bundle in bundles} == {
         "deeplog",
         "template_frequency",
+        "markov",
     }
     bundle = next(bundle for bundle in bundles if bundle.model.detector == "deeplog")
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
@@ -1138,6 +1157,7 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     assert {bundle.model.name for bundle in bundles} == {
         "deeplog_default",
         "template_frequency_default",
+        "markov_default",
     }
     bundle = next(
         bundle for bundle in bundles if bundle.model.name == "deeplog_default"
@@ -1305,15 +1325,17 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl_entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 2
+    assert len(hdfs_bundles) == 3
     assert {bundle.model.name for bundle in hdfs_bundles} == {
         "deeplog_default",
         "template_frequency_default",
+        "markov_default",
     }
-    assert len(bgl_extension_bundles) == 3
+    assert len(bgl_extension_bundles) == 4
     assert {bundle.model.name for bundle in bgl_extension_bundles} == {
         "template_frequency_default",
         "naive_bayes_default",
+        "markov_default",
         "deepcase",
     }
 

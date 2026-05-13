@@ -1,0 +1,2 @@
+name = "markov_default"
+detector = "markov"

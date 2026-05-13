@@ -41,6 +41,7 @@ from experiments.models.evaluate import (
     fit_detector,
     stream_predictions,
 )
+from experiments.models.markov import MarkovManifest, MarkovModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
 from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
@@ -53,6 +54,10 @@ from tests.unit.helpers import (
 )
 
 REPRESENTATION_VIEW_WINDOW_ID = 0
+EXPECTED_MARKOV_NORMAL_SEQUENCE_COUNT = 2
+EXPECTED_MARKOV_NORMAL_TRANSITION_COUNT = 2
+EXPECTED_MARKOV_CONTEXT_VOCABULARY = 2
+EXPECTED_MARKOV_TEMPLATE_VOCABULARY = 2
 ConfigValue = str | int | float | bool | None
 
 
@@ -67,6 +72,13 @@ def _naive_bayes_config(**values: ConfigValue) -> NaiveBayesModelConfig:
     return decode_experiment_model_config(
         {"name": "naive_bayes", **values},
         config_type=NaiveBayesModelConfig,
+    )
+
+
+def _markov_config(**values: ConfigValue) -> MarkovModelConfig:
+    return decode_experiment_model_config(
+        {"name": "markov", **values},
+        config_type=MarkovModelConfig,
     )
 
 
@@ -589,6 +601,7 @@ def test_model_registries_resolve_builtins() -> None:
     # `anomalog` coverage target.
     assert resolve_model_config_type("deeplog") is DeepLogModelConfig
     assert resolve_model_config_type("naive_bayes") is NaiveBayesModelConfig
+    assert resolve_model_config_type("markov") is MarkovModelConfig
     assert resolve_model_config_type("river") is RiverModelConfig
     assert (
         resolve_model_config_type("template_frequency") is TemplateFrequencyModelConfig
@@ -684,6 +697,7 @@ def test_model_configs_reject_direct_construction() -> None:
     [
         lambda: _template_frequency_config(name="template_frequency").build_detector(),
         lambda: _naive_bayes_config(name="naive_bayes").build_detector(),
+        lambda: _markov_config(name="markov").build_detector(),
         lambda: _river_config(name="river").build_detector(),
     ],
 )
@@ -782,6 +796,55 @@ def test_template_frequency_detector_requires_normal_sequences_for_calibration()
         ),
     ):
         detector.fit(anomalous_only_train, progress=progress)
+
+
+def test_markov_detector_predictions_are_repeatable() -> None:
+    """Repeated predictions from the transition detector should be identical."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequences = _supervised_train_sequences()
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    normal_sequence = train_sequences[0]
+    anomalous_sequence = _sequence(
+        24,
+        templates=["panic failure", "disk failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+    )
+
+    first = detector.predict(anomalous_sequence)
+    second = detector.predict(anomalous_sequence)
+
+    assert detector.threshold_source == "train_score_quantile"
+    assert detector.predict(normal_sequence).predicted_label == 0
+    assert first == second
+
+
+def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:
+    """Markov manifests should expose normal-only transition statistics."""
+    detector = _markov_config(name="markov").build_detector()
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
+    sequence_summary = SequenceSummary(
+        sequence_count=4,
+        train_sequence_count=3,
+        test_sequence_count=1,
+        train_label_counts={0: 2, 1: 1},
+        test_label_counts={0: 1},
+    )
+
+    manifest: MarkovManifest = detector.model_manifest(
+        sequence_summary=sequence_summary,
+    )
+
+    assert manifest.detector == "markov"
+    assert manifest.order == 1
+    assert manifest.score_threshold >= 0.0
+    assert manifest.threshold_source == "train_score_quantile"
+    assert manifest.normal_sequence_count == EXPECTED_MARKOV_NORMAL_SEQUENCE_COUNT
+    assert manifest.normal_transition_count == EXPECTED_MARKOV_NORMAL_TRANSITION_COUNT
+    assert manifest.normal_context_vocabulary == EXPECTED_MARKOV_CONTEXT_VOCABULARY
+    assert manifest.normal_template_vocabulary == EXPECTED_MARKOV_TEMPLATE_VOCABULARY
 
 
 @pytest.mark.allow_no_new_coverage

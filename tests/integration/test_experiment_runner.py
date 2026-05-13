@@ -233,6 +233,82 @@ def test_run_experiment_writes_reproducible_result_bundle(tmp_path: Path) -> Non
     assert environment["repository"]["root"] == tmp_path.as_posix()
 
 
+def test_run_experiment_with_markov_writes_predictions(tmp_path: Path) -> None:
+    """Markov runs should write deterministic predictions and model metadata.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config
+            fixtures.
+    """
+    sweep_config = (
+        tmp_path / "experiments" / "configs" / "datasets" / "tiny_markov_run.toml"
+    )
+    dataset_config = (
+        tmp_path / "experiments" / "configs" / "datasets" / "tiny_dataset.toml"
+    )
+    model_config = tmp_path / "experiments" / "configs" / "models" / "markov.toml"
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    sweep_config.parent.mkdir(parents=True, exist_ok=True)
+    dataset_config.parent.mkdir(parents=True, exist_ok=True)
+    model_config.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FIXTURE_LOG, log_dir / FIXTURE_LOG.name)
+    shutil.copy2(FIXTURE_ROOT / "tiny_dataset.toml", dataset_config)
+    sweep_config.write_text(
+        'name = "tiny_runner_smoke_markov"\n'
+        "\n[dataset]\n"
+        'name = "tiny_dataset"\n'
+        'dataset_name = "tiny-bgl-runner"\n'
+        'structured_parser = "bgl"\n'
+        "\n[dataset.source]\n"
+        'type = "local_dir"\n'
+        'path = "."\n'
+        'raw_logs_relpath = "logs/tiny_bgl_happy_path.log"\n'
+        "\n[dataset.sequence]\n"
+        'grouping = "fixed"\n'
+        "window_size = 3\n"
+        "step = 2\n"
+        "train_fraction = 0.34\n"
+        "test_fraction = 0.25\n"
+        "\n[[models]]\n"
+        'ref = "markov"\n',
+        encoding="utf-8",
+    )
+    model_config.write_text(
+        'name = "markov"\ndetector = "markov"\n',
+        encoding="utf-8",
+    )
+
+    [run_dir] = run_experiment(sweep_config, write_predictions=True)
+    [rerun_dir] = run_experiment(
+        sweep_config,
+        force=True,
+        write_predictions=True,
+    )
+
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+    )
+    predictions = _read_predictions(run_dir)
+    rerun_predictions = _read_predictions(rerun_dir)
+    run_log = (run_dir / "run.log").read_text(encoding="utf-8")
+
+    assert run_dir == rerun_dir
+    assert metrics["sequence_count"] == EXPECTED_SEQUENCE_COUNT
+    assert metrics["train_sequence_count"] == EXPECTED_TRAIN_SEQUENCE_COUNT
+    assert metrics["test_sequence_count"] == EXPECTED_TEST_SEQUENCE_COUNT
+    assert manifest["model_manifest"]["detector"] == "markov"
+    assert manifest["model_manifest"]["order"] == 1
+    assert manifest["model_manifest"]["threshold_source"] == "train_score_quantile"
+    assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
+    assert [prediction.split_label for prediction in predictions] == [
+        "test",
+    ]
+    assert predictions == rerun_predictions
+    assert "Fitting markov detector" in run_log
+
+
 def test_run_experiment_expands_multi_model_sweep(tmp_path: Path) -> None:
     """One dataset manifest should be able to run multiple model configs.
 

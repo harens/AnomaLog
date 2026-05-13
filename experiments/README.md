@@ -6,7 +6,8 @@ AnomaLog preprocessing.
 ## Layout
 
 - `configs/models/`: detector configurations such as template-frequency,
-  handwritten Naive Bayes, `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
+  a normal-only Markov transition baseline, handwritten Naive Bayes,
+  `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
 - `configs/datasets/`: dataset-owned experiment manifests that bind one dataset variant to one or more detector configs via `[[models]]` entries, then optionally override them through fixed overrides and Cartesian-product axes.
 - `runners/`: Python entrypoints for executing experiments.
 - `analysis/`: notebooks and one-off visual analysis only.
@@ -42,29 +43,33 @@ truth.
 The checked-in dataset-manifest set is split by dataset family:
 
 - `bgl_entity_chronological.toml` and `hdfs_v1_entity_chronological.toml`
-  collect the template-frequency, Naive Bayes, and DeepCASE models for the
-  chronological entity baselines.
+  collect the template-frequency, Naive Bayes, Markov, and DeepCASE models
+  for the chronological entity baselines.
 - `bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml` and
   `bgl_deeplog_paper_10pct_entry_stream_no_online.toml` keep the BGL DeepLog
   paper-reproduction probes separate because they differ in train fraction and
   split policy.
 - `hdfs_v1_deeplog_paper_entry100k_split_partial.toml` and
   `hdfs_v1_deeplog_paper_entry100k_assign_first.toml` each bundle the HDFS
-  paper DeepLog variants with both the key-only and full DeepLog model
-  configs, so the model choice sits next to the dataset split policy instead of
-  living in a separate file.
+  paper DeepLog variant with template-frequency and Markov baselines, so the
+  model choice sits next to the dataset split policy instead of living in a
+  separate file.
 - `hdfs_wuyifan18_deeplog_preprocessed.toml` keeps the exact `hdfs_train` /
-  `hdfs_test` boundary for the wuyifan18 archive and now lists both the
-  DeepLog key-only and DeepCASE model configs against the same dataset
-  manifest.
+  `hdfs_test` boundary for the wuyifan18 archive and now lists the DeepLog
+  key-only, template-frequency, and Markov model configs against the same
+  dataset manifest.
 - `openstack_deeplog_preprocessed.toml` is the matching OpenStack
   file-boundary reproduction probe. It materialises LogHub's OpenStack archive,
-  parses with Spell (`tau=0.5`) over the raw message content, builds the
+  parses with Spell (`tau=0.5`) over a canonicalised message body, builds the
   DeepLog event-id vocabulary from `openstack_normal1.log`, and then evaluates
   `openstack_normal2.log` and `openstack_abnormal.log` on the same exact
   boundary. The OpenStack parser prefixes recovered `instance_id` values with
-  the split name so the file boundary survives grouping, which means the
-  preset's generic train/test fractions are not used for split assignment.
+  the split name so the file boundary survives grouping, and it also strips the
+  leading session tag plus volatile UUID, IP, path, hex, and numeric tokens
+  before Spell sees the message text. That keeps session identity out of the
+  template vocabulary while preserving the file-boundary split contract.
+  The manifest also carries template-frequency, Markov, and DeepCASE
+  comparators for the same file boundary.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix on entity-grouped
@@ -78,9 +83,9 @@ benchmarked on the same dataset family, keep them in the same manifest or use
 fixed overrides rather than letting a shared dataset preset imply the wrong
 training contract.
 
-The DeepLog reproduction manifests also carry a template-frequency sanity
-baseline on the same split, so the paper target is always compared against a
-simple sequence-statistics floor.
+The DeepLog reproduction manifests also carry simple sanity baselines on the
+same split, so the paper target is always compared against a sequence-statistics
+floor rather than only against the neural model.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
@@ -107,6 +112,7 @@ The baseline supervision split is intentional:
 
 - Naive Bayes is supervised at the sequence level.
 - Template Frequency is unsupervised apart from optional normal-score calibration.
+- Markov is a normal-only sequence-order comparator for DeepLog-style runs.
 - DeepCASE is label-aware during fit and falls back to sequence labels when event labels are missing.
 - DeepLog is normal-only at fit time, with labels used for eligibility bookkeeping and evaluation rather than class-target learning.
 

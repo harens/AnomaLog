@@ -1,5 +1,5 @@
 name = "hdfs_v1_deeplog_paper_entry100k_assign_first"
-description = "DeepLog HDFS paper reproduction with assign-by-first-event straddler handling across the key-only and full variants, plus a template-frequency sanity baseline on the same split."
+description = "DeepLog HDFS paper reproduction with assign-by-first-event straddler handling across the key-only and full variants, plus template-frequency and Markov sanity baselines on the same split."
 
 [dataset]
 name = "hdfs_v1_deeplog_paper_entry100k_assign_first"
@@ -33,4 +33,8 @@ run_group = "deeplog"
 
 [[models]]
 ref = "template_frequency_default"
+run_group = "baselines"
+
+[[models]]
+ref = "markov_default"
 run_group = "baselines"

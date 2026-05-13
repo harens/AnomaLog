@@ -18,6 +18,11 @@ Both are sanity baselines. They are useful for checking corpus separability and
 template-statistics signal, but they are not paper-faithful DeepLog or
 DeepCASE reproductions.
 
+The checked-in sequence-level manifest set now also includes a normal-only
+Markov transition comparator for DeepLog-style runs. This report still
+tabulates only the original two baseline families; the Markov comparator is a
+sequence-order diagnostic rather than a new headline paper result.
+
 ## Measured Results
 
 | dataset | detector | supervision | prediction unit | label unit | F1 | precision | recall |
