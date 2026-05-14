@@ -621,12 +621,13 @@ class DeepLogModelConfig(
         msgspec.Meta(
             description=(
                 "Whether to fit and apply the per-template parameter anomaly "
-                "models. The HDFS DeepLog paper benchmark reports the key "
-                "model only, while parameter-value detection is evaluated "
-                "separately on OpenStack."
+                "models. Experiment defaults stay key-only because the HDFS and "
+                "BGL paper-facing DeepLog runs in this repo focus on the "
+                "next-key detector, while parameter-value detection remains "
+                "available for explicit opt-in experiments such as OpenStack."
             ),
         ),
-    ] = True
+    ] = False
     include_elapsed_time: Annotated[
         bool,
         msgspec.Meta(

@@ -1,4 +1,5 @@
 name = "deeplog_default"
 detector = "deeplog"
 top_g_values = [1, 3, 5, 7, 9, 11]
+parameter_detection_enabled = false
 description = "Normal-only DeepLog reproduction config: training filters to normal targets, while labels remain available for evaluation and eligibility bookkeeping."

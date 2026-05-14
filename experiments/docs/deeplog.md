@@ -38,9 +38,8 @@ extensions:
   findings.
 - Manifest reporting for parameter-model coverage and per-template feature
   counts.
-- Explicit key-only HDFS reproduction support via
-  `parameter_detection_enabled = false` in the dataset manifest overrides for
-  the base `deeplog_default` model.
+- Key-only experiment defaults: `deeplog_default` now keeps parameter-value
+  detection disabled unless a run opts in explicitly.
 - Detector-owned next-event diagnostics derived from the key model's ranked
   predictions. These diagnostics are separate from anomaly scoring and are
   exposed in run metrics for the full test scoring pass.
@@ -163,6 +162,9 @@ This section keeps the short version in the main DeepLog note:
 
 - the reproduction configs now use generic split modes, not a DeepLog-only
   pipeline;
+- the experiment-layer `deeplog_default` model now defaults to key-only scoring,
+  and the HDFS paper-facing bundles pin `top_g_values = [1, 3, 5, 7, 9]` so the
+  runtime scorer no longer drifts to `g = 11`;
 - for the official preprocessed HDFS regime, split-file prefixes are now used
   directly to assign train/test membership for entity sequences, avoiding an
   extra raw-entry split indirection while keeping the same preset surface;

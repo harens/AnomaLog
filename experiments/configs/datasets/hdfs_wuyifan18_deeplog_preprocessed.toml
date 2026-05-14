@@ -20,6 +20,7 @@ ref = "deeplog_default"
 run_group = "deeplog"
 
 [models.overrides]
+"model.top_g_values" = [1, 3, 5, 7, 9]
 "model.parameter_detection_enabled" = false
 
 [[models]]

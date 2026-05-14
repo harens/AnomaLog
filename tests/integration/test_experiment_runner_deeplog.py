@@ -280,6 +280,10 @@ def _assert_deeplog_manifest(
         EXPECTED_PARAMETER_MODEL_COUNT
     )
     assert model_manifest["include_elapsed_time"] == deeplog_model.include_elapsed_time
+    assert (
+        model_manifest["parameter_detection_enabled"]
+        == deeplog_model.parameter_detection_enabled
+    )
     assert parameter_models == []
     sequence_config = bundle.dataset.sequence
     sequence_split_summary = _object_dict(manifest["sequence_split_summary"])

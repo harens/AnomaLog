@@ -31,6 +31,33 @@ data path.
 denominators. That is intentional for the current experiment runner, but it
 means ignored anomalies do not count as false negatives.
 
+## 2026-05 Audit Findings
+
+The local forensic comparison against `../LogADEmpirical` found three relevant
+outcomes:
+
+- There is no current evidence of an AnomaLog DeepLog off-by-one bug in the
+  `history -> target` construction. The first target still begins immediately
+  after the history window, and the same indexing is used in inference.
+- The main reproduction gap is protocol and corpus mismatch, not a clear model
+  implementation failure:
+  - LogADEmpirical's BGL path groups by node into shuffled sessions rather than
+    preserving the paper-facing chronological entry stream.
+  - LogADEmpirical's HDFS path groups sessions first, shuffles them, and then
+    takes a 1% session split rather than reproducing a first-100k chronological
+    raw-entry protocol.
+  - LogADEmpirical also replaces the requested DeepLog `g` with a validation-
+    derived recommendation at runtime, so it is not holding the paper threshold
+    fixed during evaluation.
+- One concrete AnomaLog protocol bug was found: the HDFS paper-facing bundles
+  described `g = 9` in comments, but inherited `deeplog_default.top_g_values =
+  [1, 3, 5, 7, 9, 11]`, so runtime scoring was actually using `g = 11`.
+
+This report therefore treats the remaining BGL and HDFS gaps as data/protocol
+issues first. The checked-in fixes from this audit pin HDFS paper runs back to
+`g = 9` and make key-only DeepLog the experiment default unless a run opts into
+parameter modelling explicitly.
+
 ## HDFS
 
 The current HDFS bundle still differs from the paper's cited raw-entry and

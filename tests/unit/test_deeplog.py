@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import msgspec
 import pytest
 import torch
@@ -10,6 +12,7 @@ from rich.progress import Progress, TaskID
 
 from anomalog.sequences import SplitLabel, TemplateSequence
 from experiments import ConfigError
+from experiments.config import load_experiment_bundles
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deeplog.detector import DeepLogDetector, DeepLogModelConfig
 from experiments.models.deeplog.key import (
@@ -90,10 +93,10 @@ def test_deeplog_model_config_accepts_full_dataset_next_event_policy() -> None:
 
 
 def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
-    """DeepLog should enable parameter scoring by default."""
+    """DeepLog should default experiment configs to key-only scoring."""
     config = _deep_log_config(name="deeplog")
 
-    assert config.parameter_detection_enabled is True
+    assert config.parameter_detection_enabled is False
 
 
 def test_deeplog_model_config_accepts_parameter_detection_disabled() -> None:
@@ -108,7 +111,7 @@ def test_deeplog_model_config_accepts_parameter_detection_disabled() -> None:
 
 def test_deeplog_model_config_rejects_empty_top_g_values() -> None:
     """DeepLog should require at least one replay cut-off."""
-    with pytest.raises(ConfigError, match="at least one"):
+    with pytest.raises(ConfigError, match="length >= 1"):
         _deep_log_config(name="deeplog", top_g_values=())
 
 
@@ -750,6 +753,7 @@ def test_predict_flags_key_model_anomalies() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
@@ -939,6 +943,7 @@ def test_deeplog_sequence_trigger_breakdown_counts_source_combinations() -> None
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.parameter_models["T"] = ParameterModelState(
@@ -1031,6 +1036,7 @@ def test_deeplog_sequence_trigger_breakdown_is_disabled_for_stream_batches() -> 
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
@@ -1194,6 +1200,7 @@ def test_deeplog_event_level_metrics_follow_event_labels() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
@@ -1241,6 +1248,7 @@ def test_deeplog_event_level_metrics_use_event_masks_not_chunk_labels() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[3.0, 2.0, 1.0, 0.0])
@@ -1511,6 +1519,7 @@ def test_deeplog_next_event_predictions_reset_after_run_metrics() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
@@ -1554,6 +1563,7 @@ def test_predict_flags_parameter_model_anomalies() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[5.0])
@@ -1605,6 +1615,7 @@ def test_predict_does_not_score_normal_parameter_residuals_as_anomalies() -> Non
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[5.0])
@@ -1651,6 +1662,7 @@ def test_predict_skips_parameter_scoring_when_key_model_fires() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
@@ -1702,6 +1714,7 @@ def test_predict_masks_missing_parameter_values_in_event_findings() -> None:
             num_layers=1,
             epochs=1,
             batch_size=1,
+            parameter_detection_enabled=True,
         ),
     )
     detector.key_model = _StaticKeyModel(logits=[5.0])
@@ -1905,6 +1918,7 @@ def test_fit_uses_configured_cpu_device_with_progress() -> None:
             batch_size=2,
             validation_fraction=0.5,
             device="cpu",
+            parameter_detection_enabled=True,
         ),
     )
 
@@ -1946,6 +1960,7 @@ def test_fit_trains_models_and_skips_non_numeric_templates() -> None:
             epochs=1,
             batch_size=2,
             validation_fraction=0.5,
+            parameter_detection_enabled=True,
         ),
     )
 
@@ -2035,6 +2050,7 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
             num_layers=1,
             epochs=5,
             batch_size=2,
+            parameter_detection_enabled=True,
         ),
     )
     detector.template_to_index = {"T": 0}
@@ -2099,3 +2115,21 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
         manifest.parameter_models[0].input_feature_count == expected_input_feature_count
     )
     assert manifest.skipped_parameter_models[0].template == "SKIPPED"
+
+
+def test_hdfs_paper_configs_pin_runtime_top_g_to_nine() -> None:
+    """HDFS paper-facing DeepLog bundles should score with `g = 9`."""
+    config_paths = [
+        "experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml",
+        "experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml",
+        "experiments/configs/datasets/hdfs_wuyifan18_deeplog_preprocessed.toml",
+    ]
+
+    for config_path in config_paths:
+        bundles = load_experiment_bundles(Path(config_path))
+        deeplog_bundle = next(
+            bundle for bundle in bundles if bundle.model.detector == "deeplog"
+        )
+        assert isinstance(deeplog_bundle.model, DeepLogModelConfig)
+        assert deeplog_bundle.model.top_g_values == (1, 3, 5, 7, 9)
+        assert deeplog_bundle.model.top_g == 9

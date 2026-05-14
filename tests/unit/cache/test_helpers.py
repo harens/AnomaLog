@@ -13,6 +13,7 @@ from prefect.assets import Asset, AssetProperties
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
+from anomalog.cache import core as cache_core
 from anomalog.cache import files as cache_files
 from anomalog.cache.core import dataset_build_lock, dataset_build_lock_path
 from anomalog.cache.core import task as cache_task
@@ -344,6 +345,25 @@ def test_materialize_and_task_use_shared_result_storage_base(
     captured_result_storage = captured["result_storage"]
     assert isinstance(captured_result_storage, (str, Path))
     assert Path(captured_result_storage) == expected_basepath
+
+
+def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> None:
+    """Result storage moves should force Prefect to miss stale cached states.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for fabricated result
+            storage roots.
+    """
+    build_cache_policy = vars(cache_core)["_cache_policy_for_result_storage"]
+    first_policy = build_cache_policy(tmp_path / "one" / "storage")
+    second_policy = build_cache_policy(tmp_path / "two" / "storage")
+
+    first_key = first_policy.compute_key(task_run_context(), {}, {})
+    second_key = second_policy.compute_key(task_run_context(), {}, {})
+
+    assert first_key is not None
+    assert second_key is not None
+    assert first_key != second_key
 
 
 def test_dataset_build_lock_path_changes_with_cache_namespace(tmp_path: Path) -> None:
