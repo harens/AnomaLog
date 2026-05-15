@@ -1,7 +1,5 @@
 """Tests for template parser implementations."""
 
-import sys
-import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias
@@ -268,44 +266,17 @@ def test_identity_template_parser_is_a_no_op_for_train_and_inference() -> None:
     assert parser.inference("hello") == ("hello", [])
 
 
-def test_spell_template_parser_trains_and_infers_with_fake_spellpy(
+def test_spell_template_parser_trains_and_infers(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """Spell parser should expose trained templates through inference.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Patch module imports and cwd.
+        monkeypatch (pytest.MonkeyPatch): Patch the working directory so
+            Spell artefacts stay inside the per-test sandbox.
         tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
     """
-
-    class _FakeLogParser:
-        def __init__(
-            self,
-            *,
-            indir: str,
-            outdir: str,
-            log_format: str,
-            logmain: str,
-            tau: float,
-        ) -> None:
-            del indir, log_format, tau
-            self._outdir = Path(outdir)
-            self._logmain = logmain
-
-        def parse(self, _filename: str) -> None:
-            templates_path = self._outdir / f"{self._logmain}_templates.csv"
-            templates_path.write_text(
-                "EventId,EventTemplate,Occurrences\n"
-                "E1,Build <*> complete,2\n"
-                "E2,Delete <*> complete,1\n",
-                encoding="utf-8",
-            )
-
-    fake_spell_module = types.SimpleNamespace(LogParser=_FakeLogParser)
-    fake_spellpy_module = types.ModuleType("spellpy")
-    fake_spellpy_module.__dict__["spell"] = fake_spell_module
-    monkeypatch.setitem(sys.modules, "spellpy", fake_spellpy_module)
     monkeypatch.chdir(tmp_path)
 
     parser = SpellTemplateParser(dataset_name="demo")
@@ -331,40 +302,15 @@ def test_spell_template_parser_streams_input_without_materialising_it(
     """Spell parser training should consume the input stream incrementally.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Patches module imports and guards
-            against accidental `list(...)` materialisation during training.
+        monkeypatch (pytest.MonkeyPatch): Patches the working directory and
+            guards against accidental `list(...)` materialisation.
         tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
     """
-
-    class _FakeLogParser:
-        def __init__(
-            self,
-            *,
-            indir: str,
-            outdir: str,
-            log_format: str,
-            logmain: str,
-            tau: float,
-        ) -> None:
-            del indir, log_format, tau
-            self._outdir = Path(outdir)
-            self._logmain = logmain
-
-        def parse(self, _filename: str) -> None:
-            templates_path = self._outdir / f"{self._logmain}_templates.csv"
-            templates_path.write_text(
-                "EventId,EventTemplate,Occurrences\nE1,Build <*> complete,2\n",
-                encoding="utf-8",
-            )
 
     def _forbid_list_materialisation(*_args: object, **_kwargs: object) -> None:
         msg = "Spell training should not materialise the full input stream."
         raise AssertionError(msg)
 
-    fake_spell_module = types.SimpleNamespace(LogParser=_FakeLogParser)
-    fake_spellpy_module = types.ModuleType("spellpy")
-    fake_spellpy_module.__dict__["spell"] = fake_spell_module
-    monkeypatch.setitem(sys.modules, "spellpy", fake_spellpy_module)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "anomalog.parsers.template.parsers.list",

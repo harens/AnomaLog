@@ -82,3 +82,4 @@ module-name = "anomalog"
 drain3 = { git = "https://github.com/logpai/Drain3" }
 # See https://github.com/harens/DeepCASE/blob/main/docs/deepcase-audit.md
 deepcase = { git = "https://github.com/harens/DeepCASE.git" }
+spellpy = { git = "https://github.com/harens/spellpy.git" }
