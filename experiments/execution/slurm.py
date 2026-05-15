@@ -397,7 +397,7 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
         [
             'export PATH="${HOME}/.local/bin:${PATH}"',
             f"export REPO_ROOT={shlex.quote(submission.repo_root.as_posix())}",
-            "set -euo pipefail",
+            "set -eu",
             "EXPERIMENTS=(",
             experiment_array,
             ")",

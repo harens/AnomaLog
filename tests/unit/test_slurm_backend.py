@@ -152,7 +152,8 @@ def test_build_wrap_script_indexes_embedded_array_by_task_id() -> None:
     assert 'if [ -z "$EXPERIMENT_NAME" ]; then' in wrap_script
     assert 'export RUN_NAME="$EXPERIMENT_NAME"' in wrap_script
     assert "export REPO_ROOT='/repo with spaces'" in wrap_script
-    assert "set -euo pipefail" in wrap_script
+    assert "set -eu" in wrap_script
+    assert "pipefail" not in wrap_script
     assert "bash -lc" in wrap_script
 
 
