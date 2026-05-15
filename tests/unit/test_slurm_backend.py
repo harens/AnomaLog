@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import pathlib
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+
+import pytest
 
 from experiments.config import RegisteredExperiment
 from experiments.execution import slurm
 from experiments.execution.slurm import SlurmSubmitRequest
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def _write_slurm_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
@@ -366,3 +364,34 @@ def test_submit_experiments_uses_relative_cluster_roots_from_request(
     wrap_script = captured["command"][captured["command"].index("--wrap") + 1]
     assert f"export ANOMALOG_DATA_ROOT={tmp_path / 'cluster/data'}" in wrap_script
     assert f"export ANOMALOG_CACHE_ROOT={tmp_path / 'cluster/cache'}" in wrap_script
+
+
+def test_submit_experiments_surfaces_sbatch_failure_message(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed Slurm submissions should raise a concise scheduler error."""
+    registry_path, defaults_path = _write_slurm_tree(tmp_path)
+
+    def _raise(
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        raise slurm.subprocess.CalledProcessError(
+            1,
+            ["sbatch"],
+            output="",
+            stderr="sbatch: error: invalid partition",
+        )
+
+    monkeypatch.setattr(slurm.subprocess, "run", _raise)
+
+    with pytest.raises(SystemExit, match="sbatch: error: invalid partition"):
+        slurm.submit_experiments(
+            SlurmSubmitRequest(
+                registry_path=registry_path,
+                repo_root=tmp_path,
+                defaults_path=defaults_path,
+                groups=("baselines",),
+            ),
+        )

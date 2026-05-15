@@ -160,6 +160,7 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
 
     Raises:
         ConfigError: If the registry selection is invalid or empty.
+        SystemExit: If `sbatch` rejects the submission or is unavailable.
     """
     resolved_repo_root = Path.cwd() if request.repo_root is None else request.repo_root
     resolved_repo_root = resolved_repo_root.resolve()
@@ -207,12 +208,22 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
     if request.dry_run:
         _write_line(_format_sbatch_command_preview(command))
         return []
-    completed = subprocess.run(  # noqa: S603
-        command,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        msg = "Unable to submit the Slurm job because `sbatch` was not found."
+        raise SystemExit(msg) from exc
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or "").strip()
+        if output:
+            _write_line(output)
+        msg = output or f"Slurm submission failed with exit status {exc.returncode}."
+        raise SystemExit(msg) from exc
     output = completed.stdout.strip() or completed.stderr.strip()
     if output:
         _write_line(output)
