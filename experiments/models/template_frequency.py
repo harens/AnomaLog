@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -40,7 +41,7 @@ class TemplateFrequencyModelConfig(
 
     The detector counts templates in the train prefix and turns unexpectedly
     rare sequences into high anomaly scores. When the threshold is not fixed by
-    config, calibration uses normal training sequences only.
+    config, calibration uses normal-or-missing training sequences only.
     """  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
 
     score_threshold: Annotated[
@@ -118,8 +119,9 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
 
         Args:
             train_sequences (Iterable[TemplateSequence]): Training split
-                sequences. Threshold calibration needs at least one normal
-                training sequence when the threshold is not configured.
+                sequences. Threshold calibration needs at least one normal or
+                missing-labelled training sequence when the threshold is not
+                configured.
             progress (Progress): Progress reporter.
             logger (logging.Logger | None): Optional logger for fit diagnostics.
 
@@ -137,7 +139,9 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         ):
             counts.update(sequence.templates)
             total_events += len(sequence.templates)
-            if self.configured_score_threshold is None and sequence.label == 0:
+            if self.configured_score_threshold is None and not is_anomalous_label(
+                sequence.label,
+            ):
                 calibration_sequences.append(sequence)
         if total_events == 0:
             msg = "Cannot fit template_frequency detector with zero train events."
