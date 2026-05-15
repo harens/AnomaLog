@@ -466,6 +466,25 @@ def test_load_experiment_bundles_preserves_model_run_group(
 
 
 @pytest.mark.allow_no_new_coverage
+def test_checked_in_ait_ads_scenario_manifest_loads_all_model_families() -> None:
+    """The checked-in AIT-ADS scenario manifest should expand all model refs."""
+    bundle_path = Path("experiments/configs/datasets") / "ait_ads_fox.toml"
+
+    bundles = load_experiment_bundles(bundle_path)
+
+    assert [bundle.model.detector for bundle in bundles] == [
+        "deeplog",
+        "template_frequency",
+        "naive_bayes",
+        "markov",
+        "river",
+        "deepcase",
+    ]
+    assert bundles[0].dataset.preset == "ait_ads_fox"
+    assert isinstance(bundles[0].dataset.sequence, ChronologicalStreamSequenceConfig)
+
+
+@pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_expands_model_and_dataset_axes(
     tmp_path: Path,
 ) -> None:

@@ -1,0 +1,50 @@
+name = "ait_ads_shaw"
+description = "AIT-ADS shaw alert-stream experiment matrix with DeepLog, DeepCASE, and baseline detectors on the same chronological split."
+
+[dataset]
+name = "ait_ads_shaw"
+dataset_name = "AIT_ADS_SHAW"
+preset = "ait_ads_shaw"
+template_parser = "identity"
+description = "AIT-ADS shaw scenario using canonical alert keys with chronological raw-entry prefix splitting."
+evaluation_unit = "continuous_event_stream"
+
+[dataset.sequence]
+grouping = "chronological_stream"
+chunk_size = 100000
+train_fraction = 0.2
+test_fraction = 0.8
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_fraction"
+train_entry_fraction = 0.2
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[dataset.cache_paths]
+data_root = "data/ait_ads/shaw"
+cache_root = ".cache/ait_ads/shaw"
+
+[[models]]
+ref = "deeplog_default"
+run_group = "deeplog"
+
+[[models]]
+ref = "template_frequency_default"
+run_group = "baselines"
+
+[[models]]
+ref = "naive_bayes_default"
+run_group = "baselines"
+
+[[models]]
+ref = "markov_default"
+run_group = "baselines"
+
+[[models]]
+ref = "river_multinomial_nb_default"
+run_group = "baselines"
+
+[[models]]
+ref = "deepcase"
+run_group = "deepcase"

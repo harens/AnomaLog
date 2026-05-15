@@ -70,6 +70,14 @@ The checked-in dataset-manifest set is split by dataset family:
   template vocabulary while preserving the file-boundary split contract.
   The manifest also carries template-frequency, Markov, and DeepCASE
   comparators for the same file boundary.
+- `ait_ads_<scenario>.toml` covers the AIT Alert Data Set (AIT-ADS) one
+  scenario at a time for `fox`, `harrison`, `russellmitchell`, `santos`,
+  `shaw`, `wardbeck`, `wheeler`, and `wilson`. Each scenario manifest uses one
+  chronological raw-entry prefix/suffix split across DeepLog, DeepCASE, and the
+  baseline detectors so all models see the same alert-stream contract. The
+  AIT-ADS source emits stable semantic alert keys from AMiner, Wazuh, and
+  Suricata metadata, so the manifests intentionally use the identity template
+  parser rather than re-mining templates from already-normalised keys.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix on entity-grouped
@@ -220,13 +228,15 @@ environment.
 Each concrete run writes a deterministic directory under `experiments/results/<concrete-run-name>/<fingerprint>/` containing:
 
 - `experiment_config.json`: normalised manifest, concrete override, dataset, and model config
-- `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, cache roots, sequence settings, and dataset statistics
+- `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, sequence settings, and compact dataset statistics
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
 - `metrics.json`: task-aware detector metrics, including the selected
   `primary_metric_scope`, canonical scoped metric blocks, and run-level
   evaluation metadata such as `evaluation_unit`, `prediction_unit`,
-  `label_unit`, and split policy details at the top level. DeepLog runs also
+  `label_unit`, and split policy details at the top level. By default this
+  file keeps the paper-facing summaries only; pass `--debug-reporting` if you
+  need the fuller diagnostic payloads during development. DeepLog runs also
   record an exact-rank `top_g_replay` curve using the configured paper
   cut-offs, so you can inspect multiple top-`g` thresholds from one fitted
   model without re-running inference.
@@ -251,6 +261,9 @@ LogHub-style raw corpus or the DeepLog-style preprocessed session files with
 the exact train/test file boundary. When a run is only used in one place,
 consider listing the relevant model refs directly under `[[models]]` in the
 same dataset manifest instead of creating a temporary per-model file.
+For AIT-ADS, prefer the checked-in `ait_ads_<scenario>.toml` manifests so the
+chronological stream split and canonical alert-key contract stay consistent
+across detector families.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Omit `[cache_paths]` to use AnomaLog's default platformdirs-based cache/data locations.
 

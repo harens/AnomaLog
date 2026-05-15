@@ -1,5 +1,6 @@
 """Concrete StructuredParser implementations for built-in log formats."""
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -480,3 +481,65 @@ def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
     except ValueError:
         pass
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class AITADSParser(StructuredParser):
+    """Parse the canonical JSONL alert stream derived from AIT-ADS."""
+
+    name: ClassVar[str] = "ait_ads"
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse one canonical AIT-ADS alert row.
+
+        Args:
+            raw_line (str): Canonical JSONL row emitted by the AIT-ADS source.
+
+        Returns:
+            BaseStructuredLine | None: Parsed canonical alert, or `None` when
+                the row is malformed.
+        """
+        s = raw_line.strip()
+        logger = get_logger()
+        if not s:
+            return None
+
+        try:
+            payload = json.loads(s)
+        except json.JSONDecodeError:
+            logger.warning("Cannot parse AIT-ADS canonical row: %r", s)
+            return None
+
+        if not isinstance(payload, dict):
+            logger.warning("AIT-ADS canonical row must be a JSON object: %r", s)
+            return None
+
+        template_key = payload.get("template_key")
+        if template_key is None:
+            logger.warning("AIT-ADS canonical row is missing template_key: %r", s)
+            return None
+
+        try:
+            timestamp_unix_ms = (
+                None
+                if payload.get("timestamp_unix_ms") is None
+                else int(payload["timestamp_unix_ms"])
+            )
+        except (TypeError, ValueError):
+            timestamp_unix_ms = None
+        try:
+            anomalous = (
+                None if payload.get("anomalous") is None else int(payload["anomalous"])
+            )
+        except (TypeError, ValueError):
+            anomalous = None
+
+        return BaseStructuredLine(
+            timestamp_unix_ms=timestamp_unix_ms,
+            entity_id=(
+                None if payload.get("entity_id") is None else str(payload["entity_id"])
+            ),
+            untemplated_message_text=str(template_key),
+            anomalous=anomalous,
+        )

@@ -10,6 +10,7 @@ from anomalog.parsers.structured.deeplog_preprocessed import (
     DelimitedLabelledEventParser,
 )
 from anomalog.parsers.structured.parsers import (
+    AITADSParser,
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
@@ -17,6 +18,7 @@ from anomalog.parsers.structured.parsers import (
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000
+AIT_ADS_SAMPLE_TS_MS = 1_642_410_287_000
 
 
 def test_hdfs_parser_uses_component_when_block_id_is_missing() -> None:
@@ -57,8 +59,10 @@ def test_structured_parser_registry_resolves_builtins() -> None:
         DelimitedLabelledEventParser
     )
     assert resolve_structured_parser("hdfs_v1") is HDFSV1Parser
+    assert resolve_structured_parser("ait_ads") is AITADSParser
     assert resolve_structured_parser("openstack_deeplog") is OpenStackDeepLogParser
     assert set(structured_parser_names()) >= {
+        "ait_ads",
         "bgl",
         "delimited_labelled_event",
         "hdfs_v1",
@@ -172,6 +176,28 @@ def test_openstack_deeplog_parser_skips_rows_without_instance_handles(
         raw_line (str): Labelled OpenStack row lacking an instance id.
     """
     assert OpenStackDeepLogParser().parse_line(raw_line) is None
+
+
+def test_ait_ads_parser_reads_canonical_alert_rows() -> None:
+    """AIT-ADS parser should map canonical JSON rows into structured lines."""
+    parser = AITADSParser()
+    parsed = parser.parse_line(
+        '{"alert_uid":"fox:fox_aminer.json:0","anomalous":1,'
+        '"attack_phase":"service_stop","entity_id":"fox:aminer:172.17.129.140",'
+        '"ids_source":"aminer","metadata":{"analysis_component_identifier":3},'
+        '"original_timestamp":"1642410287.0","scenario":"fox","source_file":"fox_aminer.json",'
+        '"source_line_order":0,"template_key":"aminer|type=NewMatchPathDetector|'
+        'name=AMiner: New event type.|key=nmpd",'
+        '"timestamp_unix_ms":1642410287000}',
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms == AIT_ADS_SAMPLE_TS_MS
+    assert parsed.entity_id == "fox:aminer:172.17.129.140"
+    assert parsed.anomalous == 1
+    assert parsed.untemplated_message_text.startswith(
+        "aminer|type=NewMatchPathDetector",
+    )
 
 
 def test_structured_parser_registry_rejects_unknown_names() -> None:

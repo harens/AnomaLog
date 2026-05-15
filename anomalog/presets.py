@@ -7,10 +7,16 @@ from pathlib import Path
 
 from anomalog.dataset import DatasetSpec
 from anomalog.labels import CSVReader
-from anomalog.parsers import BGLParser, HDFSV1Parser, OpenStackDeepLogParser
+from anomalog.parsers import (
+    AITADSParser,
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+)
 from anomalog.parsers.structured import DelimitedLabelledEventParser
 from anomalog.parsers.template import IdentityTemplateParser, SpellTemplateParser
-from anomalog.sources import PostProcessedSource, RemoteZipSource
+from anomalog.sources import AITADSScenarioSource, PostProcessedSource, RemoteZipSource
+from anomalog.sources.ait_ads import AIT_ADS_SCENARIOS
 from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
@@ -101,11 +107,35 @@ openstack_deeplog_preprocessed = (
     .template_with(SpellTemplateParser)
 )
 
+
+def _ait_ads_preset_name(scenario: str) -> str:
+    return f"ait_ads_{scenario}"
+
+
+def _ait_ads_dataset_name(scenario: str) -> str:
+    return f"AIT_ADS_{scenario.upper()}"
+
+
+def _build_ait_ads_preset(scenario: str) -> DatasetSpec:
+    return (
+        DatasetSpec(_ait_ads_dataset_name(scenario))
+        .from_source(AITADSScenarioSource((scenario,)))
+        .parse_with(AITADSParser())
+        .template_with(IdentityTemplateParser)
+    )
+
+
+_AIT_ADS_PRESETS = {
+    _ait_ads_preset_name(scenario): _build_ait_ads_preset(scenario)
+    for scenario in AIT_ADS_SCENARIOS
+}
+
 _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
     "hdfs_v1": hdfs_v1,
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
     "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
+    **_AIT_ADS_PRESETS,
 }
 
 

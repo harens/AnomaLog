@@ -35,6 +35,7 @@ from experiments.models.metric_reporting import (
 from experiments.models.metric_schema import EvaluationUnit, MetricScope, MetricStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from anomalog.parsers.template import TemplatedDataset
@@ -103,6 +104,18 @@ class ResultPaths:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ResultWriteContext:
+    """Inputs needed to persist one concrete experiment result bundle."""
+
+    bundle: ExperimentBundle
+    templated: TemplatedDataset
+    sequences: SequenceBuilder
+    model_summary: ModelRunSummary
+    result_paths: ResultPaths
+    debug_reporting: bool = False
+
+
 def prepare_result_paths(bundle: ExperimentBundle) -> ResultPaths:
     """Create deterministic result paths for the experiment bundle.
 
@@ -117,33 +130,24 @@ def prepare_result_paths(bundle: ExperimentBundle) -> ResultPaths:
 
 def write_run_outputs(
     *,
-    bundle: ExperimentBundle,
-    templated: TemplatedDataset,
-    sequences: SequenceBuilder,
-    model_summary: ModelRunSummary,
-    result_paths: ResultPaths,
+    context: ResultWriteContext,
 ) -> None:
     """Persist the full experiment result bundle.
 
     Args:
-        bundle (ExperimentBundle): Resolved experiment bundle for the run.
-        templated (TemplatedDataset): Built templated dataset consumed by the
-            detector.
-        sequences (SequenceBuilder): Sequence builder used to derive model input.
-        model_summary (ModelRunSummary): Detector outputs, metrics, and summary
-            counts to persist.
-        result_paths (ResultPaths): Concrete filesystem targets for the run's
-            artifacts.
+        context (ResultWriteContext): Resolved run inputs and persistence
+            targets for the run.
     """
+    bundle = context.bundle
+    sequences = context.sequences
+    model_summary = context.model_summary
+    result_paths = context.result_paths
+    debug_reporting = context.debug_reporting
     _write_json(result_paths.config_path, bundle.normalized_config())
     _write_json(
         result_paths.dataset_manifest_path,
         build_dataset_manifest(
-            bundle=bundle,
-            templated=templated,
-            sequences=sequences,
-            model_summary=model_summary,
-            result_paths=result_paths,
+            context=context,
         ),
     )
     _write_json(
@@ -152,6 +156,7 @@ def write_run_outputs(
             bundle=bundle,
             sequences=sequences,
             model_summary=model_summary,
+            debug_reporting=debug_reporting,
         ),
     )
     _write_json(
@@ -180,56 +185,52 @@ def stable_fingerprint(payload: object) -> str:
 
 def build_dataset_manifest(
     *,
-    bundle: ExperimentBundle,
-    templated: TemplatedDataset,
-    sequences: SequenceBuilder,
-    model_summary: ModelRunSummary,
-    result_paths: ResultPaths,
+    context: ResultWriteContext,
 ) -> dict[str, object]:
     """Build a provenance manifest for the preprocessed dataset and sequences.
 
     Args:
-        bundle (ExperimentBundle): Resolved experiment bundle.
-        templated (TemplatedDataset): Built templated dataset used for the run.
-        sequences (SequenceBuilder): Sequence builder used for the detector input.
-        model_summary (ModelRunSummary): Detector outputs and summary metrics.
-        result_paths (ResultPaths): Materialsed artifact paths for the run.
+        context (ResultWriteContext): Resolved run inputs and persistence
+            targets for the run.
 
     Returns:
         dict[str, object]: Dataset and sequence provenance manifest.
     """
+    bundle = context.bundle
+    model_summary = context.model_summary
+    debug_reporting = context.debug_reporting
     sequence_summary = model_summary.sequence_summary
-    raw_logs_path = templated.sink.raw_dataset_path.resolve()
-    timestamp_min, timestamp_max = templated.sink.timestamp_bounds()
-    dataset_fingerprint = stable_fingerprint(serialise_config(bundle.dataset))
-    structured_parser_name = _structured_parser_name(bundle)
+    raw_logs_path = context.templated.sink.raw_dataset_path.resolve()
+    timestamp_min, timestamp_max = context.templated.sink.timestamp_bounds()
     split_summary = build_sequence_split_summary(
-        sequences,
+        context.sequences,
         sequence_summary=sequence_summary,
     )
-    raw_entry_split_summary = sequences.build_raw_entry_split_summary()
-    metric_metadata = build_metric_metadata(
-        bundle=bundle,
-        sequences=sequences,
-        model_summary=model_summary,
-    )
-    return {
-        "run_fingerprint": result_paths.run_fingerprint,
-        "dataset_fingerprint": dataset_fingerprint,
+    raw_entry_split_summary = context.sequences.build_raw_entry_split_summary()
+    manifest = {
+        "run_fingerprint": context.result_paths.run_fingerprint,
+        "dataset_fingerprint": stable_fingerprint(serialise_config(bundle.dataset)),
         "dataset_variant": bundle.dataset.name,
         "dataset_name": bundle.dataset.dataset_name,
         "source": dataset_source_summary(bundle.dataset, repo_root=bundle.repo_root),
-        "structured_parser": structured_parser_name,
+        "structured_parser": _structured_parser_name(bundle),
         "template_parser": bundle.dataset.template_parser,
-        "cache_paths": {
-            "data_root": templated.cache_paths.data_root.resolve().as_posix(),
-            "cache_root": templated.cache_paths.cache_root.resolve().as_posix(),
-        },
         "raw_logs": {
             "path": raw_logs_path.as_posix(),
             "sha256": sha256_for_file(raw_logs_path),
         },
-        "structured_rows": templated.sink.count_rows(),
+        "structured_rows": context.templated.sink.count_rows(),
+        **(
+            {
+                "dataset_statistics": _build_dataset_statistics(
+                    bundle=bundle,
+                    raw_logs_path=raw_logs_path,
+                ),
+            }
+            if bundle.dataset.preset is not None
+            and bundle.dataset.preset.startswith("ait_ads_")
+            else {}
+        ),
         "timestamp_bounds": {
             "min_unix_ms": timestamp_min,
             "max_unix_ms": timestamp_max,
@@ -251,8 +252,68 @@ def build_dataset_manifest(
             "train": sequence_summary.train_label_counts,
             "test": sequence_summary.test_label_counts,
         },
-        **metric_metadata,
-        "model_manifest": msgspec.to_builtins(model_summary.model_manifest),
+        **build_metric_metadata(
+            bundle=bundle,
+            sequences=context.sequences,
+            model_summary=model_summary,
+        ),
+    }
+    manifest["model_manifest"] = _compact_model_manifest(
+        msgspec.to_builtins(model_summary.model_manifest),
+        debug_reporting=debug_reporting,
+    )
+    return _compact_dataset_manifest(manifest, debug_reporting=debug_reporting)
+
+
+def _build_dataset_statistics(
+    *,
+    bundle: ExperimentBundle,
+    raw_logs_path: Path,
+) -> dict[str, object] | None:
+    """Return optional dataset-specific manifest statistics."""
+    if bundle.dataset.preset is None or not bundle.dataset.preset.startswith(
+        "ait_ads_",
+    ):
+        return None
+
+    total_alerts = 0
+    anomalous_alert_count = 0
+    missing_timestamp_alert_count = 0
+    total_alerts_per_scenario: dict[str, int] = {}
+    total_alerts_per_ids_source: dict[str, int] = {}
+
+    for line in raw_logs_path.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            continue
+        total_alerts += 1
+        scenario = str(record.get("scenario"))
+        ids_source = str(record.get("ids_source"))
+        total_alerts_per_scenario[scenario] = (
+            total_alerts_per_scenario.get(scenario, 0) + 1
+        )
+        total_alerts_per_ids_source[ids_source] = (
+            total_alerts_per_ids_source.get(ids_source, 0) + 1
+        )
+        if record.get("timestamp_unix_ms") is None:
+            missing_timestamp_alert_count += 1
+        anomalous = record.get("anomalous")
+        if anomalous not in {None, 0}:
+            anomalous_alert_count += 1
+
+    return {
+        "total_alerts_parsed": total_alerts,
+        "total_alerts_per_scenario": dict(sorted(total_alerts_per_scenario.items())),
+        "total_alerts_per_ids_source": dict(
+            sorted(total_alerts_per_ids_source.items()),
+        ),
+        "anomalous_alert_count": anomalous_alert_count,
+        "anomalous_alert_fraction": (
+            0.0 if total_alerts == 0 else anomalous_alert_count / total_alerts
+        ),
+        "missing_timestamp_alert_count": missing_timestamp_alert_count,
     }
 
 
@@ -335,6 +396,7 @@ def build_run_metrics_report(
     bundle: ExperimentBundle,
     sequences: SequenceBuilder,
     model_summary: ModelRunSummary,
+    debug_reporting: bool = False,
 ) -> dict[str, object]:
     """Build the final task-aware metric report written to ``metrics.json``.
 
@@ -342,6 +404,8 @@ def build_run_metrics_report(
         bundle (ExperimentBundle): Experiment bundle being evaluated.
         sequences (SequenceBuilder): Sequence builder used for the run.
         model_summary (ModelRunSummary): Model-side summary for the run.
+        debug_reporting (bool): Whether to preserve the verbose diagnostic
+            payloads in the written metrics report.
 
     Returns:
         dict[str, object]: Serialised task-aware metric report with metadata
@@ -357,7 +421,7 @@ def build_run_metrics_report(
         model_summary=model_summary,
     )
     run_metrics = model_summary.metrics
-    return {
+    report = {
         **metadata,
         "sequence_count": run_metrics.get("sequence_count"),
         "train_sequence_count": run_metrics.get("train_sequence_count"),
@@ -372,6 +436,7 @@ def build_run_metrics_report(
             for scope, block in metric_blocks.items()
         },
     }
+    return _compact_run_metrics_report(report, debug_reporting=debug_reporting)
 
 
 def _build_metric_blocks(
@@ -782,6 +847,180 @@ def _evaluation_unit_for_dataset(dataset: DatasetVariantConfig) -> EvaluationUni
     if isinstance(sequence, (FixedSequenceConfig, TimeSequenceConfig)):
         return EvaluationUnit.WINDOW
     return EvaluationUnit.SEQUENCE
+
+
+def _compact_dataset_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    debug_reporting: bool,
+) -> dict[str, Any]:
+    compact_manifest = dict(manifest)
+    if debug_reporting:
+        return compact_manifest
+    compact_manifest.pop("cache_paths", None)
+    model_manifest = compact_manifest.get("model_manifest")
+    if isinstance(model_manifest, dict):
+        compact_manifest["model_manifest"] = _compact_model_manifest(
+            model_manifest,
+            debug_reporting=debug_reporting,
+        )
+    return compact_manifest
+
+
+def _compact_run_metrics_report(
+    report: Mapping[str, Any],
+    *,
+    debug_reporting: bool,
+) -> dict[str, Any]:
+    compact_report = dict(report)
+    if debug_reporting:
+        return compact_report
+    metric_blocks = compact_report.get("metric_blocks")
+    if not isinstance(metric_blocks, dict):
+        return compact_report
+    compact_report["metric_blocks"] = {
+        str(scope): _compact_metric_block(str(scope), block)
+        for scope, block in metric_blocks.items()
+        if isinstance(block, dict)
+    }
+    return compact_report
+
+
+def _compact_metric_block(
+    scope: str,
+    block: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact_block = dict(block)
+    diagnostics = compact_block.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return compact_block
+
+    if scope == MetricScope.NEXT_EVENT_PREDICTION.value:
+        compact_block["diagnostics"] = _compact_next_event_diagnostics(diagnostics)
+        return compact_block
+
+    if scope in {
+        MetricScope.EVENT_LEVEL_DETECTION.value,
+        MetricScope.SEQUENCE_LEVEL_DETECTION.value,
+    }:
+        compact_block["diagnostics"] = _compact_detection_diagnostics(diagnostics)
+        return compact_block
+
+    return compact_block
+
+
+def _compact_detection_diagnostics(
+    diagnostics: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact = {
+        key: diagnostics[key]
+        for key in ("source", "events_seen", "events_eligible")
+        if key in diagnostics
+    }
+    for key in (
+        "auto_coverage",
+        "abstain_rate",
+        "event_auto_coverage",
+        "event_abstain_rate",
+    ):
+        if key in diagnostics:
+            compact[key] = diagnostics[key]
+    return compact
+
+
+def _compact_next_event_diagnostics(
+    diagnostics: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "task",
+        "totals",
+        "top_k",
+        "classification_top1_weighted",
+        "exclusions",
+        "vocabulary_policy",
+    ):
+        value = diagnostics.get(key)
+        if value is None:
+            continue
+        if key == "top_k" and isinstance(value, dict):
+            top_k = dict(value)
+            top_k.pop("hit_count", None)
+            compact[key] = top_k
+            continue
+        compact[key] = value
+    return compact
+
+
+def _compact_model_manifest(
+    model_manifest: Mapping[str, Any],
+    *,
+    debug_reporting: bool,
+) -> dict[str, Any]:
+    compact_manifest = dict(model_manifest)
+    if debug_reporting:
+        return compact_manifest
+
+    detector = compact_manifest.get("detector")
+    if detector == "deeplog":
+        compact_manifest.pop("parameter_models", None)
+        compact_manifest.pop("skipped_parameter_models", None)
+        return compact_manifest
+
+    if detector == "deepcase":
+        prediction_diagnostics = compact_manifest.get("prediction_diagnostics")
+        if isinstance(prediction_diagnostics, dict):
+            compact_manifest["prediction_diagnostics"] = _compact_deepcase_diagnostics(
+                prediction_diagnostics,
+            )
+        return compact_manifest
+
+    return compact_manifest
+
+
+def _compact_deepcase_diagnostics(
+    diagnostics: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact = {
+        key: diagnostics[key]
+        for key in (
+            "event_count",
+            "confident_event_count",
+            "abstained_event_count",
+            "confident_anomaly_event_count",
+            "sequence_confident_anomaly_count",
+            "sequence_confident_normal_count",
+            "sequence_abstained_count",
+            "event_decision_metrics",
+        )
+        if key in diagnostics
+    }
+    event_decision_metrics = compact.get("event_decision_metrics")
+    if isinstance(event_decision_metrics, dict):
+        compact["event_decision_metrics"] = {
+            key: event_decision_metrics[key]
+            for key in (
+                "event_count",
+                "event_auto_decision_count",
+                "event_abstained_decision_count",
+                "event_auto_coverage",
+                "event_abstain_rate",
+                "event_tp",
+                "event_fp",
+                "event_tn",
+                "event_fn",
+                "event_precision",
+                "event_recall",
+                "event_f1",
+                "event_accuracy",
+                "event_predicted_normal_count",
+                "event_predicted_anomalous_count",
+                "event_true_normal_count",
+                "event_true_anomalous_count",
+            )
+            if key in event_decision_metrics
+        }
+    return compact
 
 
 def _build_split_policy(

@@ -1,6 +1,7 @@
 """Public parser package."""
 
 from anomalog.parsers.structured import (
+    AITADSParser,
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
@@ -13,6 +14,7 @@ from anomalog.parsers.template import (
 )
 
 __all__ = [
+    "AITADSParser",
     "BGLParser",
     "Drain3Parser",
     "HDFSV1Parser",

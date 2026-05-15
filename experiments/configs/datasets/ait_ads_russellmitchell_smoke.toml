@@ -1,0 +1,30 @@
+name = "ait_ads_russellmitchell_smoke"
+description = "Small-scenario smoke matrix for AIT-ADS using the russellmitchell scenario."
+
+[dataset]
+name = "ait_ads_russellmitchell_smoke"
+dataset_name = "AIT_ADS_RUSSELLMITCHELL"
+preset = "ait_ads_russellmitchell"
+template_parser = "identity"
+description = "AIT-ADS russellmitchell smoke config using canonical alert keys and a chronological raw-entry prefix split."
+evaluation_unit = "continuous_event_stream"
+
+[dataset.sequence]
+grouping = "chronological_stream"
+chunk_size = 100000
+train_fraction = 0.1
+test_fraction = 0.9
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_fraction"
+train_entry_fraction = 0.1
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+
+[dataset.cache_paths]
+data_root = "data/ait_ads/russellmitchell_smoke"
+cache_root = ".cache/ait_ads/russellmitchell_smoke"
+
+[[models]]
+ref = "template_frequency_default"
+run_group = "baselines"
