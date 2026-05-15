@@ -1,9 +1,9 @@
 """Named experiment registry loading and expansion.
 
 The registry is the central catalogue for experiment composition. It keeps the
-user-facing TOML compact by letting presets define reusable model-set
-combinations and model overrides, while the runtime still expands those logical
-entries into concrete bundles.
+user-facing TOML compact by letting experiments name concrete model configs
+directly, while the runtime still expands those logical entries into concrete
+bundles.
 """
 
 from __future__ import annotations
@@ -691,7 +691,7 @@ def _decode_experiment_definition(
             context=f"{experiment_kind} {name!r}",
             field_name="models",
         )
-        resolved_groups = _derive_groups(preset_name=None, model_sets=model_sets)
+        resolved_groups = _derive_groups(preset_name=name, model_sets=model_sets)
 
     _reject_unknown_keys(
         raw,
@@ -754,7 +754,7 @@ def _decode_experiment_set_definition(
             context=f"experiment set {name!r}",
             field_name="models",
         )
-        resolved_groups = _derive_groups(preset_name=None, model_sets=model_sets)
+        resolved_groups = _derive_groups(preset_name=name, model_sets=model_sets)
 
     _reject_unknown_keys(
         raw,
@@ -912,11 +912,14 @@ class ExperimentRegistry:
             experiment presets.
         experiments (tuple[RegisteredExperiment, ...]): Loaded logical
             experiments.
+        inline_models (bool): Whether registry entries name concrete model
+            configs directly instead of referring to `model_sets`.
     """
 
     model_sets: tuple[ModelSetDefinition, ...]
     experiment_presets: tuple[ExperimentPresetDefinition, ...]
     experiments: tuple[RegisteredExperiment, ...]
+    inline_models: bool = False
     _model_sets_by_name: dict[str, ModelSetDefinition] = field(
         init=False,
         repr=False,
@@ -1118,17 +1121,30 @@ def load_experiment_registry(
             f"{resolved_registry_path}: registry config must decode from a TOML table."
         )
         raise ConfigError(msg)
-    model_sets = _load_model_sets(raw_registry.model_sets)
-    experiment_presets = _load_experiment_presets(raw_registry.experiment_presets)
+    inline_models = not raw_registry.model_sets
+    if inline_models:
+        if raw_registry.experiment_presets:
+            msg = (
+                f"{resolved_registry_path}: inline registry entries cannot use "
+                "experiment presets."
+            )
+            raise ConfigError(msg)
+        model_sets: tuple[ModelSetDefinition, ...] = ()
+        experiment_presets: tuple[ExperimentPresetDefinition, ...] = ()
+    else:
+        model_sets = _load_model_sets(raw_registry.model_sets)
+        experiment_presets = _load_experiment_presets(raw_registry.experiment_presets)
     experiments = _load_registered_experiments(
         raw_registry.experiments,
         raw_registry.experiment_sets,
         experiment_presets=experiment_presets,
+        inline_models=inline_models,
     )
     registry = ExperimentRegistry(
         model_sets=model_sets,
         experiment_presets=experiment_presets,
         experiments=experiments,
+        inline_models=inline_models,
     )
     _validate_registry_references(
         registry,
@@ -1211,7 +1227,9 @@ def _load_registered_experiments(
     raw_experiment_sets: dict[str, object],
     *,
     experiment_presets: tuple[ExperimentPresetDefinition, ...],
+    inline_models: bool,
 ) -> tuple[RegisteredExperiment, ...]:
+    del inline_models
     presets = {preset.name: preset for preset in experiment_presets}
     experiments: list[RegisteredExperiment] = []
     seen: set[str] = set()
@@ -1261,8 +1279,9 @@ def _validate_registry_references(
 ) -> None:
     experiments_root = _find_experiments_root(registry_path)
     models_root = experiments_root / "configs" / "models"
-    _validate_model_set_configs(registry, models_root=models_root)
-    _validate_preset_model_sets(registry)
+    if not registry.inline_models:
+        _validate_model_set_configs(registry, models_root=models_root)
+        _validate_preset_model_sets(registry)
     _validate_experiment_definitions(
         registry,
         experiments_root=experiments_root,
@@ -1310,10 +1329,14 @@ def _validate_experiment_definitions(
                 f"{experiment.name!r}: {dataset_path}"
             )
             raise ConfigError(msg)
-        for model_set_name in experiment.model_sets:
-            model_set = registry.model_set(model_set_name)
-            for model_ref in model_set.models:
+        if registry.inline_models:
+            for model_ref in experiment.model_sets:
                 _resolve_named_config(models_root, model_ref)
+        else:
+            for model_set_name in experiment.model_sets:
+                model_set = registry.model_set(model_set_name)
+                for model_ref in model_set.models:
+                    _resolve_named_config(models_root, model_ref)
         for override_name in experiment.overrides:
             if override_name not in experiment.model_sets:
                 msg = (
@@ -1340,30 +1363,45 @@ def _build_experiment_bundles(
         config_path=dataset_path,
         config=_load_dataset_experiment_config(dataset_path),
     )
-    preset_overrides = (
-        registry.preset(experiment.preset).overrides if experiment.preset else {}
-    )
     bundles: list[ExperimentBundle] = []
-    for model_set_name in experiment.model_sets:
-        model_set = registry.model_set(model_set_name)
-        model_overrides = _merge_model_overrides(
-            model_set.overrides,
-            preset_overrides.get(model_set_name, {}),
-            experiment.overrides.get(model_set_name, {}),
-        )
+    if registry.inline_models:
         bundles.extend(
             _build_concrete_bundle(
                 request=_ConcreteBundleRequest(
                     context=context,
                     model_ref=model_ref,
-                    run_group=model_set_name,
-                    model_overrides=model_overrides,
+                    run_group=model_ref,
+                    model_overrides=experiment.overrides.get(model_ref, {}),
                     experiment=experiment,
                     repo_root=repo_root,
                 ),
             )
-            for model_ref in model_set.models
+            for model_ref in experiment.model_sets
         )
+    else:
+        preset_overrides = (
+            registry.preset(experiment.preset).overrides if experiment.preset else {}
+        )
+        for model_set_name in experiment.model_sets:
+            model_set = registry.model_set(model_set_name)
+            model_overrides = _merge_model_overrides(
+                model_set.overrides,
+                preset_overrides.get(model_set_name, {}),
+                experiment.overrides.get(model_set_name, {}),
+            )
+            bundles.extend(
+                _build_concrete_bundle(
+                    request=_ConcreteBundleRequest(
+                        context=context,
+                        model_ref=model_ref,
+                        run_group=model_set_name,
+                        model_overrides=model_overrides,
+                        experiment=experiment,
+                        repo_root=repo_root,
+                    ),
+                )
+                for model_ref in model_set.models
+            )
     return bundles
 
 

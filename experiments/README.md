@@ -12,8 +12,7 @@ AnomaLog preprocessing.
   reusable base manifests for dataset contracts, sequence settings, and shared
   overrides.
 - `configs/registry.toml`: named experiment registry that combines dataset
-  names with reusable model sets and dataset families into reproducible run
-  targets.
+  names with explicit model configs into reproducible run targets.
 - `configs/slurm.toml`: Slurm submission defaults for the optional backend.
 - `runners/`: Python entrypoints for executing experiments.
 - `execution/`: optional execution backends such as Slurm.
@@ -33,12 +32,11 @@ shape and sequencing, while the registry owns the named experiment catalogue.
 A dataset manifest binds one base dataset variant to fixed overrides and
 validated override axes. The preferred path is to keep the dataset file
 focused on the dataset contract and let the registry tie that manifest to
-shared model sets under `configs/models/`.
+explicit model configs under `configs/models/`.
 If a manifest mixes heavyweight and lightweight detectors, keep the detector
-family in the model set rather than duplicating it in the dataset file. The
-runner still executes one concrete run at a time, but the registry expands a
-single model-set name into the concrete model configs that should share the
-same reporting metadata.
+family next to the dataset manifest rather than hiding it behind another
+registry alias. The runner still executes one concrete run at a time, but the
+registry now expands the listed model configs directly.
 Manifest execution defaults `max_workers` to `"auto"`, which uses up to the
 concrete run count and local CPU count. Set an explicit positive integer when a
 manifest needs a stricter cap.
@@ -95,20 +93,17 @@ benchmarked on the same dataset family, keep them in the same manifest or use
 fixed overrides rather than letting a shared dataset preset imply the wrong
 training contract.
 
-The central registry is intentionally small. It now has four concepts:
+The central registry is intentionally small. It has two concepts:
 
-- `model_sets` define reusable detector families such as `baselines`,
-  `deeplog`, `deepcase`, and the AIT-specific `ait_alert_baselines` set.
-- `experiment_presets` combine model sets and shared overrides into reusable
-  experiment profiles.
-- `experiments` name one dataset and the preset that should run on it.
-- `experiment_sets` name a dataset family and expand one dataset list line into
-  the concrete experiment names for that family.
+- `experiments` name one dataset and the concrete model configs that should run
+  on it.
+- `experiment_sets` name a dataset family, act as selectable groups, and expand
+  one dataset list line into the concrete experiment names for that family.
 
-The runner derives reporting groups from the preset and model-set names, so the
-TOML does not need `groups` or `run_group` in the normal case. If you need a
-small or CI-friendly check, select the explicit experiment name instead of
-inventing another registry tag.
+The runner derives reporting groups from the dataset-family or experiment name
+and the model names, so the TOML does not need `groups` or `run_group` in the
+normal case. If you need a small or CI-friendly check, select the explicit
+experiment name instead of inventing another registry tag.
 
 The DeepLog reproduction manifests also carry simple sanity baselines on the
 same split, so the paper target is always compared against a sequence-statistics
@@ -170,9 +165,9 @@ To list the curated registry:
 uv run python -m experiments.runners.run_suite --list
 ```
 
-The listing shows the registry name, dataset config, preset, model-set names,
-and the derived reporting groups. Use explicit experiment names when you need
-a specific dataset/preset combination.
+The listing shows the registry name, dataset config, model names, and the
+derived reporting groups. Use explicit experiment names when you need a
+specific dataset/model combination.
 
 To run a local group:
 
@@ -358,34 +353,34 @@ file can hold the shared boilerplate while each scenario keeps only its
 specific overrides.
 
 To add a named experiment to the canonical registry, add a table to
-`configs/registry.toml` that points at one dataset manifest and the preset that
-should run on it. You do not need to spell out `groups` or `run_group` for the
-normal case.
+`configs/registry.toml` that points at one dataset manifest and the model
+configs that should run on it. You do not need to spell out `groups` or
+`run_group` for the normal case.
 
 Example:
 
 ```toml
-[model_sets.baselines]
-models = ["template_frequency_default", "naive_bayes_default", "markov_default"]
-
-[experiment_presets.entity_with_deepcase]
-models = ["baselines", "deepcase"]
-
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
-preset = "entity_with_deepcase"
+models = [
+  "template_frequency_default",
+  "naive_bayes_default",
+  "markov_default",
+  "deepcase",
+]
 ```
 
-For a dataset family such as AIT-ADS, select the explicit combined experiment
-name when you want the paper-compatible chronology:
+For a dataset family such as AIT-ADS, keep the combined dataset list in one
+experiment set when you want the paper-compatible chronology:
 
 ```toml
-[experiment_presets.ait_ads]
-models = ["ait_alert_baselines", "deepcase"]
-
-[experiments.ait_ads]
-dataset = "ait_ads/base"
-preset = "ait_ads"
+[experiment_sets.ait_ads]
+models = [
+  "template_frequency_default",
+  "naive_bayes_default",
+  "deepcase",
+]
+datasets = ["ait_ads/base"]
 ```
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.

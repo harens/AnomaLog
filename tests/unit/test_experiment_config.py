@@ -95,12 +95,17 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
 
 def _assert_template_frequency_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, TemplateFrequencyModelConfig)
-    assert bundle.run_group in {"baselines", "pair_baselines"}
+    assert bundle.run_group == "template_frequency_default"
 
 
 def _assert_markov_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, MarkovModelConfig)
-    assert bundle.run_group in {"baselines", "pair_baselines"}
+    assert bundle.run_group == "markov_default"
+
+
+def _assert_naive_bayes_baseline_bundle(bundle: ExperimentBundle) -> None:
+    assert bundle.model.name == "naive_bayes_default"
+    assert bundle.run_group == "naive_bayes_default"
 
 
 def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
@@ -111,7 +116,7 @@ def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
     )
     assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
     assert isinstance(bundle.model, DeepLogModelConfig)
-    assert bundle.run_group == "deeplog"
+    assert bundle.run_group == "deeplog_default"
 
 
 def _assert_bgl_10pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
@@ -121,7 +126,7 @@ def _assert_bgl_10pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
     )
     assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
     assert isinstance(bundle.model, DeepLogModelConfig)
-    assert bundle.run_group == "deeplog"
+    assert bundle.run_group == "deeplog_default"
 
 
 def _assert_hdfs_deeplog_bundle(bundle: ExperimentBundle) -> None:
@@ -132,7 +137,7 @@ def _assert_hdfs_deeplog_bundle(bundle: ExperimentBundle) -> None:
     )
     assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
     assert isinstance(bundle.model, DeepLogModelConfig)
-    assert bundle.run_group == "deeplog"
+    assert bundle.run_group == "deeplog_default"
 
 
 def _write_preprocessed_hdfs_archive(
@@ -527,8 +532,10 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
     )
 
     assert [bundle.model.detector for bundle in paper_bundles] == [
+        "deeplog",
         "template_frequency",
         "naive_bayes",
+        "markov",
         "deepcase",
     ]
     assert all(
@@ -1046,21 +1053,27 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     assert {bundle.model.detector for bundle in bgl_1pct_bundles} == {
         "deeplog",
         "template_frequency",
+        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in bgl_10pct_bundles} == {
         "deeplog",
         "template_frequency",
+        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in hdfs_bundles} == {
         "deeplog",
+        "deepcase",
         "template_frequency",
+        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in hdfs_assign_first_bundles} == {
         "deeplog",
+        "deepcase",
         "template_frequency",
+        "naive_bayes",
         "markov",
     }
 
@@ -1075,6 +1088,18 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     )
     _assert_template_frequency_baseline_bundle(
         bundle_named(hdfs_assign_first_bundles, "template_frequency"),
+    )
+    _assert_naive_bayes_baseline_bundle(
+        bundle_named(hdfs_bundles, "naive_bayes"),
+    )
+    _assert_naive_bayes_baseline_bundle(
+        bundle_named(bgl_1pct_bundles, "naive_bayes"),
+    )
+    _assert_naive_bayes_baseline_bundle(
+        bundle_named(bgl_10pct_bundles, "naive_bayes"),
+    )
+    _assert_naive_bayes_baseline_bundle(
+        bundle_named(hdfs_assign_first_bundles, "naive_bayes"),
     )
     _assert_markov_baseline_bundle(bundle_named(hdfs_bundles, "markov"))
     _assert_markov_baseline_bundle(bundle_named(hdfs_assign_first_bundles, "markov"))
@@ -1139,7 +1164,9 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
 
     assert {bundle.model.detector for bundle in bundles} == {
         "deeplog",
+        "deepcase",
         "template_frequency",
+        "naive_bayes",
         "markov",
     }
     bundle = next(bundle for bundle in bundles if bundle.model.detector == "deeplog")
@@ -1153,7 +1180,7 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
     )
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.detector == "deeplog"
-    assert bundle.run_group == "deeplog"
+    assert bundle.run_group == "deeplog_default"
 
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
@@ -1263,7 +1290,9 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     bundles = load_experiment_bundles(sweep_path)
     assert {bundle.model.name for bundle in bundles} == {
         "deeplog_default",
+        "deepcase",
         "template_frequency_default",
+        "naive_bayes_default",
         "markov_default",
     }
     bundle = next(
@@ -1434,10 +1463,12 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl/entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 3
+    assert len(hdfs_bundles) == 5
     assert {bundle.model.name for bundle in hdfs_bundles} == {
         "deeplog_default",
+        "deepcase",
         "template_frequency_default",
+        "naive_bayes_default",
         "markov_default",
     }
     assert len(bgl_extension_bundles) == 4
@@ -1489,17 +1520,31 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "datasets"
         / "openstack/deeplog_preprocessed.toml",
     )
+    ait_ads_bundles = load_experiment_bundles(
+        repo_root / "experiments" / "configs" / "datasets" / "ait_ads/base.toml",
+    )
 
     assert {bundle.run_group for bundle in bgl_bundles} == {
-        "baselines",
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
         "deepcase",
     }
     assert {bundle.run_group for bundle in hdfs_bundles} == {
-        "baselines",
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
         "deepcase",
     }
     assert {bundle.run_group for bundle in openstack_bundles} == {
         "baselines",
         "deeplog",
+        "deepcase",
+    }
+    assert {bundle.run_group for bundle in ait_ads_bundles} == {
+        "deeplog_default",
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
         "deepcase",
     }

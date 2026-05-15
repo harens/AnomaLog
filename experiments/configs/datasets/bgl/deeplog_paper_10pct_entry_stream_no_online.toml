@@ -1,6 +1,6 @@
 extends = "deeplog_paper_base.toml"
 name = "bgl_deeplog_paper_10pct_entry_stream_no_online"
-description = "DeepLog BGL paper reproduction for the 10% raw entry-stream setting without online update, plus a template-frequency sanity baseline on the same split."
+description = "DeepLog BGL paper reproduction for the 10% raw entry-stream setting without online update, plus template-frequency, Naive Bayes, and Markov sanity baselines on the same split."
 
 [dataset]
 name = "bgl_deeplog_paper_10pct_entry_stream_no_online"

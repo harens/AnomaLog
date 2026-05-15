@@ -174,6 +174,42 @@ def test_registry_select_combines_names_and_groups() -> None:
     ]
 
 
+def test_experiment_set_without_preset_uses_set_name_as_group(
+    tmp_path: Path,
+) -> None:
+    """Experiment sets should stay selectable even without a preset wrapper."""
+    experiments_root = tmp_path / "experiments"
+    datasets_dir = experiments_root / "configs" / "datasets"
+    models_dir = experiments_root / "configs" / "models"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    _write_dataset_manifest(datasets_dir, "demo")
+    _write_dataset_manifest(datasets_dir, "alt")
+    (models_dir / "template_frequency_default.toml").write_text(
+        'name = "template_frequency_default"\ndetector = "template_frequency"\n',
+        encoding="utf-8",
+    )
+    (models_dir / "deepcase.toml").write_text(
+        'name = "deepcase"\ndetector = "deepcase"\n',
+        encoding="utf-8",
+    )
+    registry_path = experiments_root / "configs" / "registry.toml"
+    registry_path.write_text(
+        (
+            "[experiment_sets.paper_group]\n"
+            'models = ["template_frequency_default", "deepcase"]\n'
+            'datasets = ["demo", "alt"]\n'
+        ),
+        encoding="utf-8",
+    )
+
+    registry = load_experiment_registry(registry_path, repo_root=tmp_path)
+    selected = registry.select(groups=("paper_group",))
+
+    assert [experiment.name for experiment in selected] == ["demo", "alt"]
+    assert all("paper_group" in experiment.groups for experiment in selected)
+
+
 def test_load_experiment_registry_rejects_missing_model_config(
     tmp_path: Path,
 ) -> None:

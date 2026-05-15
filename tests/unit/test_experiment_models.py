@@ -88,13 +88,16 @@ def _sequence(
     label: int | None,
     split_label: SplitLabel = SplitLabel.TRAIN,
 ) -> TemplateSequence:
-    return TemplateSequence(
+    sequence = TemplateSequence(
         events=[(template, [], None) for template in templates],
-        label=label,
+        label=0 if label is None else label,
         entity_ids=[f"entity-{window_id}"],
         window_id=window_id,
         split_label=split_label,
     )
+    if label is None:
+        object.__setattr__(sequence, "label", None)  # noqa: PLC2801
+    return sequence
 
 
 def _supervised_train_sequences() -> list[TemplateSequence]:
