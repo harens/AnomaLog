@@ -280,15 +280,48 @@ _LABEL_READER_CONFIG_TYPES: dict[str, type[LabelReaderConfig]] = {
 
 
 class CachePathsConfigModel(msgspec.Struct, frozen=True):
-    """Cache/data root paths for dataset materialsation.
+    """Cache/data root paths for dataset materialisation.
+
+    The configuration supports either an explicit `data_root`/`cache_root`
+    pair or a shorthand `namespace`. The shorthand expands to
+    `data/<namespace>` and `.cache/<namespace>` relative to the repository
+    root, which keeps the common case short while still allowing manual
+    overrides when needed.
 
     Attributes:
-        data_root (Path): Root for materialised raw datasets.
-        cache_root (Path): Root for derived artifacts and cached outputs.
+        namespace (str | None): Optional shared suffix used for both roots.
+        data_root (Path | None): Root for materialised raw datasets.
+        cache_root (Path | None): Root for derived artifacts and cached outputs.
     """
 
-    data_root: Path
-    cache_root: Path
+    namespace: str | None = None
+    data_root: Path | None = None
+    cache_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the shorthand and explicit cache-path forms.
+
+        Raises:
+            ConfigError: If the configuration mixes shorthand and explicit roots
+                or omits one half of the explicit root pair.
+        """
+        if self.namespace is not None:
+            if self.data_root is not None or self.cache_root is not None:
+                msg = (
+                    "cache_paths may define either `namespace` or explicit "
+                    "`data_root`/`cache_root` values, not both."
+                )
+                raise ConfigError(msg)
+            if not self.namespace.strip():
+                msg = "cache_paths namespace must not be empty."
+                raise ConfigError(msg)
+            return
+        if self.data_root is None or self.cache_root is None:
+            msg = (
+                "cache_paths must define either `namespace` or both "
+                "`data_root` and `cache_root`."
+            )
+            raise ConfigError(msg)
 
     def resolve(self, *, repo_root: Path) -> CachePathsConfig:
         """Resolve cache/data roots relative to the repository root.
@@ -298,7 +331,23 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
 
         Returns:
             CachePathsConfig: Concrete cache paths resolved against the repo root.
+
+        Raises:
+            ConfigError: If the config is invalid or incomplete.
         """
+        if self.namespace is not None:
+            namespace_root = Path("data") / self.namespace
+            cache_namespace_root = Path(".cache") / self.namespace
+            return CachePathsConfig(
+                data_root=_resolve_path(namespace_root, repo_root),
+                cache_root=_resolve_path(cache_namespace_root, repo_root),
+            )
+        if self.data_root is None or self.cache_root is None:
+            msg = (
+                "cache_paths must define either `namespace` or both "
+                "`data_root` and `cache_root`."
+            )
+            raise ConfigError(msg)
         return CachePathsConfig(
             data_root=_resolve_path(self.data_root, repo_root),
             cache_root=_resolve_path(self.cache_root, repo_root),
@@ -856,6 +905,10 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
             together inside one manifest.
         applied_overrides (dict[str, Any]): Fixed and axis overrides applied to
             derive the concrete run.
+        experiment_name (str | None): Registry experiment name when the bundle
+            was resolved from the named registry.
+        experiment_groups (tuple[str, ...]): Registry groups attached to the
+            bundle when it came from the named registry.
     """
 
     experiments_root: Path
@@ -869,6 +922,8 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
     concrete_name: str
     run_group: str = "default"
     applied_overrides: dict[str, Any] = msgspec.field(default_factory=dict)
+    experiment_name: str | None = None
+    experiment_groups: tuple[str, ...] = msgspec.field(default_factory=tuple)
 
     def normalized_config(self) -> dict[str, object]:
         """Return a JSON-like normalised config payload for manifests.
@@ -888,6 +943,16 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
                     "name": self.concrete_name,
                     "overrides": self.applied_overrides,
                 },
+                **(
+                    {
+                        "experiment": {
+                            "name": self.experiment_name,
+                            "groups": list(self.experiment_groups),
+                        },
+                    }
+                    if self.experiment_name is not None
+                    else {}
+                ),
                 "paths": {
                     "sweep": self.sweep_path.relative_to(self.repo_root).as_posix(),
                     "dataset": self.dataset_path.relative_to(self.repo_root).as_posix(),
@@ -900,6 +965,38 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
             msg = f"Expected dict payload, got {type(payload).__name__}."
             raise TypeError(msg)
         return payload
+
+    def with_experiment_metadata(
+        self,
+        *,
+        experiment_name: str,
+        experiment_groups: tuple[str, ...],
+    ) -> ExperimentBundle:
+        """Return a copy annotated with registry metadata.
+
+        Args:
+            experiment_name (str): Registry entry name for the selected run.
+            experiment_groups (tuple[str, ...]): Registry groups attached to the
+                selected run.
+
+        Returns:
+            ExperimentBundle: Bundle annotated with registry provenance.
+        """
+        return ExperimentBundle(
+            experiments_root=self.experiments_root,
+            repo_root=self.repo_root,
+            sweep_path=self.sweep_path,
+            dataset_path=self.dataset_path,
+            model_path=self.model_path,
+            sweep=self.sweep,
+            dataset=self.dataset,
+            model=self.model,
+            concrete_name=self.concrete_name,
+            run_group=self.run_group,
+            applied_overrides=dict(self.applied_overrides),
+            experiment_name=experiment_name,
+            experiment_groups=experiment_groups,
+        )
 
 
 def _path_to_string(obj: object) -> str:

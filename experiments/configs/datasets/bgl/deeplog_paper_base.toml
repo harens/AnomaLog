@@ -1,0 +1,13 @@
+name = "bgl_deeplog_paper_base"
+description = "Shared BGL DeepLog paper-reproduction dataset contract."
+
+[dataset]
+dataset_name = "BGL"
+preset = "bgl"
+template_parser = "drain3"
+description = "DeepLog BGL paper-reproduction config with chronological stream grouping."
+evaluation_unit = "continuous_event_stream"
+
+[dataset.sequence]
+grouping = "chronological_stream"
+chunk_size = 100000

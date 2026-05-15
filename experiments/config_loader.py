@@ -29,6 +29,7 @@ from experiments.config_types import (
 )
 from experiments.models import resolve_model_config_type
 from experiments.models.base import decode_experiment_model_config
+from experiments.registry import load_experiment_registry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -129,6 +130,9 @@ def _decode_toml_file(
     try:
         raw = msgspec.toml.decode(path.read_bytes())
         return decode(raw)
+    except FileNotFoundError as exc:
+        msg = f"Missing config file: {path}"
+        raise ConfigError(msg) from exc
     except (
         msgspec.ValidationError,
         msgspec.DecodeError,
@@ -234,13 +238,7 @@ def _decode_dataset_experiment_config(obj: object) -> _DatasetExperimentConfig:
         msg = "dataset experiment config must define a `[dataset]` table."
         raise TypeError(msg)
     if models_obj is None:
-        if model_obj is None:
-            msg = (
-                "dataset experiment config must define a `[model]` or "
-                "`[[models]]` entry."
-            )
-            raise TypeError(msg)
-        models_obj = [model_obj]
+        models_obj = [] if model_obj is None else [model_obj]
     if not isinstance(models_obj, list):
         msg = "dataset experiment config `models` must be a TOML array."
         raise TypeError(msg)
@@ -300,9 +298,12 @@ def load_experiment_bundles(sweep_config_path: Path) -> list[ExperimentBundle]:
         ConfigError: If the manifest does not decode or is missing its root
             `experiments` directory.
     """
-    resolved_config_path = sweep_config_path.resolve()
+    resolved_config_path = _resolve_dataset_manifest_path(sweep_config_path)
     experiments_root = _find_experiments_root(resolved_config_path)
-    raw_config = _decode_toml_file(resolved_config_path, decode=lambda raw: raw)
+    raw_config = _load_merged_dataset_experiment_config(
+        resolved_config_path,
+        seen_paths=(),
+    )
     if not isinstance(raw_config, dict):
         msg = (
             f"{resolved_config_path}: dataset experiment config must decode "
@@ -310,6 +311,14 @@ def load_experiment_bundles(sweep_config_path: Path) -> list[ExperimentBundle]:
         )
         raise ConfigError(msg)
     config = _decode_dataset_experiment_config(raw_config)
+    if not config.models and config.model is None:
+        return _expand_registry_runs(
+            context=_ResolvedDatasetExperiment(
+                experiments_root=experiments_root,
+                config_path=resolved_config_path,
+                config=config,
+            ),
+        )
     return _expand_model_runs(
         context=_ResolvedDatasetExperiment(
             experiments_root=experiments_root,
@@ -319,12 +328,107 @@ def load_experiment_bundles(sweep_config_path: Path) -> list[ExperimentBundle]:
     )
 
 
+def _resolve_dataset_manifest_path(path: Path) -> Path:
+    if path.exists():
+        return path.resolve()
+    datasets_root = _find_datasets_root(path)
+    candidates = [
+        datasets_root / "ait_ads" / path.name.removeprefix("ait_ads_"),
+        datasets_root / "bgl" / path.name.removeprefix("bgl_"),
+        datasets_root / "hdfs" / path.name.removeprefix("hdfs_"),
+        datasets_root / "openstack" / path.name.removeprefix("openstack_"),
+        datasets_root / "shared" / path.name,
+    ]
+    if path.name == "entity_chronological_base.toml":
+        candidates.insert(0, datasets_root / "shared" / path.name)
+    matches = [candidate.resolve() for candidate in candidates if candidate.exists()]
+    if not matches:
+        matches = [
+            candidate.resolve()
+            for candidate in datasets_root.rglob(path.name)
+            if candidate.is_file()
+        ]
+    if len(matches) == 1:
+        return matches[0]
+    return path.resolve()
+
+
+def _load_merged_dataset_experiment_config(
+    path: Path,
+    *,
+    seen_paths: tuple[Path, ...],
+) -> dict[str, object]:
+    raw_config = _normalize_toml_table(
+        _decode_toml_file(path, decode=lambda raw: raw),
+        expected_type="dataset experiment",
+    )
+    extends = raw_config.pop("extends", None)
+    if extends is None:
+        return raw_config
+    if not isinstance(extends, str) or not extends.strip():
+        msg = f"{path}: dataset experiment `extends` must be a non-empty string."
+        raise ConfigError(msg)
+    parent_path = _resolve_dataset_experiment_path(path, extends)
+    if parent_path in seen_paths:
+        chain = " -> ".join(
+            str(candidate) for candidate in (*seen_paths, path, parent_path)
+        )
+        msg = f"Detected cyclic dataset experiment inheritance: {chain}"
+        raise ConfigError(msg)
+    parent_config = _load_merged_dataset_experiment_config(
+        parent_path,
+        seen_paths=(*seen_paths, path),
+    )
+    return _merge_toml_tables(parent_config, raw_config)
+
+
+def _resolve_dataset_experiment_path(path: Path, extends: str) -> Path:
+    candidate = Path(extends)
+    if not candidate.is_absolute():
+        candidate = (path.parent / candidate).resolve()
+    if candidate.exists():
+        return candidate
+    if candidate.suffix != ".toml":
+        candidate_with_suffix = candidate.with_suffix(".toml")
+        if candidate_with_suffix.exists():
+            return candidate_with_suffix
+    return candidate
+
+
+def _merge_toml_tables(
+    parent: dict[str, object],
+    child: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(parent)
+    for key, value in child.items():
+        parent_value = merged.get(key)
+        if isinstance(parent_value, dict) and isinstance(value, dict):
+            merged[key] = _merge_toml_tables(
+                _normalize_toml_table(
+                    parent_value,
+                    expected_type="nested dataset experiment",
+                ),
+                _normalize_toml_table(
+                    value,
+                    expected_type="nested dataset experiment",
+                ),
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
 def _find_experiments_root(path: Path) -> Path:
     for candidate in (path, *path.parents):
         if candidate.name == "experiments":
             return candidate
     msg = f"Could not locate experiments root for {path}."
     raise ConfigError(msg)
+
+
+def _find_datasets_root(path: Path) -> Path:
+    experiments_root = _find_experiments_root(path.resolve())
+    return experiments_root / "configs" / "datasets"
 
 
 def _resolve_named_config(config_dir: Path, config_name: str) -> Path:
@@ -371,6 +475,50 @@ def _expand_model_runs(
     return bundles
 
 
+def _expand_registry_runs(
+    *,
+    context: _ResolvedDatasetExperiment,
+) -> list[ExperimentBundle]:
+    registry_path = context.experiments_root / "configs" / "registry.toml"
+    registry = load_experiment_registry(
+        registry_path,
+        repo_root=context.experiments_root.parent,
+    )
+    dataset_key = _dataset_config_key(
+        context.config_path,
+        experiments_root=context.experiments_root,
+    )
+    selected_experiments = [
+        experiment
+        for experiment in registry.experiments
+        if experiment.dataset == dataset_key
+    ]
+    if not selected_experiments:
+        msg = f"No registry experiments match dataset manifest {dataset_key!r}."
+        raise ConfigError(msg)
+    bundles: list[ExperimentBundle] = []
+    for experiment in selected_experiments:
+        resolved = registry.resolve_experiment(
+            experiment.name,
+            registry_path=registry_path,
+            repo_root=context.experiments_root.parent,
+        )
+        bundles.extend(resolved.bundles)
+    return bundles
+
+
+def _dataset_config_key(path: Path, *, experiments_root: Path) -> str:
+    datasets_root = experiments_root / "configs" / "datasets"
+    try:
+        relative_path = path.relative_to(datasets_root)
+    except ValueError as exc:
+        msg = f"{path}: dataset manifest must live under {datasets_root}."
+        raise ConfigError(msg) from exc
+    if relative_path.suffix == ".toml":
+        relative_path = relative_path.with_suffix("")
+    return relative_path.as_posix()
+
+
 def _build_concrete_bundle(
     *,
     context: _ResolvedDatasetExperiment,
@@ -379,9 +527,10 @@ def _build_concrete_bundle(
     default_name: str | None,
 ) -> ExperimentBundle:
     applied_overrides = dict(context.config.overrides)
-    model = _resolve_model_config(
+    model, model_path = _resolve_model_config(
         model_config,
         repo_root=context.experiments_root.parent,
+        fallback_path=context.config_path,
     )
     run_group = _resolve_run_group(model_config)
     model_overrides_obj = model_config.get("overrides", {})
@@ -415,7 +564,7 @@ def _build_concrete_bundle(
         repo_root=context.experiments_root.parent,
         sweep_path=context.config_path,
         dataset_path=context.config_path,
-        model_path=context.config_path,
+        model_path=model_path,
         sweep=context.config,
         dataset=dataset,
         model=model,
@@ -435,7 +584,8 @@ def _resolve_model_config(
     model_config: dict[str, object],
     *,
     repo_root: Path,
-) -> ExperimentModelConfig:
+    fallback_path: Path,
+) -> tuple[ExperimentModelConfig, Path]:
     ref = model_config.get("ref")
     if ref is not None:
         if not isinstance(ref, str):
@@ -454,7 +604,8 @@ def _resolve_model_config(
                 if key not in {"overrides", "axes", "run_group"}
             },
         )
-    return model
+        model_path = fallback_path
+    return model, model_path
 
 
 def _resolve_run_group(model_config: dict[str, object]) -> str:

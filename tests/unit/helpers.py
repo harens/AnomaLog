@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import create_autospec
 
@@ -56,7 +57,9 @@ def task_run_context() -> TaskRunContext:
     Returns:
         TaskRunContext: Autospecced task-run context double.
     """
-    return create_autospec(TaskRunContext, instance=True)
+    context = create_autospec(TaskRunContext, instance=True)
+    context.task = SimpleNamespace(source_code="task()")
+    return context
 
 
 def label_lookup(

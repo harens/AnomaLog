@@ -28,6 +28,13 @@ from experiments.config_types import (
     TimeSequenceConfig,
     serialise_config,
 )
+from experiments.registry import (
+    ExperimentRegistry,
+    RegisteredExperiment,
+    ResolvedRegistryExperiment,
+    load_experiment_registry,
+    resolve_registry_experiment,
+)
 
 __all__ = [
     "CSVLabelReaderConfig",
@@ -37,6 +44,7 @@ __all__ = [
     "DatasetVariantConfig",
     "EntitySequenceConfig",
     "ExperimentBundle",
+    "ExperimentRegistry",
     "ExperimentRunConfig",
     "FixedSequenceConfig",
     "LabelReaderConfig",
@@ -46,7 +54,9 @@ __all__ = [
     "RawEntryPrefixFractionSplitConfig",
     "RawEntryPrefixNormalFractionSplitConfig",
     "RawEntrySplitConfig",
+    "RegisteredExperiment",
     "RemoteZipSourceConfig",
+    "ResolvedRegistryExperiment",
     "SequenceConfig",
     "SequenceConfigBase",
     "SplitApplicationOrder",
@@ -55,5 +65,7 @@ __all__ = [
     "SweepConfig",
     "TimeSequenceConfig",
     "load_experiment_bundles",
+    "load_experiment_registry",
+    "resolve_registry_experiment",
     "serialise_config",
 ]

@@ -1,0 +1,12 @@
+extends = "base.toml"
+name = "ait_ads_wilson"
+description = "AIT-ADS wilson dataset contract built from the shared base manifest."
+
+[dataset]
+name = "ait_ads_wilson"
+dataset_name = "AIT_ADS_WILSON"
+preset = "ait_ads_wilson"
+description = "AIT-ADS wilson scenario using canonical alert keys with chronological raw-entry prefix splitting."
+
+[dataset.cache_paths]
+namespace = "ait_ads/wilson"

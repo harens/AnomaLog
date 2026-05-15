@@ -12,6 +12,7 @@ from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
+from experiments import ConfigError
 from experiments.audit import (
     validate_deepcase_bgl_extension_config,
     validate_deeplog_paper_config,
@@ -92,12 +93,12 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
 
 def _assert_template_frequency_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, TemplateFrequencyModelConfig)
-    assert bundle.run_group == "baselines"
+    assert bundle.run_group in {"baselines", "pair_baselines"}
 
 
 def _assert_markov_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, MarkovModelConfig)
-    assert bundle.run_group == "baselines"
+    assert bundle.run_group in {"baselines", "pair_baselines"}
 
 
 def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
@@ -420,18 +421,100 @@ def test_load_experiment_bundles_preserves_model_run_group(
     assert bundle.model.name == "template_frequency_default"
 
 
+def test_load_experiment_bundles_supports_extends(
+    tmp_path: Path,
+) -> None:
+    """Child manifests should inherit shared dataset and model boilerplate.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build the manifest tree.
+    """
+    experiments_root = tmp_path / "experiments"
+    datasets_dir = experiments_root / "configs" / "datasets"
+    models_dir = experiments_root / "configs" / "models"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (datasets_dir / "base.toml").write_text(
+        (
+            'name = "base"\n'
+            'description = "base"\n'
+            "\n[dataset]\n"
+            'template_parser = "drain3"\n'
+            'description = "base dataset"\n'
+            "\n[dataset.sequence]\n"
+            'grouping = "entity"\n'
+            "train_fraction = 0.2\n"
+            "train_on_normal_entities_only = false\n"
+            "\n[[models]]\n"
+            'ref = "template_frequency_default"\n'
+            'run_group = "baselines"\n'
+        ),
+        encoding="utf-8",
+    )
+    (datasets_dir / "child.toml").write_text(
+        (
+            'extends = "base.toml"\n'
+            'name = "child"\n'
+            "\n[dataset]\n"
+            'name = "child_dataset"\n'
+            'dataset_name = "CHILD"\n'
+            'preset = "bgl"\n'
+            'description = "child dataset"\n'
+            "\n[dataset.cache_paths]\n"
+            'namespace = "child"\n'
+        ),
+        encoding="utf-8",
+    )
+    (models_dir / "template_frequency_default.toml").write_text(
+        'name = "template_frequency_default"\ndetector = "template_frequency"\n',
+        encoding="utf-8",
+    )
+
+    bundle = _load_one_bundle(datasets_dir / "child.toml")
+
+    assert bundle.sweep.name == "child"
+    assert bundle.dataset.name == "child_dataset"
+    assert bundle.dataset.dataset_name == "CHILD"
+    assert bundle.dataset.preset == "bgl"
+    assert bundle.dataset.cache_paths is not None
+    assert bundle.dataset.cache_paths.namespace == "child"
+    assert bundle.model.name == "template_frequency_default"
+    assert bundle.run_group == "baselines"
+
+
+def test_load_experiment_bundles_rejects_missing_extends_target(
+    tmp_path: Path,
+) -> None:
+    """Missing inherited manifests should fail with a clear config error.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build the manifest tree.
+    """
+    experiments_root = tmp_path / "experiments"
+    datasets_dir = experiments_root / "configs" / "datasets"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    child_path = datasets_dir / "child.toml"
+    child_path.write_text(
+        'extends = "missing.toml"\nname = "child"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="Missing"):
+        load_experiment_bundles(child_path)
+
+
 @pytest.mark.allow_no_new_coverage
 def test_checked_in_ait_ads_scenario_manifest_loads_all_model_families() -> None:
     """The checked-in AIT-ADS scenario manifest should expand all model refs."""
-    bundle_path = Path("experiments/configs/datasets") / "ait_ads_fox.toml"
+    bundle_path = Path("experiments/configs/datasets") / "ait_ads/fox.toml"
 
     bundles = load_experiment_bundles(bundle_path)
 
     assert [bundle.model.detector for bundle in bundles] == [
-        "deeplog",
         "template_frequency",
         "naive_bayes",
         "markov",
+        "deeplog",
         "deepcase",
     ]
     assert bundles[0].dataset.preset == "ait_ads_fox"
@@ -513,7 +596,7 @@ def test_load_experiment_bundles_expands_model_and_dataset_axes(
     "case",
     [
         (
-            "experiments/configs/datasets/bgl_entity_chronological.toml",
+            "experiments/configs/datasets/bgl/entity_chronological.toml",
             "bgl_entity_chronological",
             {
                 "template_frequency_default",
@@ -620,10 +703,21 @@ def test_load_experiment_bundles_reject_missing_model_config(tmp_path: Path) -> 
         ),
         encoding="utf-8",
     )
+    (experiments_root / "configs" / "registry.toml").write_text(
+        (
+            "[model_sets.missing]\n"
+            'models = ["missing_model_default"]\n'
+            "\n"
+            "[experiments.missing_model]\n"
+            'dataset = "missing_model"\n'
+            'models = ["missing"]\n'
+        ),
+        encoding="utf-8",
+    )
 
     with pytest.raises(
-        TypeError,
-        match="must define a `\\[model\\]` or `\\[\\[models\\]\\]` entry",
+        ConfigError,
+        match="Missing named config",
     ):
         _load_one_bundle(sweep_path)
 
@@ -891,14 +985,14 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_v1_deeplog_paper_entry100k_split_partial.toml",
+        / "hdfs/v1_deeplog_paper_entry100k_split_partial.toml",
     )
     hdfs_assign_first_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_v1_deeplog_paper_entry100k_assign_first.toml",
+        / "hdfs/v1_deeplog_paper_entry100k_assign_first.toml",
     )
 
     def bundle_named(
@@ -923,10 +1017,12 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     assert {bundle.model.detector for bundle in bgl_1pct_bundles} == {
         "deeplog",
         "template_frequency",
+        "markov",
     }
     assert {bundle.model.detector for bundle in bgl_10pct_bundles} == {
         "deeplog",
         "template_frequency",
+        "markov",
     }
     assert {bundle.model.detector for bundle in hdfs_bundles} == {
         "deeplog",
@@ -971,18 +1067,24 @@ def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> 
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
+        / "hdfs/wuyifan18_deeplog_preprocessed.toml"
     )
 
-    bundle = load_experiment_bundles(
-        deeplog_sweep_path,
-    )[0]
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            deeplog_sweep_path,
+        )
+        if bundle.model.detector == "deeplog"
+    )
 
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
     assert bundle.dataset_path == deeplog_sweep_path
-    assert bundle.model_path == deeplog_sweep_path
+    assert bundle.model_path == (
+        repo_root / "experiments" / "configs" / "models" / "deeplog_default.toml"
+    )
     assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
     assert bundle.dataset.sequence.split is None
     assert bundle.dataset.sequence.train_on_normal_entities_only is False
@@ -1001,7 +1103,7 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
+        / "hdfs/wuyifan18_deeplog_preprocessed.toml"
     )
 
     bundles = load_experiment_bundles(sweep_path)
@@ -1016,7 +1118,10 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
     assert bundle.dataset_path == sweep_path
-    assert bundle.model_path == sweep_path
+    assert (
+        bundle.model_path
+        == repo_root / "experiments" / "configs" / "models" / "deeplog_default.toml"
+    )
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.detector == "deeplog"
     assert bundle.run_group == "deeplog"
@@ -1124,7 +1229,7 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_wuyifan18_deeplog_preprocessed.toml"
+        / "hdfs/wuyifan18_deeplog_preprocessed.toml"
     )
     bundles = load_experiment_bundles(sweep_path)
     assert {bundle.model.name for bundle in bundles} == {
@@ -1144,7 +1249,9 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.name == "deeplog_default"
     assert bundle.model.parameter_detection_enabled is False
-    assert bundle.model_path == sweep_path
+    assert bundle.model_path == (
+        repo_root / "experiments" / "configs" / "models" / "deeplog_default.toml"
+    )
     assert bundle.dataset_path == sweep_path
 
 
@@ -1288,14 +1395,14 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "hdfs_wuyifan18_deeplog_preprocessed.toml",
+        / "hdfs/wuyifan18_deeplog_preprocessed.toml",
     )
     bgl_extension_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
-        / "bgl_entity_chronological.toml",
+        / "bgl/entity_chronological.toml",
     )
 
     assert len(hdfs_bundles) == 3
@@ -1337,7 +1444,7 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "bgl_entity_chronological.toml",
+        / "bgl/entity_chronological.toml",
     )
     hdfs_bundles = load_experiment_bundles(
         repo_root
@@ -1351,7 +1458,7 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "openstack_deeplog_preprocessed.toml",
+        / "openstack/deeplog_preprocessed.toml",
     )
 
     assert {bundle.run_group for bundle in bgl_bundles} == {

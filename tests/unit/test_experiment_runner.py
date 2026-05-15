@@ -117,8 +117,9 @@ def _build_run_metrics_report(
     bundle: object,
     sequences: Iterable[object],
     model_summary: object,
+    debug_reporting: bool = False,
 ) -> dict[str, object]:
-    del bundle, model_summary
+    del bundle, model_summary, debug_reporting
     list(sequences)
     return {
         "primary_metric_scope": None,
@@ -180,7 +181,7 @@ def test_main_does_not_print_the_run_directory(
             run directory.
     """
     expected_config = object()
-    seen: list[tuple[object, bool, bool]] = []
+    seen: list[tuple[object, bool, bool, bool]] = []
 
     class _Parser:
         @staticmethod
@@ -198,8 +199,8 @@ def test_main_does_not_print_the_run_directory(
     monkeypatch.setattr(
         runner,
         "run_experiment",
-        lambda config_path, *, force, write_predictions: (
-            seen.append((config_path, force, write_predictions))
+        lambda config_path, *, force, write_predictions, debug_reporting=False: (
+            seen.append((config_path, force, write_predictions, debug_reporting))
             or tmp_path / "result-dir"
         ),
     )
@@ -207,7 +208,7 @@ def test_main_does_not_print_the_run_directory(
     exit_code = runner.main()
 
     assert exit_code == 0
-    assert seen == [(expected_config, True, False)]
+    assert seen == [(expected_config, True, False, False)]
     assert not capsys.readouterr().out
 
 
@@ -226,7 +227,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
     ]
-    submitted_payloads: list[tuple[Path, int, bool, bool]] = []
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
 
     class _FakeExecutor:
         def __init__(self, *, max_workers: int) -> None:
@@ -246,7 +247,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool, bool]],
+            payloads: list[tuple[Path, int, bool, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == len(bundles)
             del func
@@ -260,8 +261,8 @@ def test_run_experiment_submits_plain_worker_payloads(
 
     assert result == [tmp_path / "result-0", tmp_path / "result-1"]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True, False),
-        (tmp_path / "sweep.toml", 1, True, False),
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
     ]
 
 
@@ -298,7 +299,7 @@ def test_run_experiment_batches_groups_sequentially(
             sweep=SimpleNamespace(max_workers=expected_max_workers),
         ),
     ]
-    submitted_payloads: list[list[tuple[Path, int, bool, bool]]] = []
+    submitted_payloads: list[list[tuple[Path, int, bool, bool, bool]]] = []
     serial_runs: list[int] = []
 
     class _FakeExecutor:
@@ -319,7 +320,7 @@ def test_run_experiment_batches_groups_sequentially(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool, bool]],
+            payloads: list[tuple[Path, int, bool, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == expected_max_workers
             del func
@@ -331,8 +332,9 @@ def test_run_experiment_batches_groups_sequentially(
         *,
         force: bool = False,
         write_predictions: bool = False,
+        debug_reporting: bool = False,
     ) -> Path:
-        del force, write_predictions
+        del force, write_predictions, debug_reporting
         serial_runs.append(bundle.index)
         return tmp_path / f"serial-{bundle.index}"
 
@@ -350,8 +352,8 @@ def test_run_experiment_batches_groups_sequentially(
     ]
     assert submitted_payloads == [
         [
-            (tmp_path / "sweep.toml", 0, True, False),
-            (tmp_path / "sweep.toml", 1, True, False),
+            (tmp_path / "sweep.toml", 0, True, False, False),
+            (tmp_path / "sweep.toml", 1, True, False, False),
         ],
     ]
     assert serial_runs == [2]
@@ -419,7 +421,11 @@ def test_run_bundle_rebuilds_sequence_views_for_each_stage(
         "build_sequence_split_summary",
         _build_sequence_split_summary,
     )
-    monkeypatch.setattr(runner, "build_run_metrics_report", _build_run_metrics_report)
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
     monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
     monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
 

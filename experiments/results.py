@@ -106,7 +106,17 @@ class ResultPaths:
 
 @dataclass(frozen=True, slots=True)
 class ResultWriteContext:
-    """Inputs needed to persist one concrete experiment result bundle."""
+    """Inputs needed to persist one concrete experiment result bundle.
+
+    Attributes:
+        bundle (ExperimentBundle): Resolved concrete experiment bundle.
+        templated (TemplatedDataset): Materialised templated dataset view.
+        sequences (SequenceBuilder): Sequence builder used to replay the run.
+        model_summary (ModelRunSummary): Model-side summary for the completed
+            run.
+        result_paths (ResultPaths): Deterministic output paths for the bundle.
+        debug_reporting (bool): Whether verbose diagnostics should be written.
+    """
 
     bundle: ExperimentBundle
     templated: TemplatedDataset
@@ -212,6 +222,11 @@ def build_dataset_manifest(
         "dataset_fingerprint": stable_fingerprint(serialise_config(bundle.dataset)),
         "dataset_variant": bundle.dataset.name,
         "dataset_name": bundle.dataset.dataset_name,
+        **(
+            {"experiment": _experiment_metadata(bundle)}
+            if bundle.experiment_name is not None
+            else {}
+        ),
         "source": dataset_source_summary(bundle.dataset, repo_root=bundle.repo_root),
         "structured_parser": _structured_parser_name(bundle),
         "template_parser": bundle.dataset.template_parser,
@@ -270,7 +285,17 @@ def _build_dataset_statistics(
     bundle: ExperimentBundle,
     raw_logs_path: Path,
 ) -> dict[str, object] | None:
-    """Return optional dataset-specific manifest statistics."""
+    """Return optional dataset-specific manifest statistics.
+
+    Args:
+        bundle (ExperimentBundle): Resolved bundle used to identify the
+            dataset family.
+        raw_logs_path (Path): Path to the raw log file backing the manifest.
+
+    Returns:
+        dict[str, object] | None: AIT-ADS-specific summary fields, or `None`
+        when the dataset family does not expose those statistics.
+    """
     if bundle.dataset.preset is None or not bundle.dataset.preset.startswith(
         "ait_ads_",
     ):
@@ -1156,6 +1181,7 @@ def build_environment_metadata(
     return {
         "recorded_at_utc": datetime.now(tz=timezone.utc).isoformat(),
         "run_fingerprint": result_paths.run_fingerprint,
+        "command": list(sys.argv),
         "python": {
             "version": sys.version,
             "executable": sys.executable,
@@ -1206,6 +1232,10 @@ def _structured_parser_name(bundle: ExperimentBundle) -> str:
         return bundle.dataset.preset
     msg = "Dataset manifest requires either a structured parser or a preset."
     raise ValueError(msg)
+
+
+def _experiment_metadata(bundle: ExperimentBundle) -> dict[str, object]:
+    return {"name": bundle.experiment_name, "groups": list(bundle.experiment_groups)}
 
 
 def _read_git_commit(repo_root: Path) -> str | None:

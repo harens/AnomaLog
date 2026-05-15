@@ -1,0 +1,15 @@
+extends = "v1_deeplog_paper_base.toml"
+name = "hdfs_v1_deeplog_paper_entry100k_split_partial"
+description = "DeepLog HDFS paper reproduction with split-partial straddler handling across the key-only and full variants, plus template-frequency and Markov sanity baselines on the same split."
+
+[dataset]
+name = "hdfs_v1_deeplog_paper_entry100k_split_partial"
+description = "DeepLog HDFS paper-reproduction config: first 100k raw entries, split before grouping, partial straddler handling, and normal-only entity training, shared by the key-only and full variants."
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_count"
+train_entry_count = 100000
+straddling_group_policy = "split_partial_sequences"
+
+[dataset.cache_paths]
+namespace = "hdfs_entity"

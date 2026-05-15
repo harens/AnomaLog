@@ -2120,9 +2120,9 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
 def test_hdfs_paper_configs_pin_runtime_top_g_to_nine() -> None:
     """HDFS paper-facing DeepLog bundles should score with `g = 9`."""
     config_paths = [
-        "experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml",
-        "experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml",
-        "experiments/configs/datasets/hdfs_wuyifan18_deeplog_preprocessed.toml",
+        "experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_assign_first.toml",
+        "experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_split_partial.toml",
+        "experiments/configs/datasets/hdfs/wuyifan18_deeplog_preprocessed.toml",
     ]
 
     for config_path in config_paths:

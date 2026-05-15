@@ -1,0 +1,12 @@
+extends = "base.toml"
+name = "ait_ads_russellmitchell"
+description = "AIT-ADS russellmitchell dataset contract built from the shared base manifest."
+
+[dataset]
+name = "ait_ads_russellmitchell"
+dataset_name = "AIT_ADS_RUSSELLMITCHELL"
+preset = "ait_ads_russellmitchell"
+description = "AIT-ADS russellmitchell scenario using canonical alert keys with chronological raw-entry prefix splitting."
+
+[dataset.cache_paths]
+namespace = "ait_ads/russellmitchell"

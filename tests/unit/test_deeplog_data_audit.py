@@ -161,7 +161,8 @@ def test_decode_dataset_variant_config_accepts_nested_dataset_tables() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "openstack_deeplog_preprocessed.toml"
+        / "openstack"
+        / "deeplog_preprocessed.toml"
     )
     raw_matrix = msgspec.toml.decode(matrix_path.read_bytes())
 

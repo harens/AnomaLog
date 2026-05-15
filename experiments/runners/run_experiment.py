@@ -25,6 +25,7 @@ from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.models.evaluate import PredictionOutputConfig
+from experiments.registry import resolve_registry_experiment
 from experiments.results import (
     ResultWriteContext,
     build_run_metrics_report,
@@ -47,6 +48,30 @@ class _BundleGroupRequest:
     force: bool
     write_predictions: bool
     debug_reporting: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredExperimentRunRequest:
+    """Request metadata for a registry-backed experiment run.
+
+    Attributes:
+        experiment_name (str): Named registry experiment to execute.
+        registry_path (Path): Path to the registry TOML file.
+        repo_root (Path | None): Repository root used to resolve relative
+            paths.
+        force (bool): Whether to replace existing deterministic run outputs.
+        write_predictions (bool): Whether to persist `predictions.jsonl`.
+        debug_reporting (bool): Whether to keep verbose diagnostics.
+        console (bool): Whether to emit console progress through Prefect.
+    """
+
+    experiment_name: str
+    registry_path: Path = Path("experiments/configs/registry.toml")
+    repo_root: Path | None = None
+    force: bool = False
+    write_predictions: bool = False
+    debug_reporting: bool = False
+    console: bool = True
 
 
 class SharedConsoleHandler(logging.Handler):
@@ -120,6 +145,33 @@ def run_experiment(
             ),
         )
     return results
+
+
+def run_registered_experiment(request: RegisteredExperimentRunRequest) -> list[Path]:
+    """Run one named registry experiment and return its result directories.
+
+    Args:
+        request (RegisteredExperimentRunRequest): Registry-backed run settings.
+
+    Returns:
+        list[Path]: Deterministic result directories for the selected experiment.
+    """
+    resolved_repo_root = Path.cwd() if request.repo_root is None else request.repo_root
+    resolved = resolve_registry_experiment(
+        request.experiment_name,
+        registry_path=request.registry_path,
+        repo_root=resolved_repo_root,
+    )
+    return [
+        _run_bundle(
+            bundle,
+            force=request.force,
+            write_predictions=request.write_predictions,
+            debug_reporting=request.debug_reporting,
+            console=request.console,
+        )
+        for bundle in resolved.bundles
+    ]
 
 
 def _resolve_max_workers(
@@ -207,6 +259,7 @@ def _run_bundle(
     force: bool = False,
     write_predictions: bool = False,
     debug_reporting: bool = False,
+    console: bool = True,
 ) -> Path:
     """Execute one concrete run derived from a dataset manifest.
 
@@ -218,6 +271,7 @@ def _run_bundle(
             the concrete run.
         debug_reporting (bool): Whether to keep verbose diagnostic payloads in
             the run artefacts and logs.
+        console (bool): Whether to mirror log output to the shared console.
 
     Returns:
         Path: Deterministic run directory containing the written artefacts.
@@ -240,6 +294,7 @@ def _run_bundle(
     with _experiment_logger(
         result_paths.run_log_path,
         run_name=bundle.concrete_name,
+        console=console,
     ) as logger:
         logger.info("Loaded experiment config from %s", bundle.sweep_path)
         logger.info("Using dataset config %s", bundle.dataset_path)
@@ -428,11 +483,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         argparse.ArgumentParser: Parser for the experiment runner CLI.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
         "--config",
-        required=True,
         type=Path,
         help="Path to a dataset manifest TOML file under experiments/configs/datasets.",
+    )
+    source_group.add_argument(
+        "--experiment",
+        help=(
+            "Registry experiment name to resolve from "
+            "experiments/configs/registry.toml."
+        ),
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=Path("experiments/configs/registry.toml"),
+        help="Path to the named experiment registry TOML file.",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Repository root used to resolve registry-relative paths.",
     )
     parser.add_argument(
         "--force",
@@ -461,12 +535,28 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     try:
-        run_experiment(
-            args.config,
-            force=args.force,
-            write_predictions=args.write_predictions,
-            debug_reporting=args.debug_reporting,
-        )
+        if getattr(args, "experiment", None) is not None:
+            run_registered_experiment(
+                RegisteredExperimentRunRequest(
+                    experiment_name=args.experiment,
+                    registry_path=getattr(
+                        args,
+                        "registry",
+                        Path("experiments/configs/registry.toml"),
+                    ),
+                    repo_root=getattr(args, "repo_root", None),
+                    force=getattr(args, "force", False),
+                    write_predictions=getattr(args, "write_predictions", False),
+                    debug_reporting=getattr(args, "debug_reporting", False),
+                ),
+            )
+        else:
+            run_experiment(
+                args.config,
+                force=getattr(args, "force", False),
+                write_predictions=getattr(args, "write_predictions", False),
+                debug_reporting=getattr(args, "debug_reporting", False),
+            )
     except (ConfigError, FileExistsError, ValueError) as exc:
         parser.exit(status=2, message=f"{exc}\n")
     return 0
@@ -485,7 +575,12 @@ def _experiment_logger_name(run_name: str) -> str:
 
 
 @contextmanager
-def _experiment_logger(log_path: Path, *, run_name: str) -> Iterator[logging.Logger]:
+def _experiment_logger(
+    log_path: Path,
+    *,
+    run_name: str,
+    console: bool = True,
+) -> Iterator[logging.Logger]:
     logger = logging.getLogger(_experiment_logger_name(run_name))
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -493,13 +588,14 @@ def _experiment_logger(log_path: Path, *, run_name: str) -> Iterator[logging.Log
     # Writes log lines for permanent storage
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setFormatter(formatter)
-    # Writes log lines to the console
-    stream_handler = SharedConsoleHandler()
-    stream_handler.setFormatter(formatter)
 
     logger.handlers.clear()
     logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+    if console:
+        # Writes log lines to the console
+        stream_handler = SharedConsoleHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
     try:
         yield logger
     finally:

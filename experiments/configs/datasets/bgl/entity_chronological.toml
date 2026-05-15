@@ -1,0 +1,12 @@
+extends = "../shared/entity_chronological_base.toml"
+name = "bgl_entity_chronological"
+description = "BGL entity chronological experiment matrix with unsupervised, supervised, Markov, and label-aware sanity baselines."
+
+[dataset]
+name = "bgl_entity_chronological"
+dataset_name = "BGL"
+preset = "bgl"
+description = "Built-in BGL preset grouped by entity with chronological prefix/suffix splitting."
+
+[dataset.cache_paths]
+namespace = "bgl_entity"

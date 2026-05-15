@@ -12,8 +12,7 @@ description = "DeepLog OpenStack reproduction config using Spell (tau=0.5) over 
 grouping = "entity"
 
 [dataset.cache_paths]
-data_root = "data/openstack_deeplog_preprocessed"
-cache_root = ".cache/openstack_deeplog_preprocessed"
+namespace = "openstack_deeplog_preprocessed"
 
 [[models]]
 ref = "deeplog_default"

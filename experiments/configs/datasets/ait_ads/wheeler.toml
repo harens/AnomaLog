@@ -1,0 +1,12 @@
+extends = "base.toml"
+name = "ait_ads_wheeler"
+description = "AIT-ADS wheeler dataset contract built from the shared base manifest."
+
+[dataset]
+name = "ait_ads_wheeler"
+dataset_name = "AIT_ADS_WHEELER"
+preset = "ait_ads_wheeler"
+description = "AIT-ADS wheeler scenario using canonical alert keys with chronological raw-entry prefix splitting."
+
+[dataset.cache_paths]
+namespace = "ait_ads/wheeler"

@@ -1,0 +1,76 @@
+[model_sets.baselines]
+models = ["template_frequency_default", "naive_bayes_default", "markov_default"]
+
+[model_sets.pair_baselines]
+models = ["template_frequency_default", "markov_default"]
+
+[model_sets.deeplog]
+models = ["deeplog_default"]
+
+[model_sets.deeplog.overrides]
+"model.parameter_detection_enabled" = false
+
+[model_sets.deepcase]
+models = ["deepcase"]
+
+[experiment_presets.entity_with_deepcase]
+models = ["baselines", "deepcase"]
+
+[experiment_presets.bgl_deeplog_paper]
+models = ["deeplog", "pair_baselines"]
+
+[experiment_presets.bgl_deeplog_paper.overrides.deeplog]
+"model.history_size" = 3
+"model.top_g_values" = [1, 3, 6]
+"model.num_layers" = 1
+"model.hidden_size" = 256
+"model.primary_metric_scope" = "event_level_detection"
+"model.secondary_metric_scopes" = ["next_event_prediction", "sequence_level_detection"]
+
+[experiment_presets.hdfs_deeplog_paper]
+models = ["deeplog", "pair_baselines"]
+
+[experiment_presets.hdfs_deeplog_paper.overrides.deeplog]
+"model.top_g_values" = [1, 3, 5, 7, 9]
+"model.parameter_detection_enabled" = false
+
+[experiment_presets.openstack_deeplog]
+models = ["deeplog", "pair_baselines", "deepcase"]
+
+[experiment_presets.openstack_deeplog.overrides.deeplog]
+"model.parameter_detection_enabled" = false
+
+[experiment_presets.ait_ads]
+models = ["baselines", "deeplog", "deepcase"]
+
+[experiments.bgl_entity_chronological]
+dataset = "bgl/entity_chronological"
+preset = "entity_with_deepcase"
+
+[experiments.hdfs_v1_entity_chronological]
+dataset = "hdfs/v1_entity_chronological"
+preset = "entity_with_deepcase"
+
+[experiments.openstack_deeplog_preprocessed]
+dataset = "openstack/deeplog_preprocessed"
+preset = "openstack_deeplog"
+
+[experiment_sets.bgl_deeplog_paper]
+preset = "bgl_deeplog_paper"
+datasets = [
+  "bgl/deeplog_paper_1pct_normal_entry_stream_no_online",
+  "bgl/deeplog_paper_10pct_entry_stream_no_online",
+]
+
+[experiment_sets.hdfs_deeplog_paper]
+preset = "hdfs_deeplog_paper"
+datasets = [
+  "hdfs/v1_deeplog_paper_entry100k_split_partial",
+  "hdfs/v1_deeplog_paper_entry100k_assign_first",
+  "hdfs/wuyifan18_deeplog_preprocessed",
+]
+
+[experiment_sets.ait_ads]
+preset = "ait_ads"
+dataset_prefix = "ait_ads"
+datasets = ["fox", "harrison", "russellmitchell", "santos", "shaw", "wardbeck", "wheeler", "wilson"]
