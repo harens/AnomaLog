@@ -85,7 +85,7 @@ def _sequence(
     window_id: int,
     *,
     templates: list[str],
-    label: int,
+    label: int | None,
     split_label: SplitLabel = SplitLabel.TRAIN,
 ) -> TemplateSequence:
     return TemplateSequence(
@@ -766,26 +766,22 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
     assert detector.predict(anomalous_sequence).predicted_label == 1
 
 
-def test_template_frequency_detector_requires_normal_sequences_for_calibration() -> (
-    None
-):
-    """Template-frequency calibration should not borrow anomalous train labels."""
+def test_template_frequency_detector_treats_missing_labels_as_normal() -> None:
+    """Template-frequency calibration should accept missing labels as normal."""
     detector = _template_frequency_config(
         name="template_frequency",
     ).build_detector()
-    anomalous_only_train = [
-        _sequence(30, templates=["panic failure"], label=1),
-        _sequence(31, templates=["disk failure"], label=1),
+    train_sequences = [
+        _sequence(40, templates=["normal login"], label=None),
+        _sequence(41, templates=["normal read"], label=None),
+        _sequence(42, templates=["panic failure"], label=1),
     ]
 
-    with (
-        Progress(disable=True) as progress,
-        pytest.raises(
-            ValueError,
-            match="requires at least one normal training sequence",
-        ),
-    ):
-        detector.fit(anomalous_only_train, progress=progress)
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+
+    assert detector.threshold_source == "train_score_quantile"
+    assert detector.predict(train_sequences[0]).predicted_label == 0
 
 
 def test_markov_detector_predictions_are_repeatable() -> None:

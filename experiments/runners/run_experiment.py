@@ -7,11 +7,12 @@ import logging
 import os
 import shlex
 import shutil
-from concurrent.futures import ProcessPoolExecutor
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from prefect.logging.configuration import (
     DEFAULT_LOGGING_SETTINGS_PATH,
@@ -48,6 +49,11 @@ class _BundleGroupRequest:
     force: bool
     write_predictions: bool
     debug_reporting: bool
+
+
+class _FutureWithResult(Protocol):
+    def result(self) -> Path:
+        """Return the future result when the worker completes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +127,9 @@ def run_experiment(
 
     Returns:
         list[Path]: Deterministic run directories containing the written
-            artifacts.
+            artefacts for bundles that completed successfully. Bundle
+            failures are logged and skipped so the remaining runs in the group
+            can keep going.
 
     Raises:
         ConfigError: If the manifest does not expand to any concrete runs.
@@ -226,18 +234,61 @@ def _run_bundle_group(
         bundle_count=len(grouped_bundles),
     )
     if max_workers == 1 or len(grouped_bundles) == 1:
-        return [
-            _run_bundle(
-                bundle,
-                force=request.force,
-                write_predictions=request.write_predictions,
-                debug_reporting=request.debug_reporting,
-            )
-            for bundle in grouped_bundles
-        ]
+        results_by_index, failures_by_index = _run_bundle_group_serial(
+            grouped_bundles,
+            force=request.force,
+            write_predictions=request.write_predictions,
+            debug_reporting=request.debug_reporting,
+        )
+    else:
+        results_by_index, failures_by_index = _run_bundle_group_parallel(
+            request=request,
+            grouped_bundles=grouped_bundles,
+            max_workers=max_workers,
+        )
+    if failures_by_index:
+        _write_line("One or more runs in this group failed:")
+        for index in sorted(failures_by_index):
+            failure = failures_by_index[index]
+            _write_line(f"  - {failure}")
+    return [results_by_index[index] for index in sorted(results_by_index)]
+
+
+def _run_bundle_group_serial(
+    grouped_bundles: list[ExperimentBundle],
+    *,
+    force: bool,
+    write_predictions: bool,
+    debug_reporting: bool,
+) -> tuple[dict[int, Path], dict[int, str]]:
+    results_by_index: dict[int, Path] = {}
+    failures_by_index: dict[int, str] = {}
+    for index, bundle in enumerate(grouped_bundles):
+        result, failure = _run_bundle_with_failure_capture(
+            bundle,
+            force=force,
+            write_predictions=write_predictions,
+            debug_reporting=debug_reporting,
+        )
+        if result is not None:
+            results_by_index[index] = result
+        if failure is not None:
+            failures_by_index[index] = failure
+    return results_by_index, failures_by_index
+
+
+def _run_bundle_group_parallel(
+    *,
+    request: _BundleGroupRequest,
+    grouped_bundles: list[ExperimentBundle],
+    max_workers: int,
+) -> tuple[dict[int, Path], dict[int, str]]:
+    results_by_index: dict[int, Path] = {}
+    failures_by_index: dict[int, str] = {}
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        return list(
-            executor.map(
+        submit = getattr(executor, "submit", None)
+        if submit is None:
+            results = executor.map(
                 _run_bundle_from_manifest_payload,
                 [
                     (
@@ -249,8 +300,31 @@ def _run_bundle_group(
                     )
                     for index in request.bundle_indexes
                 ],
-            ),
-        )
+            )
+            results_by_index.update(dict(enumerate(results)))
+        else:
+            future_to_index = {
+                submit(
+                    _run_bundle_from_manifest_payload,
+                    (
+                        request.config_path,
+                        index,
+                        request.force,
+                        request.write_predictions,
+                        request.debug_reporting,
+                    ),
+                ): index
+                for index in request.bundle_indexes
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                bundle = grouped_bundles[index]
+                result, failure = _capture_future_result(future, bundle)
+                if result is not None:
+                    results_by_index[index] = result
+                if failure is not None:
+                    failures_by_index[index] = failure
+    return results_by_index, failures_by_index
 
 
 def _run_bundle(
@@ -602,6 +676,47 @@ def _experiment_logger(
         for handler in list(logger.handlers):
             handler.close()
             logger.removeHandler(handler)
+
+
+def _write_line(message: str) -> None:
+    sys.stdout.write(message + "\n")
+
+
+def _run_bundle_with_failure_capture(
+    bundle: ExperimentBundle,
+    *,
+    force: bool,
+    write_predictions: bool,
+    debug_reporting: bool,
+) -> tuple[Path | None, str | None]:
+    try:
+        return (
+            _run_bundle(
+                bundle,
+                force=force,
+                write_predictions=write_predictions,
+                debug_reporting=debug_reporting,
+            ),
+            None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return None, _format_bundle_failure(bundle, exc)
+
+
+def _capture_future_result(
+    future: _FutureWithResult,
+    bundle: ExperimentBundle,
+) -> tuple[Path | None, str | None]:
+    try:
+        result = future.result()
+    except Exception as exc:  # noqa: BLE001
+        return None, _format_bundle_failure(bundle, exc)
+    return result, None
+
+
+def _format_bundle_failure(bundle: ExperimentBundle, exc: Exception) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return f"{bundle.concrete_name}: {detail}"
 
 
 if __name__ == "__main__":

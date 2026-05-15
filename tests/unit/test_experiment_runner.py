@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from argparse import Namespace
+from concurrent.futures import Future
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Protocol
@@ -357,6 +358,86 @@ def test_run_experiment_batches_groups_sequentially(
         ],
     ]
     assert serial_runs == [2]
+
+
+def test_run_experiment_logs_bundle_failures_and_keeps_running(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """One failing bundle should not stop the rest of the run group.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading and worker
+            execution so the test can inspect failure handling.
+        capsys (pytest.CaptureFixture[str]): Captures the failure summary
+            emitted by the runner.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+    bundles = [
+        SimpleNamespace(
+            concrete_name="demo-a",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+        SimpleNamespace(
+            concrete_name="demo-b",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+        SimpleNamespace(
+            concrete_name="demo-c",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+    ]
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        @staticmethod
+        def submit(
+            func: object,
+            payload: tuple[Path, int, bool, bool, bool],
+        ) -> Future[Path]:
+            del func
+            submitted_payloads.append(payload)
+            future: Future[Path] = Future()
+            index = payload[1]
+            if index == 1:
+                future.set_exception(RuntimeError("boom"))
+            else:
+                future.set_result(tmp_path / f"result-{index}")
+            return future
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [tmp_path / "result-0", tmp_path / "result-2"]
+    assert submitted_payloads == [
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
+        (tmp_path / "sweep.toml", 2, True, False, False),
+    ]
+    output_lines = capsys.readouterr().out.splitlines()
+    assert output_lines[0] == "One or more runs in this group failed:"
+    assert output_lines[1] == "  - demo-b: boom"
 
 
 def test_run_bundle_rebuilds_sequence_views_for_each_stage(
