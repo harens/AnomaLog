@@ -42,9 +42,5 @@ ref = "markov_default"
 run_group = "baselines"
 
 [[models]]
-ref = "river_multinomial_nb_default"
-run_group = "baselines"
-
-[[models]]
 ref = "deepcase"
 run_group = "deepcase"

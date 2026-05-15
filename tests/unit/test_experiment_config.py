@@ -363,51 +363,6 @@ def test_load_experiment_bundles_support_naive_bayes_model_configs(
 
 
 @pytest.mark.allow_no_new_coverage
-def test_load_experiment_bundles_support_river_multinomial_nb_model_configs(
-    tmp_path: Path,
-) -> None:
-    """River model configs should resolve through the same model loader.
-
-    Args:
-        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
-    """
-    # This protects model config decoding outside the
-    # `anomalog` coverage target.
-    sweep_path = _write_config_tree(
-        tmp_path,
-        sweep_name="bgl_river_multinomial_nb",
-        dataset=(
-            "bgl_entity_normal_only",
-            (
-                'name = "bgl_entity_normal_only"\n'
-                'dataset_name = "BGL"\n'
-                'preset = "bgl"\n'
-                "\n[sequence]\n"
-                'grouping = "entity"\n'
-                "train_on_normal_entities_only = true\n"
-            ),
-        ),
-        model=(
-            "river_multinomial_nb_default",
-            'name = "river_multinomial_nb_default"\ndetector = "river"\n',
-        ),
-        sweep_body_suffix=(
-            '\n[overrides]\n"dataset.sequence.train_on_normal_entities_only" = false\n'
-        ),
-    )
-    bundle = _load_one_bundle(sweep_path)
-
-    assert bundle.sweep.name == "bgl_river_multinomial_nb"
-    assert bundle.dataset.name == "bgl_entity_normal_only"
-    assert bundle.model.name == "river_multinomial_nb_default"
-    assert bundle.model.detector == "river"
-    assert bundle.dataset.preset == "bgl"
-    assert bundle.dataset.cache_paths is None
-    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
-    assert bundle.dataset.sequence.train_on_normal_entities_only is False
-
-
-@pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_support_deeplog_model_configs(
     tmp_path: Path,
 ) -> None:
@@ -477,7 +432,6 @@ def test_checked_in_ait_ads_scenario_manifest_loads_all_model_families() -> None
         "template_frequency",
         "naive_bayes",
         "markov",
-        "river",
         "deepcase",
     ]
     assert bundles[0].dataset.preset == "ait_ads_fox"

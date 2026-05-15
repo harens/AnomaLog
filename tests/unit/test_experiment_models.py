@@ -43,7 +43,6 @@ from experiments.models.evaluate import (
 )
 from experiments.models.markov import MarkovManifest, MarkovModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
-from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
     TemplateFrequencyModelConfig,
 )
@@ -79,13 +78,6 @@ def _markov_config(**values: ConfigValue) -> MarkovModelConfig:
     return decode_experiment_model_config(
         {"name": "markov", **values},
         config_type=MarkovModelConfig,
-    )
-
-
-def _river_config(**values: ConfigValue) -> RiverModelConfig:
-    return decode_experiment_model_config(
-        {"name": "river", **values},
-        config_type=RiverModelConfig,
     )
 
 
@@ -602,7 +594,6 @@ def test_model_registries_resolve_builtins() -> None:
     assert resolve_model_config_type("deeplog") is DeepLogModelConfig
     assert resolve_model_config_type("naive_bayes") is NaiveBayesModelConfig
     assert resolve_model_config_type("markov") is MarkovModelConfig
-    assert resolve_model_config_type("river") is RiverModelConfig
     assert (
         resolve_model_config_type("template_frequency") is TemplateFrequencyModelConfig
     )
@@ -655,11 +646,11 @@ def test_model_registry_reports_missing_optional_dependencies(
         monkeypatch (pytest.MonkeyPatch): Replaces the module importer so the
             test can simulate a missing backend dependency.
     """
-    missing_dependency = ModuleNotFoundError("No module named 'river'")
-    missing_dependency.name = "river"
+    missing_dependency = ModuleNotFoundError("No module named 'deepcase'")
+    missing_dependency.name = "deepcase"
     registration = types.SimpleNamespace(
-        module_path="experiments.models.river",
-        config_type_name="RiverModelConfig",
+        module_path="experiments.models.deepcase",
+        config_type_name="DeepCaseModelConfig",
     )
 
     def _import_module(module_path: str) -> types.SimpleNamespace:
@@ -668,7 +659,7 @@ def test_model_registry_reports_missing_optional_dependencies(
 
     monkeypatch.setattr(
         "experiments.models.registry._MODEL_REGISTRATIONS",
-        {"river": registration},
+        {"deepcase": registration},
     )
     monkeypatch.setattr("experiments.models.registry.import_module", _import_module)
 
@@ -676,9 +667,9 @@ def test_model_registry_reports_missing_optional_dependencies(
     try:
         with pytest.raises(
             ConfigError,
-            match=r"Detector 'river' requires optional backend dependencies",
+            match=r"Detector 'deepcase' requires optional backend dependencies",
         ):
-            resolve_model_config_type("river")
+            resolve_model_config_type("deepcase")
     finally:
         resolve_model_config_type.cache_clear()
 
@@ -698,7 +689,6 @@ def test_model_configs_reject_direct_construction() -> None:
         lambda: _template_frequency_config(name="template_frequency").build_detector(),
         lambda: _naive_bayes_config(name="naive_bayes").build_detector(),
         lambda: _markov_config(name="markov").build_detector(),
-        lambda: _river_config(name="river").build_detector(),
     ],
 )
 def test_detectors_only_accept_one_successful_fit(
@@ -869,44 +859,6 @@ def test_naive_bayes_detector_predictions_are_repeatable() -> None:
 
 
 @pytest.mark.allow_no_new_coverage
-def test_river_detector_predictions_are_stable_across_equal_fits() -> None:
-    """Two fits on the same training data should produce the same prediction."""
-    # This protects experiment-layer detector determinism, which sits outside
-    # the configured `anomalog` coverage target.
-    config = _river_config(name="river")
-    left = config.build_detector()
-    right = config.build_detector()
-    train_sequences = _supervised_train_sequences()
-    sequence = _sequence(
-        22,
-        templates=["panic failure", "disk failure"],
-        label=1,
-        split_label=SplitLabel.TEST,
-    )
-
-    with Progress(disable=True) as left_progress:
-        left.fit(train_sequences, progress=left_progress)
-    with Progress(disable=True) as right_progress:
-        right.fit(train_sequences, progress=right_progress)
-
-    assert left.predict(sequence) == right.predict(sequence)
-
-
-@pytest.mark.allow_no_new_coverage
-def test_river_model_config_supports_additional_count_based_estimators() -> None:
-    """River configs should accept the supported alternate Naive Bayes estimators."""
-    # This protects experiment-layer estimator registration outside the
-    # configured `anomalog` coverage target.
-    assert isinstance(
-        _river_config(
-            name="river-bernoulli",
-            estimator="naive_bayes.BernoulliNB",
-        ).build_detector(),
-        RiverDetector,
-    )
-
-
-@pytest.mark.allow_no_new_coverage
 def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     """Detector manifests should be typed and include shared run summary counts."""
     # This protects experiment-layer manifest shaping outside the configured
@@ -931,10 +883,3 @@ def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     assert manifest.test_sequence_count == sequence_summary.test_sequence_count
     assert manifest.train_label_counts == sequence_summary.train_label_counts
     assert manifest.test_label_counts == sequence_summary.test_label_counts
-    assert isinstance(
-        _river_config(
-            name="river-complement",
-            estimator="naive_bayes.ComplementNB",
-        ).build_detector(),
-        RiverDetector,
-    )

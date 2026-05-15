@@ -105,7 +105,6 @@ Install the optional experiment dependencies first when you want to run the
 checked-in baselines:
 
 ```bash
-uv sync --extra experiments --extra river
 uv sync --extra experiments --extra deeplog
 uv sync --extra experiments --extra deepcase
 ```
@@ -151,7 +150,6 @@ The checked-in examples currently cover:
 
 - `template_frequency` for a simple template-frequency baseline
 - `naive_bayes` for a phrase-based classifier
-- `river` for online-learning style baselines backed by [`river`](https://riverml.xyz/)
 - `deeplog` for the scoped DeepLog implementation with stacked-LSTM
   next-log-key prediction and per-template parameter-value models
 - `deepcase` for the official DeepCase Context Builder and Interpreter workflow

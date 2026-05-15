@@ -7,7 +7,7 @@ AnomaLog preprocessing.
 
 - `configs/models/`: detector configurations such as template-frequency,
   a normal-only Markov transition baseline, handwritten Naive Bayes,
-  `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
+  and the scoped DeepLog and DeepCASE models.
 - `configs/datasets/`: dataset-owned experiment manifests that bind one dataset variant to one or more detector configs via `[[models]]` entries, then optionally override them through fixed overrides and Cartesian-product axes.
 - `runners/`: Python entrypoints for executing experiments.
 - `analysis/`: notebooks and one-off visual analysis only.
@@ -211,11 +211,10 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   fractions, train pool size, realised train size, excluded prefix count, and
   realised fractions in `sequence_split_summary`.
 
-To run `river`-backed or DeepLog/DeepCASE experiments, install the matching
-optional extras first:
+To run DeepLog/DeepCASE experiments, install the matching optional extras
+first:
 
 ```bash
-uv sync --extra experiments --extra river
 uv sync --extra experiments --extra deeplog
 uv sync --extra experiments --extra deepcase
 ```

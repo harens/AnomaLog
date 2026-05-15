@@ -1453,8 +1453,8 @@ def test_represent_with_yields_model_ready_records() -> None:
     ]
 
 
-def test_represented_sequences_can_stream_as_river_dataset() -> None:
-    """Represented sequences expose River-style `(x, y)` examples."""
+def test_represented_sequences_can_stream_as_labeled_examples() -> None:
+    """Represented sequences expose labelled `(x, y)` examples."""
 
     class _EventCountRepresentation:
         name = "event_count"
@@ -1487,11 +1487,11 @@ def test_represented_sequences_can_stream_as_river_dataset() -> None:
         test_frac=0.5,
     )
 
-    river_examples = list(
+    labelled_examples = list(
         builder.represent_with(_EventCountRepresentation()).iter_labeled_examples(),
     )
 
-    assert river_examples == [({"event_count": 1}, 0), ({"event_count": 1}, 1)]
+    assert labelled_examples == [({"event_count": 1}, 0), ({"event_count": 1}, 1)]
 
 
 @pytest.mark.allow_no_new_coverage

@@ -306,13 +306,12 @@ Each represented sample still keeps `entity_ids`, `label`, `split_label`, and
 Use `iter_labeled_examples()` only when a downstream library specifically wants
 plain `(x, y)` pairs.
 
-For example, that helper is convenient for online-learning libraries such as
-[`river`](https://riverml.xyz/):
+For example, that helper is convenient for online-learning libraries:
 
 ```python
 from anomalog.representations import TemplatePhraseRepresentation
 
-river_examples = (
+labelled_examples = (
     dataset.group_by_entity()
     .with_train_fraction(0.8)
     .represent_with(
@@ -321,7 +320,7 @@ river_examples = (
     .iter_labeled_examples()
 )
 
-first_x, first_y = next(river_examples)
+first_x, first_y = next(labelled_examples)
 ```
 
 ```text
