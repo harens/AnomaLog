@@ -1,5 +1,7 @@
 """Tests for template parser implementations."""
 
+import io
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias
@@ -7,6 +9,7 @@ from typing import TypeAlias
 import pytest
 from prefect.logging import disable_run_logger
 
+import anomalog.parsers.template.parsers as template_parsers
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.template import (
     resolve_template_parser,
@@ -340,3 +343,26 @@ def test_spell_template_parser_streams_input_without_materialising_it(
         / "demo_spell_input.log_templates.csv"
     )
     assert templates_path.exists()
+
+
+def test_spell_template_parser_forwards_spellpy_module_logs() -> None:
+    """Spellpy module logs should flow through the active experiment logger."""
+    stream = io.StringIO()
+    run_logger = logging.getLogger("tests.spellpy_forwarding")
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(name)s:%(message)s"))
+    run_logger.handlers.clear()
+    run_logger.addHandler(handler)
+    run_logger.setLevel(logging.INFO)
+    run_logger.propagate = False
+
+    spell_logger = logging.getLogger("spellpy.spell")
+    previous_level = spell_logger.level
+    previous_propagate = spell_logger.propagate
+
+    with template_parsers.spellpy_logger_context(run_logger):
+        spell_logger.info("Parsing file: demo_spell_input.log")
+
+    assert "spellpy.spell:Parsing file: demo_spell_input.log" in stream.getvalue()
+    assert spell_logger.level == previous_level
+    assert spell_logger.propagate == previous_propagate

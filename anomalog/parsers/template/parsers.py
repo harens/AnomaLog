@@ -3,8 +3,10 @@
 import csv
 import hashlib
 import importlib
+import logging
 import re
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from operator import itemgetter
@@ -14,6 +16,7 @@ from typing import ClassVar
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
+from prefect.exceptions import MissingContextError
 from prefect.logging import get_run_logger
 from typing_extensions import override
 
@@ -28,6 +31,45 @@ from anomalog.parsers.template.dataset import (
     TemplateParser,
     UntemplatedText,
 )
+
+
+@contextmanager
+def spellpy_logger_context(
+    run_logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
+) -> Iterator[None]:
+    """Forward `spellpy.spell` output into the active experiment logger.
+
+    Raises:
+        TypeError: If the resolved logger is not a standard `logging.Logger`.
+    """
+    experiment_logger: object = run_logger
+    if isinstance(run_logger, logging.LoggerAdapter):
+        experiment_logger = getattr(run_logger, "logger", None)
+    if not isinstance(experiment_logger, logging.Logger):
+        msg = "Active run logger is not a standard logging.Logger instance."
+        raise TypeError(msg)
+    spell_logger = logging.getLogger("spellpy.spell")
+    attached_handlers = experiment_logger.handlers.copy()
+    previous_level = spell_logger.level
+    previous_propagate = spell_logger.propagate
+
+    spell_logger.setLevel(
+        (
+            experiment_logger.level
+            if experiment_logger.level != logging.NOTSET
+            else logging.INFO
+        ),
+    )
+    spell_logger.propagate = False
+    for handler in attached_handlers:
+        spell_logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        for handler in attached_handlers:
+            spell_logger.removeHandler(handler)
+        spell_logger.setLevel(previous_level)
+        spell_logger.propagate = previous_propagate
 
 
 # Note from https://github.com/logpai/logparser/blob/d9d4180784cde9afef990eeeb458591011933f9b/README.md
@@ -338,6 +380,10 @@ class SpellTemplateParser(TemplateParser):
         except ModuleNotFoundError as exc:
             msg = "Spell template parsing requires optional dependency 'spellpy'."
             raise ModuleNotFoundError(msg) from exc
+        try:
+            logger = get_run_logger()
+        except MissingContextError:
+            logger = logging.getLogger(__name__)
 
         log_dir = Path.cwd() / ".cache" / "spell"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +409,8 @@ class SpellTemplateParser(TemplateParser):
             logmain=raw_path.name,
             tau=self.tau,
         )
-        parser.parse(raw_path.name)
+        with spellpy_logger_context(logger):
+            parser.parse(raw_path.name)
 
         templates_path = outdir / f"{raw_path.name}_templates.csv"
         rows = _read_spell_template_rows(templates_path)

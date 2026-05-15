@@ -3686,7 +3686,7 @@ wheels = [
 [[package]]
 name = "spellpy"
 version = "0.0.9"
-source = { git = "https://github.com/harens/spellpy.git#df6749de3bc92d2ec5e70df39244a08ee7b13852" }
+source = { git = "https://github.com/harens/spellpy.git#fb696b63a272af87819b7343059ea6b0d6766057" }
 dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
