@@ -36,6 +36,7 @@ from experiments.datasets import build_dataset_spec, dataset_source_summary
 from experiments.models.deepcase.detector import DeepCaseModelConfig
 from experiments.models.deeplog.detector import DeepLogModelConfig
 from experiments.models.markov import MarkovModelConfig
+from experiments.models.metric_schema import EvaluationUnit
 from experiments.models.template_frequency import TemplateFrequencyModelConfig
 
 
@@ -519,21 +520,34 @@ def test_load_experiment_bundles_rejects_missing_extends_target(
 
 
 @pytest.mark.allow_no_new_coverage
-def test_checked_in_ait_ads_scenario_manifest_loads_all_model_families() -> None:
-    """The checked-in AIT-ADS scenario manifest should expand all model refs."""
-    bundle_path = Path("experiments/configs/datasets") / "ait_ads/fox.toml"
+def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
+    """The combined AIT-ADS base manifest should resolve the paper chronology."""
+    paper_bundles = load_experiment_bundles(
+        Path("experiments/configs/datasets") / "ait_ads/base.toml",
+    )
 
-    bundles = load_experiment_bundles(bundle_path)
-
-    assert [bundle.model.detector for bundle in bundles] == [
+    assert [bundle.model.detector for bundle in paper_bundles] == [
         "template_frequency",
         "naive_bayes",
-        "markov",
-        "deeplog",
         "deepcase",
     ]
-    assert bundles[0].dataset.preset == "ait_ads_fox"
-    assert isinstance(bundles[0].dataset.sequence, ChronologicalStreamSequenceConfig)
+    assert all(
+        isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.train_fraction == pytest.approx(0.5)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.test_fraction == pytest.approx(0.5)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.evaluation_unit is EvaluationUnit.CONTINUOUS_EVENT_STREAM
+        for bundle in paper_bundles
+    )
+    assert {bundle.dataset.preset for bundle in paper_bundles} == {"ait_ads"}
 
 
 @pytest.mark.allow_no_new_coverage

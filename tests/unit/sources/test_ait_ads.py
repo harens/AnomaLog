@@ -135,6 +135,49 @@ def _write_fixture_source_tree(tmp_path: Path) -> Path:
     return source_root
 
 
+def _write_multi_scenario_fixture_source_tree(tmp_path: Path) -> Path:
+    source_root = _write_fixture_source_tree(tmp_path)
+    (source_root / "harrison_aminer.json").write_text(
+        (
+            '{"AnalysisComponent":{"AnalysisComponentIdentifier":7,'
+            '"AnalysisComponentType":"NewMatchPathDetector",'
+            '"AnalysisComponentName":"AMiner: Harrison event.",'
+            '"Message":"New path(es) detected",'
+            '"PersistenceFileName":"nmpd_h"},'
+            '"LogData":{"RawLogData":["first"],'
+            '"Timestamps":[1642410286.5],'
+            '"DetectionTimestamp":[1642410286.5],'
+            '"LogLinesCount":1,'
+            '"LogResources":["/var/log/audit/audit.log"]},'
+            '"AMiner":{"ID":"172.17.129.141"}}\n'
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "harrison_wazuh.json").write_text(
+        (
+            '{"agent":{"ip":"172.17.131.82","name":"wazuh-client",'
+            '"id":"19"},'
+            '"manager":{"name":"wazuh.manager"},'
+            '"rule":{"id":"52508","level":3,'
+            '"description":"Harrison Wazuh alert","groups":["clamd"]},'
+            '"decoder":{"name":"freshclam"},'
+            '"full_log":"line","input":{"type":"log"},'
+            '"@timestamp":"2022-01-18T02:38:07.000000Z",'
+            '"location":"/var/log/syslog","id":"1686147193.86594"}\n'
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "labels.csv").write_text(
+        (
+            "scenario,attack,start,end\n"
+            "fox,service_stop,1642410286.0,1642410288.0\n"
+            "harrison,service_stop,1642410286.0,1642410288.0\n"
+        ),
+        encoding="utf-8",
+    )
+    return source_root
+
+
 def test_load_ait_ads_label_windows_sorts_non_overlapping_intervals(
     tmp_path: Path,
 ) -> None:
@@ -193,6 +236,44 @@ def test_materialise_ait_ads_alert_stream_assigns_labels_and_sorts(
     assert records[1]["template_key"].startswith("suricata|signature_id=")
     assert records[2]["template_key"].startswith("wazuh|rule_id=")
     assert records[3]["template_key"].startswith("aminer|type=")
+
+
+def test_materialise_ait_ads_alert_stream_sorts_across_scenarios(
+    tmp_path: Path,
+) -> None:
+    """AIT-ADS materialisation should preserve global chronology across scenarios."""
+    source_root = _write_multi_scenario_fixture_source_tree(tmp_path)
+    raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    materialise_ait_ads_alert_stream(
+        source_root=source_root,
+        labels_path=source_root / "labels.csv",
+        raw_logs_path=raw_logs_path,
+        scenarios=("fox", "harrison"),
+    )
+
+    records = [
+        json.loads(line)
+        for line in raw_logs_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [record["scenario"] for record in records] == [
+        "harrison",
+        "fox",
+        "harrison",
+        "fox",
+        "fox",
+        "fox",
+    ]
+    assert [record["timestamp_unix_ms"] for record in records] == [
+        1642410286500,
+        1642410287000,
+        1642473487000,
+        1642473488500,
+        1642473540000,
+        1642507140000,
+    ]
 
 
 def test_ait_ads_source_uses_local_dir_sources_for_tests(tmp_path: Path) -> None:

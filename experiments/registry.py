@@ -474,7 +474,6 @@ def _resolve_dataset_manifest_path(path: Path) -> Path:
         return path.resolve()
     datasets_root = _find_datasets_root(path)
     candidates = [
-        datasets_root / "ait_ads" / path.name.removeprefix("ait_ads_"),
         datasets_root / "bgl" / path.name.removeprefix("bgl_"),
         datasets_root / "hdfs" / path.name.removeprefix("hdfs_"),
         datasets_root / "openstack" / path.name.removeprefix("openstack_"),

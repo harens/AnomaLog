@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import msgspec
 
@@ -42,6 +42,10 @@ if TYPE_CHECKING:
     from anomalog.sequences import SequenceBuilder, SequenceSplitSummary
     from experiments.config import ExperimentBundle
     from experiments.models import ModelRunSummary, SequenceSummary
+
+
+class _DatasetStatisticsBundle(Protocol):
+    dataset: DatasetVariantConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,8 +246,7 @@ def build_dataset_manifest(
                     raw_logs_path=raw_logs_path,
                 ),
             }
-            if bundle.dataset.preset is not None
-            and bundle.dataset.preset.startswith("ait_ads_")
+            if bundle.dataset.preset == "ait_ads"
             else {}
         ),
         "timestamp_bounds": {
@@ -282,7 +285,7 @@ def build_dataset_manifest(
 
 def _build_dataset_statistics(
     *,
-    bundle: ExperimentBundle,
+    bundle: _DatasetStatisticsBundle,
     raw_logs_path: Path,
 ) -> dict[str, object] | None:
     """Return optional dataset-specific manifest statistics.
@@ -296,9 +299,7 @@ def _build_dataset_statistics(
         dict[str, object] | None: AIT-ADS-specific summary fields, or `None`
         when the dataset family does not expose those statistics.
     """
-    if bundle.dataset.preset is None or not bundle.dataset.preset.startswith(
-        "ait_ads_",
-    ):
+    if bundle.dataset.preset != "ait_ads":
         return None
 
     total_alerts = 0

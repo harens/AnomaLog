@@ -78,14 +78,10 @@ The checked-in dataset-manifest set is split by dataset family:
   template vocabulary while preserving the file-boundary split contract.
   The manifest also carries template-frequency, Markov, and DeepCASE
   comparators for the same file boundary.
-- `ait_ads/<scenario>.toml` covers the AIT Alert Data Set (AIT-ADS) one
-  scenario at a time for `fox`, `harrison`, `russellmitchell`, `santos`,
-  `shaw`, `wardbeck`, `wheeler`, and `wilson`. Each scenario manifest now
-  keeps only the shared dataset contract while the registry defines the named
-  model pairings that should run against it. The AIT-ADS source emits stable
-  semantic alert keys from AMiner, Wazuh, and Suricata metadata, so the
-  manifests intentionally use the identity template parser rather than
-  re-mining templates from already-normalised keys.
+- `ait_ads/base.toml` is the paper-compatible AIT-ADS public-dataset probe.
+  It combines all eight scenarios into one globally chronological alert
+  stream, uses the combined `AIT_ADS` preset, and keeps the evaluation unit on
+  the continuous event stream so the alert order mirrors the published data.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix on entity-grouped
@@ -102,7 +98,7 @@ training contract.
 The central registry is intentionally small. It now has four concepts:
 
 - `model_sets` define reusable detector families such as `baselines`,
-  `deeplog`, and `deepcase`.
+  `deeplog`, `deepcase`, and the AIT-specific `ait_alert_baselines` set.
 - `experiment_presets` combine model sets and shared overrides into reusable
   experiment profiles.
 - `experiments` name one dataset and the preset that should run on it.
@@ -337,9 +333,9 @@ For built-in datasets, prefer `preset = "bgl"`, `preset = "hdfs_v1"`, or
 `preset = "openstack_deeplog_preprocessed"` depending on whether you want the
 LogHub-style raw corpus or the DeepLog-style preprocessed session files with
 the exact train/test file boundary. For AIT-ADS, prefer the checked-in
-`ait_ads/<scenario>.toml` manifests so the chronological stream split and
-canonical alert-key contract stay consistent across detector families. Use the
-registry to choose which model config should run for each named experiment.
+`ait_ads/base.toml` manifest so the chronological stream split and canonical
+alert-key contract stay consistent across detector families. Use the registry
+to choose which model config should run for each named experiment.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Use `[dataset.cache_paths] namespace = "..."` when you want dataset-scoped
 cache and data roots without spelling out both paths separately. The namespace
@@ -380,17 +376,16 @@ dataset = "bgl/entity_chronological"
 preset = "entity_with_deepcase"
 ```
 
-For a dataset family such as AIT-ADS, use `experiment_sets` so the dataset list
-stays to one line:
+For a dataset family such as AIT-ADS, select the explicit combined experiment
+name when you want the paper-compatible chronology:
 
 ```toml
 [experiment_presets.ait_ads]
-models = ["baselines", "deeplog", "deepcase"]
+models = ["ait_alert_baselines", "deepcase"]
 
-[experiment_sets.ait_ads]
+[experiments.ait_ads]
+dataset = "ait_ads/base"
 preset = "ait_ads"
-dataset_prefix = "ait_ads"
-datasets = ["fox", "harrison", "russellmitchell"]
 ```
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.

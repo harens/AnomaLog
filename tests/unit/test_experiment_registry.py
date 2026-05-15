@@ -50,8 +50,7 @@ def _write_registry_tree(tmp_path: Path) -> Path:
 
     for relative_path in (
         "demo",
-        "ait_ads/fox",
-        "ait_ads/harrison",
+        "ait_ads/base",
     ):
         _write_dataset_manifest(datasets_dir, relative_path)
 
@@ -105,10 +104,9 @@ def _write_registry_tree(tmp_path: Path) -> Path:
             'dataset = "demo"\n'
             'preset = "paper_deeplog"\n'
             "\n"
-            "[experiment_sets.ait_ads]\n"
+            "[experiments.ait_ads]\n"
+            'dataset = "ait_ads/base"\n'
             'preset = "entity_with_deepcase"\n'
-            'dataset_prefix = "ait_ads"\n'
-            'datasets = ["fox", "harrison"]\n'
         ),
         encoding="utf-8",
     )
@@ -129,8 +127,7 @@ def test_load_experiment_registry_exposes_metadata(
     assert registry.names() == (
         "demo",
         "demo_deeplog",
-        "ait_ads_fox",
-        "ait_ads_harrison",
+        "ait_ads",
     )
     entry = registry.require("demo")
     assert entry.dataset == "demo"

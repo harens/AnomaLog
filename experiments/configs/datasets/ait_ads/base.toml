@@ -1,19 +1,22 @@
-name = "ait_ads_base"
-description = "Shared AIT-ADS alert-stream dataset contract with canonical alert keys and chronological splitting."
+name = "ait_ads"
+description = "Primary AIT-ADS combined chronology across all scenarios."
 
 [dataset]
 template_parser = "identity"
-description = "Shared AIT-ADS scenario contract using canonical alert keys with chronological raw-entry prefix splitting."
+name = "ait_ads"
+dataset_name = "AIT_ADS"
+preset = "ait_ads"
+description = "Combined AIT-ADS chronology across all scenarios for the AACT-style public-dataset evaluation."
 evaluation_unit = "continuous_event_stream"
 
 [dataset.sequence]
 grouping = "chronological_stream"
 chunk_size = 100000
-test_fraction = 0.8
-train_fraction = 0.2
+train_fraction = 0.5
+test_fraction = 0.5
 
 [dataset.sequence.split]
 mode = "raw_entry_prefix_fraction"
 application_order = "before_grouping"
 straddling_group_policy = "split_partial_sequences"
-train_entry_fraction = 0.2
+train_entry_fraction = 0.5

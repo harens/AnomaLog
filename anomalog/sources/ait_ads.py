@@ -61,7 +61,7 @@ class _CanonicalAlert:
     alert_signature: str | None
     metadata: dict[str, object]
 
-    def sort_key(self) -> tuple[int, int, str, int]:
+    def sort_key(self) -> tuple[int, int, str, str, int]:
         """Return a deterministic chronological ordering key.
 
         The dataset ships AMiner and Wazuh alerts in separate files. Both files
@@ -72,6 +72,7 @@ class _CanonicalAlert:
         return (
             1 if self.timestamp_unix_us is None else 0,
             0 if self.timestamp_unix_us is None else self.timestamp_unix_us,
+            self.scenario,
             self.source_file,
             self.source_line_order,
         )
@@ -100,7 +101,7 @@ class AITADSScenarioSource(DatasetSource):
     """Materialise one or more AIT-ADS scenarios into a canonical alert stream."""
 
     name: ClassVar[str] = "ait_ads"
-    scenario_names: tuple[str, ...]
+    scenario_names: tuple[str, ...] = AIT_ADS_SCENARIOS
     base_source: DatasetSource = field(
         default_factory=lambda: RemoteZipSource(
             url=AIT_ADS_ARCHIVE_URL,
@@ -199,33 +200,33 @@ def materialise_ait_ads_alert_stream(
     labels_by_scenario = load_ait_ads_label_windows(labels_path)
     selected = sorted(scenario_set, key=AIT_ADS_SCENARIOS.index)
 
+    alerts: list[_CanonicalAlert] = []
+    for scenario in selected:
+        scenario_windows = labels_by_scenario[scenario]
+        assigner = _IntervalLabelAssigner(scenario_windows)
+
+        for source_name in (_AMINER_SOURCE, _WAZUH_SOURCE):
+            source_file = find_scenario_file(source_root, scenario, source_name)
+            alerts.extend(
+                iter_canonical_alerts(
+                    scenario=scenario,
+                    source_name=source_name,
+                    source_file=source_file,
+                    assigner=assigner,
+                ),
+            )
+
+    alerts.sort(key=_CanonicalAlert.sort_key)
     with raw_logs_path.open("w", encoding="utf-8") as output:
-        for scenario in selected:
-            alerts: list[_CanonicalAlert] = []
-            scenario_windows = labels_by_scenario[scenario]
-            assigner = _IntervalLabelAssigner(scenario_windows)
-
-            for source_name in (_AMINER_SOURCE, _WAZUH_SOURCE):
-                source_file = find_scenario_file(source_root, scenario, source_name)
-                alerts.extend(
-                    iter_canonical_alerts(
-                        scenario=scenario,
-                        source_name=source_name,
-                        source_file=source_file,
-                        assigner=assigner,
-                    ),
-                )
-
-            alerts.sort(key=_CanonicalAlert.sort_key)
-            for alert in alerts:
-                output.write(
-                    json.dumps(
-                        alert.as_record(),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                )
-                output.write("\n")
+        for alert in alerts:
+            output.write(
+                json.dumps(
+                    alert.as_record(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            output.write("\n")
 
 
 def load_ait_ads_label_windows(

@@ -4,6 +4,9 @@ models = ["template_frequency_default", "naive_bayes_default", "markov_default"]
 [model_sets.pair_baselines]
 models = ["template_frequency_default", "markov_default"]
 
+[model_sets.ait_alert_baselines]
+models = ["template_frequency_default", "naive_bayes_default"]
+
 [model_sets.deeplog]
 models = ["deeplog_default"]
 
@@ -41,7 +44,7 @@ models = ["deeplog", "pair_baselines", "deepcase"]
 "model.parameter_detection_enabled" = false
 
 [experiment_presets.ait_ads]
-models = ["baselines", "deeplog", "deepcase"]
+models = ["ait_alert_baselines", "deepcase"]
 
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
@@ -54,6 +57,10 @@ preset = "entity_with_deepcase"
 [experiments.openstack_deeplog_preprocessed]
 dataset = "openstack/deeplog_preprocessed"
 preset = "openstack_deeplog"
+
+[experiments.ait_ads]
+dataset = "ait_ads/base"
+preset = "ait_ads"
 
 [experiment_sets.bgl_deeplog_paper]
 preset = "bgl_deeplog_paper"
@@ -69,8 +76,3 @@ datasets = [
   "hdfs/v1_deeplog_paper_entry100k_assign_first",
   "hdfs/wuyifan18_deeplog_preprocessed",
 ]
-
-[experiment_sets.ait_ads]
-preset = "ait_ads"
-dataset_prefix = "ait_ads"
-datasets = ["fox", "harrison", "russellmitchell", "santos", "shaw", "wardbeck", "wheeler", "wilson"]
