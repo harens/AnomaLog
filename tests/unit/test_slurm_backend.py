@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 from types import SimpleNamespace
 
@@ -158,6 +159,56 @@ def test_build_wrap_script_indexes_embedded_array_by_task_id() -> None:
     assert "set -eu" in wrap_script
     assert "pipefail" not in wrap_script
     assert "bash -lc" in wrap_script
+
+
+def test_build_wrap_script_runs_under_posix_shell_and_exports_experiment(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The generated wrapper should execute under `/bin/sh`.
+
+    It must keep the selected experiment visible to the nested command.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    submission = _make_submission(repo_root=repo_root)
+    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+
+    home_dir = tmp_path / "home"
+    bin_dir = home_dir / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    capture_path = tmp_path / "uv-args.txt"
+    fake_uv = bin_dir / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$@" > "$UV_CAPTURE_PATH"\n'
+        'printf "EXPERIMENT_NAME=%s\\n" "$EXPERIMENT_NAME" >> "$UV_CAPTURE_PATH"\n'
+        'printf "RUN_NAME=%s\\n" "$RUN_NAME" >> "$UV_CAPTURE_PATH"\n',
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    env = dict(os.environ)
+    env["HOME"] = home_dir.as_posix()
+    env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    env["SLURM_ARRAY_TASK_ID"] = "1"
+    env["UV_CAPTURE_PATH"] = capture_path.as_posix()
+
+    result = slurm.subprocess.run(
+        ["/bin/sh", "-c", wrap_script],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert not result.stdout
+    assert not result.stderr
+    captured_lines = capture_path.read_text(encoding="utf-8").splitlines()
+    assert captured_lines[:2] == ["run", "python"]
+    assert "--experiment" in captured_lines
+    assert "demo_two" in captured_lines
+    assert "EXPERIMENT_NAME=demo_two" in captured_lines
+    assert "RUN_NAME=demo_two" in captured_lines
 
 
 def test_build_wrap_script_propagates_run_flags() -> None:
