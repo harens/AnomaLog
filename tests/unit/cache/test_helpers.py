@@ -347,6 +347,20 @@ def test_materialize_and_task_use_shared_result_storage_base(
     assert Path(captured_result_storage) == expected_basepath
 
 
+def test_cache_paths_config_uses_cluster_root_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Environment overrides should redirect the default cache roots."""
+    monkeypatch.setenv("ANOMALOG_DATA_ROOT", (tmp_path / "data").as_posix())
+    monkeypatch.setenv("ANOMALOG_CACHE_ROOT", (tmp_path / "cache").as_posix())
+
+    cache_paths = CachePathsConfig()
+
+    assert cache_paths.data_root == tmp_path / "data"
+    assert cache_paths.cache_root == tmp_path / "cache"
+
+
 def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> None:
     """Result storage moves should force Prefect to miss stale cached states.
 

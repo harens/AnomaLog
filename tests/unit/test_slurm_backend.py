@@ -64,7 +64,15 @@ def _make_submission(
     force: bool = False,
     write_predictions: bool = False,
     debug_reporting: bool = False,
+    cluster_roots: tuple[pathlib.Path | None, pathlib.Path | None] | None = None,
 ) -> slurm._SlurmSubmission:
+    data_root: pathlib.Path | None
+    cache_root: pathlib.Path | None
+    if cluster_roots is None:
+        data_root = None
+        cache_root = None
+    else:
+        data_root, cache_root = cluster_roots
     experiments = (
         RegisteredExperiment(
             name="demo",
@@ -99,6 +107,8 @@ def _make_submission(
         force=force,
         write_predictions=write_predictions,
         debug_reporting=debug_reporting,
+        data_root=data_root,
+        cache_root=cache_root,
     )
 
 
@@ -162,6 +172,36 @@ def test_build_wrap_script_propagates_run_flags() -> None:
     assert "--force" in wrap_script
     assert "--write-predictions" in wrap_script
     assert "--debug-reporting" in wrap_script
+
+
+def test_build_wrap_script_exports_cluster_cache_roots() -> None:
+    """Configured SLURM roots should propagate into the wrapped job environment."""
+    submission = _make_submission(
+        repo_root=pathlib.Path("/repo"),
+        cluster_roots=(
+            pathlib.Path("/data/hs1822"),
+            pathlib.Path("/data/hs1822/.cache"),
+        ),
+    )
+
+    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+
+    assert "export ANOMALOG_DATA_ROOT=/data/hs1822" in wrap_script
+    assert "export ANOMALOG_CACHE_ROOT=/data/hs1822/.cache" in wrap_script
+    assert (
+        'export PREFECT_ROOT="${PREFECT_ROOT:-${ANOMALOG_CACHE_ROOT}/prefect}"'
+        in wrap_script
+    )
+    assert (
+        'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
+        '${SLURM_TMPDIR:-${ANOMALOG_CACHE_ROOT:-${REPO_ROOT}}/uv}}"' in wrap_script
+    )
+    assert (
+        'mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"'
+        in wrap_script
+    )
+    assert 'mkdir -p "$ANOMALOG_DATA_ROOT"' in wrap_script
+    assert 'mkdir -p "$ANOMALOG_CACHE_ROOT"' in wrap_script
 
 
 def test_submit_experiments_submits_one_array_job(
@@ -283,3 +323,41 @@ def test_submit_experiments_dry_run_prints_command_and_skips_subprocess(
         )
     )
     assert not expected_log_dir.exists()
+
+
+def test_submit_experiments_uses_relative_cluster_roots_from_request(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Request-level SLURM roots should resolve relative to the repo root."""
+    registry_path, defaults_path = _write_slurm_tree(tmp_path)
+    completed = SimpleNamespace(stdout="Submitted batch job 456\n", stderr="")
+    captured: dict[str, list[str]] = {}
+
+    def _record_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> SimpleNamespace:
+        del check, capture_output, text
+        captured["command"] = command
+        return completed
+
+    monkeypatch.setattr(slurm.subprocess, "run", _record_run)
+
+    slurm.submit_experiments(
+        SlurmSubmitRequest(
+            registry_path=registry_path,
+            repo_root=tmp_path,
+            defaults_path=defaults_path,
+            groups=("baselines",),
+            data_root=pathlib.Path("cluster/data"),
+            cache_root=pathlib.Path("cluster/cache"),
+        ),
+    )
+
+    wrap_script = captured["command"][captured["command"].index("--wrap") + 1]
+    assert f"export ANOMALOG_DATA_ROOT={tmp_path / 'cluster/data'}" in wrap_script
+    assert f"export ANOMALOG_CACHE_ROOT={tmp_path / 'cluster/cache'}" in wrap_script

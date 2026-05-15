@@ -199,6 +199,16 @@ uv run python -m experiments.execution.slurm submit \
   --group hdfs_deeplog_paper
 ```
 
+Use `--data-root` and `--cache-root` when the cluster should write the
+AnomaLog dataset materialisation and cache roots somewhere other than the
+repository tree. These act as base roots: a dataset manifest that declares
+`[dataset.cache_paths] namespace = "hdfs_entity"` will resolve to
+`<data-root>/hdfs_entity` and `<cache-root>/hdfs_entity`, and the dataset
+builder will then place the dataset-specific artefacts beneath those
+directories. For example, if you want the HDFS entity runs to live under
+`/data/hs1822`, submit with `--data-root /data/hs1822` and
+`--cache-root /data/hs1822/.cache`.
+
 Use `--dry-run` with either runner to preview the selected experiments without
 executing them. The Slurm backend now submits one Slurm job array for the
 selected experiments, leaving scheduling and any cluster-side concurrency
@@ -328,9 +338,10 @@ canonical alert-key contract stay consistent across detector families. Use the
 registry to choose which model config should run for each named experiment.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
 Use `[dataset.cache_paths] namespace = "..."` when you want dataset-scoped
-cache and data roots without spelling out both paths separately. Omit
-`[cache_paths]` entirely to use AnomaLog's default platformdirs-based
-cache/data locations.
+cache and data roots without spelling out both paths separately. The namespace
+is resolved relative to the active base roots, so it stays portable across the
+repository tree and cluster-local overrides. Omit `[cache_paths]` entirely to
+use AnomaLog's default platformdirs-based cache/data locations.
 
 To add or update a dataset manifest, edit the relevant file in
 `configs/datasets/`. Use `[overrides]` for fixed adjustments such as changing

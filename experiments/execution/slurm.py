@@ -27,6 +27,10 @@ class _SlurmDefaults:
         mem (str): Memory to reserve for each task.
         gres (str): Generic resource reservation for each task.
         partition (str | None): Optional Slurm partition name.
+        data_root (Path | None): Optional base root for AnomaLog data
+            materialisation on the cluster.
+        cache_root (Path | None): Optional base root for AnomaLog caches and
+            Prefect/UV job state on the cluster.
     """
 
     time: str = "24:00:00"
@@ -34,6 +38,8 @@ class _SlurmDefaults:
     mem: str = "32G"
     gres: str = "gpu:1"
     partition: str | None = None
+    data_root: Path | None = None
+    cache_root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +59,10 @@ class SlurmSubmitRequest:
             directories.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
         debug_reporting (bool): Whether to retain verbose run diagnostics.
+        data_root (Path | None): Optional base root for cluster-local data
+            materialisation.
+        cache_root (Path | None): Optional base root for cluster-local cache
+            and Prefect state.
     """
 
     registry_path: Path = Path("experiments/configs/registry.toml")
@@ -64,6 +74,8 @@ class SlurmSubmitRequest:
     force: bool = False
     write_predictions: bool = False
     debug_reporting: bool = False
+    data_root: Path | None = None
+    cache_root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +96,8 @@ class _SlurmSubmission:
             predictions.
         debug_reporting (bool): Whether the run command should keep verbose
             diagnostics.
+        data_root (Path | None): Base root for data materialisation exports.
+        cache_root (Path | None): Base root for cache and Prefect exports.
     """
 
     experiments: tuple[RegisteredExperiment, ...]
@@ -94,6 +108,8 @@ class _SlurmSubmission:
     force: bool
     write_predictions: bool
     debug_reporting: bool
+    data_root: Path | None
+    cache_root: Path | None
 
 
 def load_slurm_defaults(
@@ -157,6 +173,14 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
         msg = "No registry experiments were selected."
         raise ConfigError(msg)
     defaults = load_slurm_defaults(resolved_defaults_path, repo_root=resolved_repo_root)
+    data_root = _resolve_optional_path(
+        request.data_root if request.data_root is not None else defaults.data_root,
+        repo_root=resolved_repo_root,
+    )
+    cache_root = _resolve_optional_path(
+        request.cache_root if request.cache_root is not None else defaults.cache_root,
+        repo_root=resolved_repo_root,
+    )
     log_dir = (
         resolved_repo_root
         / "experiments"
@@ -175,6 +199,8 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
         force=request.force,
         write_predictions=request.write_predictions,
         debug_reporting=request.debug_reporting,
+        data_root=data_root,
+        cache_root=cache_root,
     )
     command = build_sbatch_command(submission)
     if request.dry_run:
@@ -285,6 +311,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep verbose diagnostics in the run artefacts.",
     )
+    submit_parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help=(
+            "Base root for AnomaLog data materialisation inside the Slurm job. "
+            "Relative paths resolve against --repo-root."
+        ),
+    )
+    submit_parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=None,
+        help=(
+            "Base root for AnomaLog caches and Prefect/UV state inside the "
+            "Slurm job. Relative paths resolve against --repo-root."
+        ),
+    )
     return parser
 
 
@@ -314,6 +358,8 @@ def main() -> int:
                 force=args.force,
                 write_predictions=args.write_predictions,
                 debug_reporting=args.debug_reporting,
+                data_root=args.data_root,
+                cache_root=args.cache_root,
             ),
         )
     except (ConfigError, FileExistsError, ValueError) as exc:
@@ -352,7 +398,7 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
             "  exit 1",
             "fi",
             'export RUN_NAME="$EXPERIMENT_NAME"',
-            'export PREFECT_ROOT="${PREFECT_ROOT:-${REPO_ROOT}/prefect}"',
+            *_build_path_exports(submission),
             'export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"',
             'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"',
             (
@@ -361,13 +407,21 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
             ),
             (
                 'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
-                '${SLURM_TMPDIR:-${REPO_ROOT}/.cache/uv}}"'
+                '${SLURM_TMPDIR:-${ANOMALOG_CACHE_ROOT:-${REPO_ROOT}}/uv}}"'
             ),
             (
                 "export PREFECT_API_DATABASE_CONNECTION_URL="
                 '"sqlite+aiosqlite:///${PREFECT_HOME}/prefect.db"'
             ),
             'mkdir -p "$PREFECT_HOME" "$PREFECT_LOCAL_STORAGE_PATH" "$UV_CACHE_DIR"',
+            (
+                'if [ -n "${ANOMALOG_DATA_ROOT:-}" ]; then '
+                'mkdir -p "$ANOMALOG_DATA_ROOT"; fi'
+            ),
+            (
+                'if [ -n "${ANOMALOG_CACHE_ROOT:-}" ]; then '
+                'mkdir -p "$ANOMALOG_CACHE_ROOT"; fi'
+            ),
             'cd "$REPO_ROOT"',
             wrapped_command,
         ],
@@ -410,6 +464,36 @@ def _resolve_path(path: Path, repo_root: Path) -> Path:
     if path.is_absolute():
         return path
     return repo_root / path
+
+
+def _resolve_optional_path(path: Path | None, *, repo_root: Path) -> Path | None:
+    if path is None:
+        return None
+    return _resolve_path(path, repo_root)
+
+
+def _build_path_exports(submission: _SlurmSubmission) -> list[str]:
+    exports: list[str] = []
+    if submission.data_root is not None:
+        exports.append(
+            f"export ANOMALOG_DATA_ROOT={shlex.quote(submission.data_root.as_posix())}",
+        )
+    if submission.cache_root is not None:
+        quoted_cache_root = shlex.quote(submission.cache_root.as_posix())
+        exports.extend(
+            [
+                f"export ANOMALOG_CACHE_ROOT={quoted_cache_root}",
+                'export PREFECT_ROOT="${PREFECT_ROOT:-${ANOMALOG_CACHE_ROOT}/prefect}"',
+            ],
+        )
+    else:
+        exports.append(
+            (
+                'export PREFECT_ROOT="${PREFECT_ROOT:-'
+                '${ANOMALOG_CACHE_ROOT:-${REPO_ROOT}}/prefect}"'
+            ),
+        )
+    return exports
 
 
 def _format_sbatch_command_preview(command: list[str]) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -336,11 +337,21 @@ class CachePathsConfigModel(msgspec.Struct, frozen=True):
             ConfigError: If the config is invalid or incomplete.
         """
         if self.namespace is not None:
-            namespace_root = Path("data") / self.namespace
-            cache_namespace_root = Path(".cache") / self.namespace
+            namespace_root = _namespace_root(
+                self.namespace,
+                repo_root=repo_root,
+                env_var="ANOMALOG_DATA_ROOT",
+                fallback_prefix=Path("data"),
+            )
+            cache_namespace_root = _namespace_root(
+                self.namespace,
+                repo_root=repo_root,
+                env_var="ANOMALOG_CACHE_ROOT",
+                fallback_prefix=Path(".cache"),
+            )
             return CachePathsConfig(
-                data_root=_resolve_path(namespace_root, repo_root),
-                cache_root=_resolve_path(cache_namespace_root, repo_root),
+                data_root=namespace_root,
+                cache_root=cache_namespace_root,
             )
         if self.data_root is None or self.cache_root is None:
             msg = (
@@ -1029,6 +1040,22 @@ def _resolve_path(path: Path, repo_root: Path) -> Path:
     if path.is_absolute():
         return path
     return repo_root / path
+
+
+def _namespace_root(
+    namespace: str,
+    *,
+    repo_root: Path,
+    env_var: str,
+    fallback_prefix: Path,
+) -> Path:
+    base_root = os.environ.get(env_var)
+    if base_root:
+        resolved_base_root = Path(base_root).expanduser()
+        if not resolved_base_root.is_absolute():
+            resolved_base_root = _resolve_path(resolved_base_root, repo_root)
+        return resolved_base_root / namespace
+    return _resolve_path(fallback_prefix / namespace, repo_root)
 
 
 def _optional_posix_path(path: Path | None) -> str | None:

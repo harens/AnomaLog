@@ -31,6 +31,7 @@ from experiments.config import (
     RemoteZipSourceConfig,
     load_experiment_bundles,
 )
+from experiments.config_types import CachePathsConfigModel
 from experiments.datasets import build_dataset_spec, dataset_source_summary
 from experiments.models.deepcase.detector import DeepCaseModelConfig
 from experiments.models.deeplog.detector import DeepLogModelConfig
@@ -480,6 +481,20 @@ def test_load_experiment_bundles_supports_extends(
     assert bundle.dataset.cache_paths.namespace == "child"
     assert bundle.model.name == "template_frequency_default"
     assert bundle.run_group == "baselines"
+
+
+def test_cache_paths_namespace_uses_cluster_base_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Namespace expansion should honour the configured cluster base roots."""
+    monkeypatch.setenv("ANOMALOG_DATA_ROOT", (tmp_path / "data-base").as_posix())
+    monkeypatch.setenv("ANOMALOG_CACHE_ROOT", (tmp_path / "cache-base").as_posix())
+
+    resolved = CachePathsConfigModel(namespace="child").resolve(repo_root=tmp_path)
+
+    assert resolved.data_root == tmp_path / "data-base" / "child"
+    assert resolved.cache_root == tmp_path / "cache-base" / "child"
 
 
 def test_load_experiment_bundles_rejects_missing_extends_target(

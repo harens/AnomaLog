@@ -1,5 +1,6 @@
 """Cache utilities and Prefect helpers for AnomaLog flows."""
 
+import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -41,6 +42,20 @@ class _ResultStorageLike(Protocol):
     basepath: str | Path | None
 
 
+def _default_data_root() -> Path:
+    env_root = os.environ.get("ANOMALOG_DATA_ROOT")
+    if env_root:
+        return Path(env_root).expanduser()
+    return Path(user_data_dir("anomalog"))
+
+
+def _default_cache_root() -> Path:
+    env_root = os.environ.get("ANOMALOG_CACHE_ROOT")
+    if env_root:
+        return Path(env_root).expanduser()
+    return Path(user_cache_dir("anomalog"))
+
+
 @dataclass(frozen=True, slots=True)
 class CachePathsConfig:
     """Resolved locations for data and cache storage.
@@ -56,8 +71,8 @@ class CachePathsConfig:
             cache storage.
     """
 
-    data_root: Path = field(default_factory=lambda: Path(user_data_dir("anomalog")))
-    cache_root: Path = field(default_factory=lambda: Path(user_cache_dir("anomalog")))
+    data_root: Path = field(default_factory=_default_data_root)
+    cache_root: Path = field(default_factory=_default_cache_root)
 
 
 class MaterializeTaskOptions(TypedDict, total=False):
