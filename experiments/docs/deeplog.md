@@ -88,9 +88,9 @@ diverge is short-session handling:
   with DeepCASE. The diagnostic vocabulary policy is configurable on
   `DeepLogModelConfig`; `train_only` remains available when you want the
   report restricted to the training vocabulary used by the key scorer. The
-  run-level payload also includes `segment_diagnostics`, which summarises the
-  effective prediction segments, their warm-up cost, and a small segment
-  length histogram so stream-boundary resets are visible in `metrics.json`.
+  default `metrics.json` keeps the paper-facing aggregates only; run with
+  `--debug-reporting` if you need the full segment bookkeeping and raw top-k
+  hit counts while debugging a reproduction.
 - Scoped metrics:
   `metrics.json` now carries task-aware blocks such as
   `event_level_detection`, `sequence_level_detection`, and

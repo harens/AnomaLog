@@ -9,6 +9,7 @@ import shlex
 import shutil
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,7 @@ from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.models.evaluate import PredictionOutputConfig
 from experiments.results import (
+    ResultWriteContext,
     build_run_metrics_report,
     build_sequence_split_summary,
     prepare_result_paths,
@@ -35,6 +37,16 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 _PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
+
+
+@dataclass(frozen=True, slots=True)
+class _BundleGroupRequest:
+    config_path: Path
+    bundles: list[ExperimentBundle]
+    bundle_indexes: list[int]
+    force: bool
+    write_predictions: bool
+    debug_reporting: bool
 
 
 class SharedConsoleHandler(logging.Handler):
@@ -69,6 +81,7 @@ def run_experiment(
     *,
     force: bool = False,
     write_predictions: bool = False,
+    debug_reporting: bool = False,
 ) -> list[Path]:
     """Run one dataset manifest and return all concrete result directories.
 
@@ -78,6 +91,8 @@ def run_experiment(
             directories.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
             each concrete run.
+        debug_reporting (bool): Whether to keep the verbose diagnostic payloads
+            and logging output in the run artefacts.
 
     Returns:
         list[Path]: Deterministic run directories containing the written
@@ -94,11 +109,14 @@ def run_experiment(
     for bundle_indexes in _group_bundle_indexes_by_run_group(bundles):
         results.extend(
             _run_bundle_group(
-                config_path=config_path,
-                bundles=bundles,
-                bundle_indexes=bundle_indexes,
-                force=force,
-                write_predictions=write_predictions,
+                _BundleGroupRequest(
+                    config_path=config_path,
+                    bundles=bundles,
+                    bundle_indexes=bundle_indexes,
+                    force=force,
+                    write_predictions=write_predictions,
+                    debug_reporting=debug_reporting,
+                ),
             ),
         )
     return results
@@ -118,11 +136,16 @@ def _resolve_max_workers(
 
 
 def _run_bundle_from_manifest_payload(
-    payload: tuple[Path, int, bool, bool],
+    payload: tuple[Path, int, bool, bool, bool],
 ) -> Path:
-    config_path, index, force, write_predictions = payload
+    config_path, index, force, write_predictions, debug_reporting = payload
     bundle = load_experiment_bundles(config_path)[index]
-    return _run_bundle(bundle, force=force, write_predictions=write_predictions)
+    return _run_bundle(
+        bundle,
+        force=force,
+        write_predictions=write_predictions,
+        debug_reporting=debug_reporting,
+    )
 
 
 def _group_bundle_indexes_by_run_group(
@@ -143,14 +166,9 @@ def _group_bundle_indexes_by_run_group(
 
 
 def _run_bundle_group(
-    *,
-    config_path: Path,
-    bundles: list[ExperimentBundle],
-    bundle_indexes: list[int],
-    force: bool,
-    write_predictions: bool,
+    request: _BundleGroupRequest,
 ) -> list[Path]:
-    grouped_bundles = [bundles[index] for index in bundle_indexes]
+    grouped_bundles = [request.bundles[index] for index in request.bundle_indexes]
     max_workers = _resolve_max_workers(
         requested_workers=grouped_bundles[0].sweep.max_workers,
         bundle_count=len(grouped_bundles),
@@ -159,8 +177,9 @@ def _run_bundle_group(
         return [
             _run_bundle(
                 bundle,
-                force=force,
-                write_predictions=write_predictions,
+                force=request.force,
+                write_predictions=request.write_predictions,
+                debug_reporting=request.debug_reporting,
             )
             for bundle in grouped_bundles
         ]
@@ -169,8 +188,14 @@ def _run_bundle_group(
             executor.map(
                 _run_bundle_from_manifest_payload,
                 [
-                    (config_path, index, force, write_predictions)
-                    for index in bundle_indexes
+                    (
+                        request.config_path,
+                        index,
+                        request.force,
+                        request.write_predictions,
+                        request.debug_reporting,
+                    )
+                    for index in request.bundle_indexes
                 ],
             ),
         )
@@ -181,6 +206,7 @@ def _run_bundle(
     *,
     force: bool = False,
     write_predictions: bool = False,
+    debug_reporting: bool = False,
 ) -> Path:
     """Execute one concrete run derived from a dataset manifest.
 
@@ -190,6 +216,8 @@ def _run_bundle(
             directory.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
             the concrete run.
+        debug_reporting (bool): Whether to keep verbose diagnostic payloads in
+            the run artefacts and logs.
 
     Returns:
         Path: Deterministic run directory containing the written artefacts.
@@ -287,19 +315,23 @@ def _run_bundle(
             bundle=bundle,
             sequences=bundle.dataset.sequence.apply(templated),
             model_summary=model_summary,
+            debug_reporting=debug_reporting,
         )
-        _log_metric_report(logger, metric_report)
+        _log_metric_report(logger, metric_report, debug_reporting=debug_reporting)
         logger.info(
             "Model run complete with %s sequences",
             model_summary.sequence_summary.sequence_count,
         )
         sequences_for_outputs = bundle.dataset.sequence.apply(templated)
         write_run_outputs(
-            bundle=bundle,
-            templated=templated,
-            sequences=sequences_for_outputs,
-            model_summary=model_summary,
-            result_paths=result_paths,
+            context=ResultWriteContext(
+                bundle=bundle,
+                templated=templated,
+                sequences=sequences_for_outputs,
+                model_summary=model_summary,
+                result_paths=result_paths,
+                debug_reporting=debug_reporting,
+            ),
         )
         logger.info(
             "Wrote experiment artifacts to %s",
@@ -308,26 +340,35 @@ def _run_bundle(
     return result_paths.run_dir
 
 
-def _log_metric_report(logger: logging.Logger, report: dict[str, Any]) -> None:
+def _log_metric_report(
+    logger: logging.Logger,
+    report: dict[str, Any],
+    *,
+    debug_reporting: bool,
+) -> None:
     """Log the selected primary metric scope and notable secondary blocks.
 
     Args:
         logger (logging.Logger): Experiment-run logger used for output.
         report (dict[str, Any]): Serialised metrics report for the run.
+        debug_reporting (bool): Whether verbose diagnostics should be logged.
     """
-    _log_primary_metric_report(logger, report)
-    _log_metric_block_warnings(logger, report)
+    _log_primary_metric_report(logger, report, debug_reporting=debug_reporting)
+    _log_metric_block_warnings(logger, report, debug_reporting=debug_reporting)
 
 
 def _log_primary_metric_report(
     logger: logging.Logger,
     report: dict[str, Any],
+    *,
+    debug_reporting: bool,
 ) -> None:
     """Log the selected primary metric block details.
 
     Args:
         logger (logging.Logger): Experiment-run logger used for output.
         report (dict[str, Any]): Serialised metrics report for the run.
+        debug_reporting (bool): Whether verbose diagnostics should be logged.
     """
     primary_metric_scope = report.get("primary_metric_scope")
     logger.info("Primary metric scope: %s", primary_metric_scope)
@@ -343,26 +384,24 @@ def _log_primary_metric_report(
         headline_metrics = primary_metrics_mapping.get("headline_metrics")
         if isinstance(headline_metrics, dict) and headline_metrics:
             logger.info("Primary headline metrics: %s", headline_metrics)
-        diagnostics = primary_metrics_mapping.get("diagnostics")
-        if isinstance(diagnostics, dict):
-            if "auto_coverage" in diagnostics:
-                logger.info("Primary auto coverage: %s", diagnostics["auto_coverage"])
-            if "abstain_rate" in diagnostics:
-                logger.info("Primary abstain rate: %s", diagnostics["abstain_rate"])
-            top_k = diagnostics.get("top_k")
-            if isinstance(top_k, dict):
-                logger.info("Primary next-event top-k: %s", top_k.get("accuracy"))
+        if debug_reporting:
+            diagnostics = primary_metrics_mapping.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                logger.debug("Primary diagnostics: %s", diagnostics)
 
 
 def _log_metric_block_warnings(
     logger: logging.Logger,
     report: dict[str, Any],
+    *,
+    debug_reporting: bool,
 ) -> None:
     """Log warnings for invalid or diagnostic-only metric blocks.
 
     Args:
         logger (logging.Logger): Experiment-run logger used for output.
         report (dict[str, Any]): Serialised metrics report for the run.
+        debug_reporting (bool): Whether verbose diagnostics should be logged.
     """
     metric_blocks = report.get("metric_blocks")
     if not isinstance(metric_blocks, dict):
@@ -372,12 +411,14 @@ def _log_metric_block_warnings(
             continue
         block_mapping: dict[str, Any] = block
         status = block_mapping.get("status")
-        if status in {"invalid", "diagnostic_only"}:
+        if status == "invalid":
             reason = block_mapping.get("invalid_reason")
             if reason is not None:
                 logger.warning("Metric block %s is %s: %s", scope, status, reason)
             else:
                 logger.warning("Metric block %s is %s", scope, status)
+        elif status == "diagnostic_only" and debug_reporting:
+            logger.info("Metric block %s is diagnostic-only", scope)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -403,6 +444,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write predictions.jsonl for each run.",
     )
+    parser.add_argument(
+        "--debug-reporting",
+        action="store_true",
+        help="Keep verbose diagnostic fields and logging in the run artefacts.",
+    )
     return parser
 
 
@@ -419,6 +465,7 @@ def main() -> int:
             args.config,
             force=args.force,
             write_predictions=args.write_predictions,
+            debug_reporting=args.debug_reporting,
         )
     except (ConfigError, FileExistsError, ValueError) as exc:
         parser.exit(status=2, message=f"{exc}\n")

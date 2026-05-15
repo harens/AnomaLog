@@ -156,6 +156,9 @@ def _assert_deepcase_metrics(
     assert len(predictions) == metrics["test_sequence_count"]
     assert next_event_prediction["diagnostics"]["task"] == "next_event_prediction"
     assert "classification_top1_weighted" in next_event_prediction["diagnostics"]
+    assert "classification_top1_macro" not in next_event_prediction["diagnostics"]
+    assert "segment_diagnostics" not in next_event_prediction["diagnostics"]
+    assert "hit_count" not in next_event_prediction["diagnostics"]["top_k"]
     assert manual_workload_reduction["diagnostics"]["mode"] == "manual"
     assert semi_automatic_workload_reduction["diagnostics"]["mode"] == "semi_automatic"
 
@@ -224,13 +227,9 @@ def _assert_deepcase_prediction_diagnostics(
         event_decision_metrics["event_abstained_decision_count"]
         / event_decision_metrics["event_count"],
     )
-    assert "sequence_evidence_totals" not in prediction_diagnostics
-    assert "sequence_evidence_category_counts" not in prediction_diagnostics
-    assert "sequence_evidence_by_true_label" not in prediction_diagnostics
-    assert "sequence_event_count_summaries" not in prediction_diagnostics
-    assert (
-        "blocked_from_confident_normal_no_malicious_count" not in prediction_diagnostics
-    )
+    assert "reason_counts" not in prediction_diagnostics
+    assert "abstained_anomalous_label_count" not in prediction_diagnostics
+    assert "abstained_normal_label_count" not in prediction_diagnostics
 
 
 def _assert_deepcase_model_manifest(
@@ -249,6 +248,7 @@ def _assert_deepcase_model_manifest(
     assert "known_malicious_cluster_count" in model_manifest
     assert "unknown_cluster_score_count" in model_manifest
     assert "random_seed" in model_manifest
+    assert "reason_counts" not in model_manifest["prediction_diagnostics"]
     assert sequence_split_summary["train_on_normal_entities_only"] is False
     assert sequence_config["train_fraction"] == pytest.approx(
         sequence_split_summary["requested_train_fraction"],

@@ -1,12 +1,13 @@
 """Tests for experiment result manifest helpers."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import experiments.results as experiment_results
 from anomalog.sequences import EntitySequenceBuilder
 from experiments.models.base import SequenceSummary
-from experiments.results import build_sequence_split_summary
 from tests.unit.helpers import InMemoryStructuredSink, NullStructuredParser
 
 
@@ -34,7 +35,7 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
         expected_train_sequence_count / expected_sequence_count,
         8,
     )
-    summary = build_sequence_split_summary(
+    summary = experiment_results.build_sequence_split_summary(
         EntitySequenceBuilder(
             sink=InMemoryStructuredSink(
                 dataset_name="demo",
@@ -78,3 +79,102 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
         summary.effective_train_fraction_overall
         == expected_effective_overall_train_fraction
     )
+
+
+def test_compact_run_metrics_report_drops_debug_only_diagnostics() -> None:
+    """Default metrics reports should keep the paper-facing next-event summary."""
+    report: dict[str, Any] = {
+        "metric_blocks": {
+            "next_event_prediction": {
+                "diagnostics": {
+                    "task": "next_event_prediction",
+                    "totals": {"coverage": 0.5},
+                    "top_k": {
+                        "k_values": [1, 2],
+                        "hit_count": {"1": 3},
+                        "accuracy": {},
+                    },
+                    "classification_top1_macro": {"precision": 0.1},
+                    "classification_top1_weighted": {"precision": 0.2},
+                    "exclusions": {"insufficient_history": 4},
+                    "segment_diagnostics": {"segment_count": 2},
+                    "vocabulary_policy": "full_dataset",
+                },
+            },
+        },
+    }
+
+    compact_report: dict[str, Any] = experiment_results._compact_run_metrics_report(  # noqa: SLF001
+        report,
+        debug_reporting=False,
+    )
+    diagnostics: dict[str, Any] = compact_report["metric_blocks"][
+        "next_event_prediction"
+    ]["diagnostics"]
+
+    assert "classification_top1_macro" not in diagnostics
+    assert "segment_diagnostics" not in diagnostics
+    assert diagnostics["top_k"] == {"k_values": [1, 2], "accuracy": {}}
+    assert "hit_count" not in diagnostics["top_k"]
+    assert diagnostics["classification_top1_weighted"] == {"precision": 0.2}
+
+
+def test_compact_model_manifest_trims_debug_only_fields() -> None:
+    """Persisted manifests should keep only the compact detector summaries."""
+    deeplog_manifest: dict[str, Any] = {
+        "detector": "deeplog",
+        "parameter_models": [{"template": "T"}],
+        "skipped_parameter_models": [{"template": "S"}],
+        "train_key_vocabulary_size": 3,
+    }
+    deepcase_manifest: dict[str, Any] = {
+        "detector": "deepcase",
+        "prediction_diagnostics": {
+            "event_count": 10,
+            "confident_event_count": 7,
+            "abstained_event_count": 3,
+            "confident_anomaly_event_count": 2,
+            "sequence_confident_anomaly_count": 1,
+            "sequence_confident_normal_count": 4,
+            "sequence_abstained_count": 2,
+            "abstained_anomalous_label_count": 1,
+            "abstained_normal_label_count": 2,
+            "reason_counts": {"known_benign_cluster": 8},
+            "event_decision_metrics": {
+                "event_count": 10,
+                "event_auto_decision_count": 7,
+                "event_abstained_decision_count": 3,
+                "event_auto_coverage": 0.7,
+                "event_abstain_rate": 0.3,
+                "event_tp": 2,
+                "event_fp": 1,
+                "event_tn": 3,
+                "event_fn": 1,
+                "event_precision": 0.5,
+                "event_recall": 0.4,
+                "event_f1": 0.44,
+                "event_accuracy": 0.6,
+                "event_predicted_normal_count": 5,
+                "event_predicted_anomalous_count": 2,
+                "event_true_normal_count": 6,
+                "event_true_anomalous_count": 4,
+            },
+        },
+    }
+
+    compact_deeplog: dict[str, Any] = experiment_results._compact_model_manifest(  # noqa: SLF001
+        deeplog_manifest,
+        debug_reporting=False,
+    )
+    compact_deepcase: dict[str, Any] = experiment_results._compact_model_manifest(  # noqa: SLF001
+        deepcase_manifest,
+        debug_reporting=False,
+    )
+
+    assert "parameter_models" not in compact_deeplog
+    assert "skipped_parameter_models" not in compact_deeplog
+    prediction_diagnostics: dict[str, Any] = compact_deepcase["prediction_diagnostics"]
+    assert "reason_counts" not in prediction_diagnostics
+    assert "abstained_anomalous_label_count" not in prediction_diagnostics
+    assert "abstained_normal_label_count" not in prediction_diagnostics
+    assert "event_decision_metrics" in prediction_diagnostics

@@ -215,14 +215,6 @@ def _assert_deeplog_next_event_block(
     totals = _object_dict(next_event_prediction["diagnostics"]["totals"])
     top_k = _object_dict(next_event_prediction["diagnostics"]["top_k"])
     exclusions = _object_dict(next_event_prediction["diagnostics"]["exclusions"])
-    segment_diagnostics_raw = next_event_prediction["diagnostics"][
-        "segment_diagnostics"
-    ]
-    assert isinstance(segment_diagnostics_raw, dict)
-    segment_diagnostics = {
-        str(key): value for key, value in segment_diagnostics_raw.items()
-    }
-    hit_count = _object_dict(top_k["hit_count"])
     accuracy = _object_dict(top_k["accuracy"])
     assert _int_value(totals, "events_seen") >= _int_value(
         metrics,
@@ -231,23 +223,15 @@ def _assert_deeplog_next_event_block(
     assert _int_value(totals, "events_eligible") > 0
     assert 0.0 < _float_value(totals, "coverage") <= 1.0
     assert _list_value(top_k, "k_values") == expected_k_values
-    assert "1" in hit_count
     assert "1" in accuracy
-    assert any(_int_value(hit_count, key) > 0 for key in hit_count)
     assert any(_float_value(accuracy, key) > 0.0 for key in accuracy)
     assert _int_value(exclusions, "insufficient_history") >= 0
     assert _int_value(exclusions, "unknown_history") >= 0
     assert _int_value(exclusions, "unknown_target") >= 0
     assert next_event_prediction["diagnostics"]["vocabulary_policy"] == "full_dataset"
-    assert _int_value(segment_diagnostics, "segment_count") >= 1
-    assert _int_value(segment_diagnostics, "history_size") > 0
-    assert (
-        _int_value(
-            segment_diagnostics,
-            "expected_insufficient_history_from_segments",
-        )
-        >= 0
-    )
+    assert "hit_count" not in top_k
+    assert "classification_top1_macro" not in next_event_prediction["diagnostics"]
+    assert "segment_diagnostics" not in next_event_prediction["diagnostics"]
 
 
 def _assert_deeplog_manifest(
@@ -261,14 +245,6 @@ def _assert_deeplog_manifest(
     model_manifest_raw = manifest["model_manifest"]
     assert isinstance(model_manifest_raw, dict)
     model_manifest = {str(key): value for key, value in model_manifest_raw.items()}
-    parameter_models_raw = model_manifest["parameter_models"]
-    assert isinstance(parameter_models_raw, list)
-    parameter_models: list[dict[str, Any]] = []
-    for parameter_model in parameter_models_raw:
-        assert isinstance(parameter_model, dict)
-        parameter_models.append(
-            {str(key): value for key, value in parameter_model.items()},
-        )
     assert model_manifest["detector"] == deeplog_model.detector
     assert model_manifest["history_size"] == deeplog_model.history_size
     assert model_manifest["top_g"] == deeplog_model.top_g
@@ -284,7 +260,8 @@ def _assert_deeplog_manifest(
         model_manifest["parameter_detection_enabled"]
         == deeplog_model.parameter_detection_enabled
     )
-    assert parameter_models == []
+    assert "parameter_models" not in model_manifest
+    assert "skipped_parameter_models" not in model_manifest
     sequence_config = bundle.dataset.sequence
     sequence_split_summary = _object_dict(manifest["sequence_split_summary"])
     assert sequence_split_summary.get("train_on_normal_entities_only") is None
