@@ -390,7 +390,7 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
         str: Shell script executed by `sbatch`.
     """
     wrapped_command = _build_run_command(submission)
-    experiment_array = "\n".join(
+    experiment_loop = "\n".join(
         f"  {shlex.quote(experiment.name)}" for experiment in submission.experiments
     )
     return "\n".join(
@@ -398,10 +398,17 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
             'export PATH="${HOME}/.local/bin:${PATH}"',
             f"export REPO_ROOT={shlex.quote(submission.repo_root.as_posix())}",
             "set -eu",
-            "EXPERIMENTS=(",
-            experiment_array,
-            ")",
-            'EXPERIMENT_NAME="${EXPERIMENTS[$SLURM_ARRAY_TASK_ID]:-}"',
+            "EXPERIMENT_NAME=",
+            "EXPERIMENT_INDEX=0",
+            "for EXPERIMENT in",
+            experiment_loop,
+            "do",
+            '  if [ "$EXPERIMENT_INDEX" -eq "$SLURM_ARRAY_TASK_ID" ]; then',
+            "    EXPERIMENT_NAME=$EXPERIMENT",
+            "    break",
+            "  fi",
+            "  EXPERIMENT_INDEX=$((EXPERIMENT_INDEX + 1))",
+            "done",
             'if [ -z "$EXPERIMENT_NAME" ]; then',
             (
                 "  printf 'Missing experiment entry for "
