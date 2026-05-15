@@ -168,7 +168,14 @@ def test_submit_experiments_submits_one_array_job(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Submitting multiple registry entries should call `sbatch` once."""
+    """Submitting multiple registry entries should call `sbatch` once.
+
+    Args:
+        tmp_path (pathlib.Path): Temporary directory used to build the registry
+            fixtures.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture used to
+            replace `subprocess.run`.
+    """
     registry_path, defaults_path = _write_slurm_tree(tmp_path)
     completed = SimpleNamespace(
         stdout="Submitted batch job 123\n",
@@ -217,7 +224,16 @@ def test_submit_experiments_dry_run_prints_command_and_skips_subprocess(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Dry-run mode should print the command and avoid `sbatch`."""
+    """Dry-run mode should print the command and avoid `sbatch`.
+
+    Args:
+        tmp_path (pathlib.Path): Temporary directory used to build the registry
+            fixtures.
+        capsys (pytest.CaptureFixture[str]): Pytest capture fixture used to
+            inspect dry-run output.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture used to
+            replace `subprocess.run`.
+    """
     registry_path, defaults_path = _write_slurm_tree(tmp_path)
 
     def _unexpected_run(*_args: object, **_kwargs: object) -> None:

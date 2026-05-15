@@ -19,7 +19,15 @@ from experiments.config import RegisteredExperiment, load_experiment_registry
 
 @dataclass(frozen=True, slots=True)
 class _SlurmDefaults:
-    """Default Slurm submission settings."""
+    """Default Slurm submission settings.
+
+    Attributes:
+        time (str): Wall-clock limit for each array task.
+        cpus_per_task (int): CPU cores to reserve for each task.
+        mem (str): Memory to reserve for each task.
+        gres (str): Generic resource reservation for each task.
+        partition (str | None): Optional Slurm partition name.
+    """
 
     time: str = "24:00:00"
     cpus_per_task: int = 3
@@ -30,7 +38,22 @@ class _SlurmDefaults:
 
 @dataclass(frozen=True, slots=True)
 class SlurmSubmitRequest:
-    """Request metadata for a Slurm array submission batch."""
+    """Request metadata for a Slurm array submission batch.
+
+    Attributes:
+        registry_path (Path): Path to the registry TOML file.
+        repo_root (Path | None): Repository root used to resolve relative paths.
+        defaults_path (Path): Path to the Slurm defaults TOML file.
+        groups (tuple[str, ...]): Registry groups to include in the selection.
+        experiment_names (tuple[str, ...]): Explicit registry experiment names
+            to include.
+        dry_run (bool): Whether to print the submission command without calling
+            `sbatch`.
+        force (bool): Whether to replace existing deterministic run
+            directories.
+        write_predictions (bool): Whether to persist `predictions.jsonl`.
+        debug_reporting (bool): Whether to retain verbose run diagnostics.
+    """
 
     registry_path: Path = Path("experiments/configs/registry.toml")
     repo_root: Path | None = None
@@ -45,6 +68,24 @@ class SlurmSubmitRequest:
 
 @dataclass(frozen=True, slots=True)
 class _SlurmSubmission:
+    """Resolved Slurm submission details.
+
+    Attributes:
+        experiments (tuple[RegisteredExperiment, ...]): Selected registry
+            experiments in deterministic order.
+        defaults (_SlurmDefaults): Validated Slurm submission defaults.
+        registry_path (Path): Resolved registry path passed into the run
+            command.
+        repo_root (Path): Resolved repository root used by the wrapper.
+        log_dir (Path): Directory that receives array-task stdout and stderr
+            logs.
+        force (bool): Whether the run command should replace existing outputs.
+        write_predictions (bool): Whether the run command should write
+            predictions.
+        debug_reporting (bool): Whether the run command should keep verbose
+            diagnostics.
+    """
+
     experiments: tuple[RegisteredExperiment, ...]
     defaults: _SlurmDefaults
     registry_path: Path
@@ -372,7 +413,14 @@ def _resolve_path(path: Path, repo_root: Path) -> Path:
 
 
 def _format_sbatch_command_preview(command: list[str]) -> str:
-    """Return a readable multi-line preview of one `sbatch` invocation."""
+    """Return a readable multi-line preview of one `sbatch` invocation.
+
+    Args:
+        command (list[str]): Complete `sbatch` command token list.
+
+    Returns:
+        str: A human-readable multi-line preview suitable for dry-run output.
+    """
     if "--wrap" not in command:
         return f"sbatch command:\n  {shlex.join(command)}"
     wrap_index = command.index("--wrap")
