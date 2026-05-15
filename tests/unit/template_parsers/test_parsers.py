@@ -4,6 +4,7 @@ import io
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypeAlias
 
 import pytest
@@ -343,6 +344,65 @@ def test_spell_template_parser_streams_input_without_materialising_it(
         / "demo_spell_input.log_templates.csv"
     )
     assert templates_path.exists()
+
+
+def test_spell_template_parser_uses_the_lightweight_spellpy_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser should only request the template-mining artefacts it uses."""
+    captured: dict[str, object] = {}
+
+    class _FakeLogParser:
+        def __init__(
+            self,
+            *,
+            indir: str,
+            outdir: str,
+            log_format: str,
+            tau: float,
+            keep_para: bool,
+        ) -> None:
+            captured.update(
+                {
+                    "indir": indir,
+                    "outdir": outdir,
+                    "log_format": log_format,
+                    "tau": tau,
+                    "keep_para": keep_para,
+                },
+            )
+            self._outdir = Path(outdir)
+
+        def parse(self, logname: str) -> None:
+            templates_path = self._outdir / f"{logname}_templates.csv"
+            templates_path.write_text(
+                "EventTemplate,Occurrences\nBuild <*> complete,2\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: SimpleNamespace(
+            spell=SimpleNamespace(LogParser=_FakeLogParser),
+        ),
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo", tau=0.75)
+    parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
+
+    assert captured == {
+        "indir": str(tmp_path / ".cache" / "spell"),
+        "outdir": str(tmp_path / ".cache" / "spell" / "demo_spell_output"),
+        "log_format": "<Content>",
+        "tau": 0.75,
+        "keep_para": False,
+    }
+    assert parser.inference("Build vm-3 complete") == (
+        "Build <*> complete",
+        ["vm-3"],
+    )
 
 
 def test_spell_template_parser_forwards_spellpy_module_logs() -> None:

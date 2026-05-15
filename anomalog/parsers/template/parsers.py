@@ -406,8 +406,10 @@ class SpellTemplateParser(TemplateParser):
             indir=str(log_dir),
             outdir=str(outdir),
             log_format="<Content>",
-            logmain=raw_path.name,
             tau=self.tau,
+            # AnomaLog only consumes the mined templates, so skip Spell's
+            # per-row parameter extraction and the extra main-output append.
+            keep_para=False,
         )
         with spellpy_logger_context(logger):
             parser.parse(raw_path.name)
