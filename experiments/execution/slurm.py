@@ -390,19 +390,20 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
         str: Shell script executed by `sbatch`.
     """
     wrapped_command = _build_run_command(submission)
-    experiment_loop = "\n".join(
-        f"  {shlex.quote(experiment.name)}" for experiment in submission.experiments
-    )
+    experiment_lines: list[str] = []
+    for index, experiment in enumerate(submission.experiments):
+        suffix = " \\" if index < len(submission.experiments) - 1 else ""
+        experiment_lines.append(f"  {shlex.quote(experiment.name)}{suffix}")
     return "\n".join(
         [
             'export PATH="${HOME}/.local/bin:${PATH}"',
             f"export REPO_ROOT={shlex.quote(submission.repo_root.as_posix())}",
             "set -eu",
+            "set -- \\",
+            *experiment_lines,
             "EXPERIMENT_NAME=",
             "EXPERIMENT_INDEX=0",
-            "for EXPERIMENT in",
-            experiment_loop,
-            "do",
+            'for EXPERIMENT in "$@"; do',
             '  if [ "$EXPERIMENT_INDEX" -eq "$SLURM_ARRAY_TASK_ID" ]; then',
             "    EXPERIMENT_NAME=$EXPERIMENT",
             "    break",

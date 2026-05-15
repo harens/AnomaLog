@@ -145,9 +145,10 @@ def test_build_wrap_script_indexes_embedded_array_by_task_id() -> None:
 
     wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
 
-    assert "for EXPERIMENT in" in wrap_script
+    assert "set -- \\" in wrap_script
     assert "  demo" in wrap_script
     assert "  demo_two" in wrap_script
+    assert 'for EXPERIMENT in "$@"; do' in wrap_script
     assert "EXPERIMENT_INDEX=0" in wrap_script
     assert 'if [ "$EXPERIMENT_INDEX" -eq "$SLURM_ARRAY_TASK_ID" ]; then' in wrap_script
     assert "EXPERIMENT_NAME=$EXPERIMENT" in wrap_script
@@ -302,7 +303,8 @@ def test_submit_experiments_dry_run_prints_command_and_skips_subprocess(
     output_lines = capsys.readouterr().out.splitlines()
     assert output_lines[0] == "sbatch command:"
     assert any(line.strip() == "--wrap <<'EOF'" for line in output_lines)
-    assert any(line.strip() == "for EXPERIMENT in" for line in output_lines)
+    assert any(line.strip() == "set -- \\" for line in output_lines)
+    assert any(line.strip() == 'for EXPERIMENT in "$@"; do' for line in output_lines)
     assert not any(line.startswith("Manifest") for line in output_lines)
     expected_log_dir = (
         tmp_path
