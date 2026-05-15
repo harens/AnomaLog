@@ -47,6 +47,9 @@
 - A temporary historical-rate baseline over the same chronology performed very
   strongly, which supports adding an AIT-specific baseline if we want a more
   appropriate non-paper comparator than the generic repository baselines.
+- AIT-ADS should keep the sequence-level chunk label only as an internal
+  container label. The public report should promote alert-level metrics only,
+  because the paper evaluates alert triage rather than chunk classification.
 
 ## Split recommendation
 

@@ -476,15 +476,16 @@ def _build_metric_blocks(
     evaluation_unit = _evaluation_unit_for_dataset(bundle.dataset)
     primary_scope = bundle.model.primary_metric_scope
 
-    sequence_block = _build_sequence_level_detection_block(
-        metrics=metrics,
-        sequence_summary=sequence_summary,
-        evaluation_unit=evaluation_unit,
-        primary_scope=primary_scope,
-        allow_single_class_reporting=bundle.model.allow_single_class_reporting,
-    )
-    if sequence_block is not None:
-        metric_blocks[MetricScope.SEQUENCE_LEVEL_DETECTION] = sequence_block
+    if _should_emit_sequence_level_detection(bundle.dataset):
+        sequence_block = _build_sequence_level_detection_block(
+            metrics=metrics,
+            sequence_summary=sequence_summary,
+            evaluation_unit=evaluation_unit,
+            primary_scope=primary_scope,
+            allow_single_class_reporting=bundle.model.allow_single_class_reporting,
+        )
+        if sequence_block is not None:
+            metric_blocks[MetricScope.SEQUENCE_LEVEL_DETECTION] = sequence_block
 
     event_block = _build_event_level_detection_block(
         metrics=metrics,
@@ -529,6 +530,16 @@ def _build_metric_blocks(
             )
 
     return metric_blocks
+
+
+def _should_emit_sequence_level_detection(dataset: DatasetVariantConfig) -> bool:
+    """Return whether the run should surface sequence-level headline metrics.
+
+    AIT-ADS is evaluated at the alert level in the paper, so we keep the
+    sequence label internally for container semantics but suppress the
+    sequence-level headline block in the report.
+    """
+    return dataset.preset != "ait_ads"
 
 
 def _build_sequence_level_detection_block(

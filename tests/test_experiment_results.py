@@ -55,3 +55,27 @@ def test_build_dataset_statistics_keeps_combined_ait_ads_summary(
         "aminer": 2,
         "wazuh": 1,
     }
+
+
+def test_ait_ads_suppresses_sequence_level_headline_metrics() -> None:
+    """AIT-ADS should report alert-level metrics without sequence-level heads."""
+    assert (
+        experiment_results._should_emit_sequence_level_detection(  # noqa: SLF001
+            DatasetVariantConfig(
+                name="ait_ads",
+                dataset_name="AIT_ADS",
+                preset="ait_ads",
+            ),
+        )
+        is False
+    )
+    assert (
+        experiment_results._should_emit_sequence_level_detection(  # noqa: SLF001
+            DatasetVariantConfig(
+                name="bgl",
+                dataset_name="BGL",
+                preset="bgl",
+            ),
+        )
+        is True
+    )
