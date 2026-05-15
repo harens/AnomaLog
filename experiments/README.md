@@ -209,6 +209,10 @@ directories. For example, if you want the HDFS entity runs to live under
 `/data/hs1822`, submit with `--data-root /data/hs1822` and
 `--cache-root /data/hs1822/.cache`.
 
+The generated Slurm wrapper also defaults Prefect telemetry off by setting
+`PREFECT_SERVER_ANALYTICS_ENABLED=false` and `DO_NOT_TRACK=1`, while still
+allowing either variable to be overridden in the submission environment.
+
 Use `--dry-run` with either runner to preview the selected experiments without
 executing them. The Slurm backend now submits one Slurm job array for the
 selected experiments, leaving scheduling and any cluster-side concurrency

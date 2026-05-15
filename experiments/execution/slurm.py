@@ -134,6 +134,7 @@ def load_slurm_defaults(
         return msgspec.toml.decode(
             resolved_defaults_path.read_bytes(),
             type=_SlurmDefaults,
+            dec_hook=_slurm_path_dec_hook,
         )
     except FileNotFoundError as exc:
         msg = f"Missing Slurm defaults file: {resolved_defaults_path}"
@@ -399,6 +400,11 @@ def _build_wrap_script(submission: _SlurmSubmission) -> str:
             "fi",
             'export RUN_NAME="$EXPERIMENT_NAME"',
             *_build_path_exports(submission),
+            (
+                'export PREFECT_SERVER_ANALYTICS_ENABLED="${'
+                'PREFECT_SERVER_ANALYTICS_ENABLED:-false}"'
+            ),
+            'export DO_NOT_TRACK="${DO_NOT_TRACK:-1}"',
             'export PREFECT_HOME="${PREFECT_ROOT}/${RUN_NAME}"',
             'export PREFECT_LOCAL_STORAGE_PATH="${PREFECT_ROOT}/storage"',
             (
@@ -464,6 +470,15 @@ def _resolve_path(path: Path, repo_root: Path) -> Path:
     if path.is_absolute():
         return path
     return repo_root / path
+
+
+def _slurm_path_dec_hook(type_: type, obj: object) -> object:
+    if type_ is object:
+        return obj
+    if type_ is Path and isinstance(obj, str):
+        return Path(obj)
+    msg = f"Unsupported decoded type: {type_!r}"
+    raise NotImplementedError(msg)
 
 
 def _resolve_optional_path(path: Path | None, *, repo_root: Path) -> Path | None:

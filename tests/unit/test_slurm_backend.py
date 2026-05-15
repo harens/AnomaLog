@@ -193,6 +193,11 @@ def test_build_wrap_script_exports_cluster_cache_roots() -> None:
         in wrap_script
     )
     assert (
+        'export PREFECT_SERVER_ANALYTICS_ENABLED="${'
+        'PREFECT_SERVER_ANALYTICS_ENABLED:-false}"' in wrap_script
+    )
+    assert 'export DO_NOT_TRACK="${DO_NOT_TRACK:-1}"' in wrap_script
+    assert (
         'export UV_CACHE_DIR="${UV_CACHE_DIR:-'
         '${SLURM_TMPDIR:-${ANOMALOG_CACHE_ROOT:-${REPO_ROOT}}/uv}}"' in wrap_script
     )
