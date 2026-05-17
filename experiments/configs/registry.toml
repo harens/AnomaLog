@@ -33,12 +33,20 @@ models = [
 [experiments.openstack_deeplog_preprocessed.overrides.deeplog_default]
 [experiments.ait_ads]
 dataset = "ait_ads/base"
-# AIT-ADS is a single continuous alert chronology, so it can host the same
-# compatible sequence baselines.
+# AIT-ADS is a single continuous alert chronology, so it keeps the
+# stream-oriented baselines.
 models = [
-  "deeplog_default",
   "template_frequency_default",
   "markov_default",
+]
+
+[experiments.ait_ads_entity]
+dataset = "ait_ads/entity_chronological"
+# DeepLog and DeepCASE both need entity-local sequences, so they run against
+# the same AIT-ADS source but with entity grouping instead of the global
+# stream view.
+models = [
+  "deeplog_default",
   "deepcase",
 ]
 

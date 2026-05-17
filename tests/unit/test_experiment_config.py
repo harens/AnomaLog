@@ -531,10 +531,8 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
     )
 
     assert [bundle.model.detector for bundle in paper_bundles] == [
-        "deeplog",
         "template_frequency",
         "markov",
-        "deepcase",
     ]
     assert all(
         isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
@@ -550,6 +548,36 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
     )
     assert all(
         bundle.dataset.evaluation_unit is EvaluationUnit.CONTINUOUS_EVENT_STREAM
+        for bundle in paper_bundles
+    )
+    assert {bundle.dataset.preset for bundle in paper_bundles} == {"ait_ads"}
+
+
+@pytest.mark.allow_no_new_coverage
+def test_ait_ads_entity_manifest_uses_entity_grouping() -> None:
+    """DeepLog and DeepCASE on AIT-ADS should use an entity-local sequence view."""
+    paper_bundles = load_experiment_bundles(
+        Path("experiments/configs/datasets") / "ait_ads/entity_chronological.toml",
+    )
+
+    assert [bundle.model.detector for bundle in paper_bundles] == [
+        "deeplog",
+        "deepcase",
+    ]
+    assert all(
+        isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.train_fraction == pytest.approx(0.5)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.test_fraction == pytest.approx(0.5)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.evaluation_unit is EvaluationUnit.SEQUENCE
         for bundle in paper_bundles
     )
     assert {bundle.dataset.preset for bundle in paper_bundles} == {"ait_ads"}
@@ -1510,6 +1538,13 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
     ait_ads_bundles = load_experiment_bundles(
         repo_root / "experiments" / "configs" / "datasets" / "ait_ads/base.toml",
     )
+    ait_ads_entity_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "ait_ads/entity_chronological.toml",
+    )
 
     assert {bundle.run_group for bundle in bgl_bundles} == {
         "template_frequency_default",
@@ -1535,14 +1570,18 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         "deepcase",
     }
     assert {bundle.model.detector for bundle in ait_ads_bundles} == {
-        "deeplog",
         "template_frequency",
         "markov",
-        "deepcase",
     }
     assert {bundle.run_group for bundle in ait_ads_bundles} == {
-        "deeplog_default",
         "template_frequency_default",
         "markov_default",
+    }
+    assert {bundle.model.detector for bundle in ait_ads_entity_bundles} == {
+        "deeplog",
+        "deepcase",
+    }
+    assert {bundle.run_group for bundle in ait_ads_entity_bundles} == {
+        "deeplog_default",
         "deepcase",
     }

@@ -1,0 +1,16 @@
+name = "ait_ads_entity_chronological"
+description = "AIT-ADS entity-chronological experiment for entity-local DeepCASE runs."
+
+[dataset]
+template_parser = "identity"
+name = "ait_ads_entity_chronological"
+dataset_name = "AIT_ADS"
+preset = "ait_ads"
+description = "AIT-ADS source grouped by entity so DeepCASE can consume entity-local sequences."
+evaluation_unit = "sequence"
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.5
+test_fraction = 0.5
+train_on_normal_entities_only = false
