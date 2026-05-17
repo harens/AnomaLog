@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
-from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -22,6 +21,10 @@ from experiments.models.base import (
     SingleFitMixin,
 )
 from experiments.models.progress import fit_stage_description
+from experiments.models.sequence_masks import (
+    evaluation_event_mask_for_sequence,
+    training_event_mask_for_sequence,
+)
 
 if TYPE_CHECKING:
     import logging
@@ -41,15 +44,16 @@ class TemplateFrequencyModelConfig(
 
     The detector counts templates in the train prefix and turns unexpectedly
     rare sequences into high anomaly scores. When the threshold is not fixed by
-    config, calibration uses normal-or-missing training sequences only.
-    """  # noqa: DOC601 DOC603: attribute docs live in Annotated metadata.
+    config, calibration uses the same eligible training targets as the DeepLog
+    event masks, rather than whole-sequence labels.
+    """  # noqa: DOC601, DOC603
 
     score_threshold: Annotated[
         NonNegativeFloat | None,
         msgspec.Meta(
             description=(
                 "Optional fixed anomaly score threshold. When omitted, the "
-                "detector calibrates from normal training scores only."
+                "detector calibrates from eligible training scores only."
             ),
         ),
     ] = None
@@ -119,8 +123,8 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
 
         Args:
             train_sequences (Iterable[TemplateSequence]): Training split
-                sequences. Threshold calibration needs at least one normal or
-                missing-labelled training sequence when the threshold is not
+                sequences. Threshold calibration needs at least one sequence
+                with eligible training targets when the threshold is not
                 configured.
             progress (Progress): Progress reporter.
             logger (logging.Logger | None): Optional logger for fit diagnostics.
@@ -132,19 +136,26 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         counts: Counter[str] = Counter()
         total_events = 0
         del logger
-        calibration_sequences: list[TemplateSequence] = []
+        calibration_templates: list[list[str]] = []
         for sequence in progress.track(
             train_sequences,
             description=fit_stage_description(self.detector_name),
         ):
-            counts.update(sequence.templates)
-            total_events += len(sequence.templates)
-            if self.configured_score_threshold is None and not is_anomalous_label(
-                sequence.label,
-            ):
-                calibration_sequences.append(sequence)
+            eligible_training_templates = _masked_templates(
+                sequence=sequence,
+                event_mask=training_event_mask_for_sequence(sequence),
+            )
+            if not eligible_training_templates:
+                continue
+            counts.update(eligible_training_templates)
+            total_events += len(eligible_training_templates)
+            if self.configured_score_threshold is None:
+                calibration_templates.append(eligible_training_templates)
         if total_events == 0:
-            msg = "Cannot fit template_frequency detector with zero train events."
+            msg = (
+                "Cannot fit template_frequency detector with zero eligible "
+                "training events."
+            )
             raise ValueError(msg)
         self.template_counts = counts
         self.total_events = total_events
@@ -154,14 +165,14 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             self._mark_fit_complete()
             return
 
-        if not calibration_sequences:
+        if not calibration_templates:
             msg = (
-                "template_frequency calibration requires at least one normal "
+                "template_frequency calibration requires at least one eligible "
                 "training sequence."
             )
             raise ValueError(msg)
         calibration_scores = sorted(
-            self.score(sequence) for sequence in calibration_sequences
+            self._score_templates(templates) for templates in calibration_templates
         )
         self.score_threshold = _quantile(
             calibration_scores,
@@ -216,16 +227,24 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             float: Mean negative log-probability under the learned template model.
         """
-        if not sequence.templates:
+        templates = _masked_templates(
+            sequence=sequence,
+            event_mask=evaluation_event_mask_for_sequence(sequence),
+        )
+        return self._score_templates(templates)
+
+    def _score_templates(self, templates: list[str]) -> float:
+        """Return the mean negative log-probability for a template list."""
+        if not templates:
             return 0.0
         vocab_size = max(len(self.template_counts), 1)
         denominator = self.total_events + (self.smoothing * vocab_size)
         loss_sum = 0.0
-        for template in sequence.templates:
+        for template in templates:
             numerator = self.template_counts.get(template, 0) + self.smoothing
             probability = numerator / denominator
             loss_sum += -math.log(probability)
-        return loss_sum / len(sequence.templates)
+        return loss_sum / len(templates)
 
 
 class TemplateFrequencyManifest(ModelManifest, frozen=True):
@@ -246,6 +265,19 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
     smoothing: float
     train_event_count: int
     train_template_vocabulary: int
+
+
+def _masked_templates(
+    *,
+    sequence: TemplateSequence,
+    event_mask: tuple[bool, ...],
+) -> list[str]:
+    """Return the templates whose positions are eligible under one mask."""
+    return [
+        template
+        for template, is_eligible in zip(sequence.templates, event_mask, strict=True)
+        if is_eligible
+    ]
 
 
 def _quantile(sorted_values: list[float], q: float) -> float:

@@ -35,8 +35,8 @@ from experiments.models.deeplog.shared import (
     GaussianThreshold,
     NormalisationStats,
     ParameterFeatureSchema,
-    training_event_mask_for_sequence,
 )
+from experiments.models.sequence_masks import training_event_mask_for_sequence
 
 ParameterSeriesSplit: TypeAlias = tuple[
     list[list[RawParameterVector]],

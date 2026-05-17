@@ -189,7 +189,17 @@ This section keeps the short version in the main DeepLog note:
   carries history across internal batch boundaries without a user-facing switch;
 - chronological stream batches remain intact as memory containers, and BGL now
   uses explicit per-event training and evaluation masks so normal targets can
-  train even when a batch also contains anomalies or post-cutoff context.
+  train even when a batch also contains anomalies or post-cutoff context;
+- the BGL 10% paper probe now uses the same normal-entry prefix policy as the
+  1% probe, so the preserved batches are mixed-context containers rather than
+  wholly normal sequences.
+
+I noticed a small ambiguity in the DeepLog BGL paper wording around the training split.
+
+The paper says:
+“first 1% normal log entries” and “first 10% log entries”.
+
+My interpretation is that both settings are intended to be effectively normal-only training, since DeepLog is fundamentally trained on normal behaviour, and the omission of “normal” in the 10% case is probably shorthand/slightly imprecise wording.
 
 ### Summary
 

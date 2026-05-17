@@ -53,8 +53,9 @@ The checked-in dataset-manifest set is split by dataset family:
   are the concrete chronological entity variants built from that base.
 - `bgl/deeplog_paper_1pct_normal_entry_stream_no_online.toml` and
   `bgl/deeplog_paper_10pct_entry_stream_no_online.toml` keep the BGL DeepLog
-  paper-reproduction probes separate because they differ in train fraction and
-  split policy.
+  paper-reproduction probes separate because they differ in the normal-entry
+  prefix fraction, which changes how much anomalous context is preserved in the
+  mixed stream batches.
 - `hdfs/v1_deeplog_paper_entry100k_split_partial.toml` and
   `hdfs/v1_deeplog_paper_entry100k_assign_first.toml` each bundle the HDFS
   paper DeepLog variant with template-frequency and Markov baselines, so the
@@ -106,8 +107,8 @@ normal case. If you need a small or CI-friendly check, select the explicit
 experiment name instead of inventing another registry tag.
 
 The DeepLog reproduction manifests also carry simple sanity baselines on the
-same split, so the paper target is always compared against a sequence-statistics
-floor rather than only against the neural model.
+same mask-aware split, so the paper target is always compared against a
+sequence-statistics floor rather than only against the neural model.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
@@ -133,10 +134,14 @@ so omitted values still preserve the same fixed suffix behaviour.
 The baseline supervision split is intentional:
 
 - Naive Bayes is supervised at the sequence level.
-- Template Frequency is unsupervised apart from optional normal-score calibration.
-- Markov is a normal-only sequence-order comparator for DeepLog-style runs.
+- Template Frequency is unsupervised apart from optional normal-score
+  calibration, and on the BGL stream configs it follows the same eligible-event
+  masks as DeepLog.
+- Markov is a sequence-order comparator for DeepLog-style runs, and it also
+  follows the same eligible-event masks on the BGL stream configs.
 - DeepCASE is label-aware during fit and falls back to sequence labels when event labels are missing.
-- DeepLog is normal-only at fit time, with labels used for eligibility bookkeeping and evaluation rather than class-target learning.
+- DeepLog trains on eligible normal targets at fit time, with labels used for
+  eligibility bookkeeping and evaluation rather than class-target learning.
 
 Treat the baseline scores as checks on corpus separability and template
 statistics rather than as direct competitors to DeepLog or DeepCASE.

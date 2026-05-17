@@ -191,7 +191,7 @@ batching only.
 | Config | train raw | train normal | train anomalous | test raw | test normal | test anomalous | sequence count | train / ignored / test | train targets | excluded anomalies | excluded context |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
 | `1pct_normal_entry_stream_no_online` | 43,996 | 43,996 | 0 | 4,701,645 | 4,355,507 | 346,138 | 48 | 1 / 0 / 47 | 43,996 | 2,609 | 53,395 |
-| `10pct_entry_stream_no_online` | 474,797 | 281,950 | 192,847 | 4,273,166 | 4,117,553 | 155,613 | 48 | 5 / 0 / 43 | 281,950 | 206,847 | 11,203 |
+| `10pct_entry_stream_no_online` | 439,951 | 439,951 | 0 | 4,047,963 | 3,918,974 | 128,989 | 48 | 7 / 0 / 41 | 439,951 | 219,471 | 40,578 |
 
 The 1% normal-entry split reaches the 43,996th normal raw entry after skipping
 2,322 anomalous entries before the cutoff. The resulting train batch still has
@@ -200,10 +200,12 @@ only the 43,996 normal target events are eligible for fitting. Those
 post-cutoff events are also retained for evaluation through the explicit
 evaluation mask, so batch size no longer suppresses the test population.
 
-The 10% raw-entry split keeps the first five chronological batches in the train
-prefix. Those batches still contain 206,847 anomalous events and 11,203
-post-cutoff context events that are excluded from training targets, while
-281,950 normal raw entries remain eligible for DeepLog fitting.
+The 10% normal-entry split now needs seven chronological batches to reach the
+439,951st normal raw entry. Those batches still contain 219,471 anomalous
+events and 40,578 post-cutoff normal events in context, but only the 439,951
+normal target events are eligible for DeepLog fitting. All 48 preserved BGL
+batches remain sequence-labelled anomalous because the mixed chronological
+context is retained around the eligible targets.
 
 ### Event-level boundary audit
 

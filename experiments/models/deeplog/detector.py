@@ -43,7 +43,6 @@ from experiments.models.deeplog.shared import (
     ParameterModelState,
     SkippedParameterModelEntry,
     build_normal_training_corpus,
-    evaluation_event_index_mask,
 )
 from experiments.models.next_event_metrics import (
     NextEventPredictionDiagnostics,
@@ -55,6 +54,7 @@ from experiments.models.next_event_metrics import (
     NextEventPredictionState,
     VocabularyPolicy,
 )
+from experiments.models.sequence_masks import evaluation_event_index_mask
 from experiments.models.torch_runtime import (
     TorchDeviceName,
     resolve_torch_device,

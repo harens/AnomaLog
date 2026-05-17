@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import types
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,12 +83,14 @@ def _markov_config(**values: ConfigValue) -> MarkovModelConfig:
     )
 
 
-def _sequence(
+def _sequence(  # noqa: PLR0913
     window_id: int,
     *,
     templates: list[str],
     label: int | None,
     split_label: SplitLabel = SplitLabel.TRAIN,
+    training_event_mask: tuple[bool, ...] | None = None,
+    evaluation_event_mask: tuple[bool, ...] | None = None,
 ) -> TemplateSequence:
     sequence = TemplateSequence(
         events=[(template, [], None) for template in templates],
@@ -94,6 +98,8 @@ def _sequence(
         entity_ids=[f"entity-{window_id}"],
         window_id=window_id,
         split_label=split_label,
+        training_event_mask=training_event_mask,
+        evaluation_event_mask=evaluation_event_mask,
     )
     if label is None:
         object.__setattr__(sequence, "label", None)  # noqa: PLC2801
@@ -754,7 +760,16 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
         detector.fit(train_sequences, progress=progress)
 
     normal_scores = [
-        detector.score(sequence) for sequence in train_sequences if sequence.label == 0
+        detector.score(
+            _sequence(
+                100 + index,
+                templates=sequence.templates,
+                label=0,
+                split_label=SplitLabel.TEST,
+            ),
+        )
+        for index, sequence in enumerate(train_sequences)
+        if sequence.label == 0
     ]
     anomalous_sequence = _sequence(
         23,
@@ -787,6 +802,40 @@ def test_template_frequency_detector_treats_missing_labels_as_normal() -> None:
     assert detector.predict(train_sequences[0]).predicted_label == 0
 
 
+def test_template_frequency_detector_uses_event_masks_for_fit_and_scoring() -> None:
+    """Template-frequency should honour DeepLog-style train and eval masks."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    expected_total_events = 2
+    train_sequence = _sequence(
+        40,
+        templates=["normal login", "panic failure", "normal read"],
+        label=1,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True),
+    )
+    test_sequence = _sequence(
+        41,
+        templates=["normal login", "rare failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        evaluation_event_mask=(False, True),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert detector.total_events == expected_total_events
+    assert detector.template_counts == Counter(
+        {
+            "normal login": 1,
+            "normal read": 1,
+        },
+    )
+    assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
+
+
 def test_markov_detector_predictions_are_repeatable() -> None:
     """Repeated predictions from the transition detector should be identical."""
     detector = _markov_config(name="markov").build_detector()
@@ -807,6 +856,34 @@ def test_markov_detector_predictions_are_repeatable() -> None:
     assert detector.threshold_source == "train_score_quantile"
     assert detector.predict(normal_sequence).predicted_label == 0
     assert first == second
+
+
+def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
+    """Markov should respect DeepLog-style masking without losing context."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequence = _sequence(
+        42,
+        templates=["A", "B", "C", "D"],
+        label=1,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True, False),
+    )
+    test_sequence = _sequence(
+        43,
+        templates=["A", "B", "C", "D"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        evaluation_event_mask=(False, False, False, True),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert detector.normal_sequence_count == 1
+    assert detector.normal_transition_count == 1
+    assert detector.context_counts == Counter({("B",): 1})
+    assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
+    assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
 
 
 def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:

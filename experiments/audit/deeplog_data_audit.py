@@ -21,7 +21,7 @@ from experiments.config import (
 )
 from experiments.config_loader import _decode_dataset_config
 from experiments.datasets import build_dataset_spec
-from experiments.models.deeplog.shared import (
+from experiments.models.sequence_masks import (
     evaluation_event_mask_for_sequence,
     training_event_mask_for_sequence,
 )
@@ -767,21 +767,43 @@ def _validate_bgl_deeplog_paper_config(
             "BGL 10% paper configs must use test_fraction = 0.90.",
         )
     elif isinstance(split, RawEntryPrefixNormalFractionSplitConfig):
-        _require_close(
+        if isclose(
             split.train_normal_entry_fraction,
             _BGL_PAPER_TRAIN_FRACTION_1PCT,
-            "BGL 1% paper configs must use train_normal_entry_fraction = 0.01.",
-        )
-        _require_close(
-            sequence.train_fraction,
-            _BGL_PAPER_TRAIN_FRACTION_1PCT,
-            "BGL 1% paper configs must use train_fraction = 0.01.",
-        )
-        _require_close(
-            sequence.test_fraction,
-            1.0 - _BGL_PAPER_TRAIN_FRACTION_1PCT,
-            "BGL 1% paper configs must use test_fraction = 0.99.",
-        )
+            rel_tol=0.0,
+            abs_tol=_FLOAT_TOLERANCE,
+        ):
+            _require_close(
+                sequence.train_fraction,
+                _BGL_PAPER_TRAIN_FRACTION_1PCT,
+                "BGL 1% paper configs must use train_fraction = 0.01.",
+            )
+            _require_close(
+                sequence.test_fraction,
+                1.0 - _BGL_PAPER_TRAIN_FRACTION_1PCT,
+                "BGL 1% paper configs must use test_fraction = 0.99.",
+            )
+        elif isclose(
+            split.train_normal_entry_fraction,
+            _BGL_PAPER_TRAIN_FRACTION_10PCT,
+            rel_tol=0.0,
+            abs_tol=_FLOAT_TOLERANCE,
+        ):
+            _require_close(
+                sequence.train_fraction,
+                _BGL_PAPER_TRAIN_FRACTION_10PCT,
+                "BGL 10% paper configs must use train_fraction = 0.10.",
+            )
+            _require_close(
+                sequence.test_fraction,
+                1.0 - _BGL_PAPER_TRAIN_FRACTION_10PCT,
+                "BGL 10% paper configs must use test_fraction = 0.90.",
+            )
+        else:
+            msg = (
+                "BGL paper configs must use train_normal_entry_fraction = 0.01 or 0.10."
+            )
+            raise ValueError(msg)
     else:
         msg = "BGL DeepLog paper configs must use raw-entry prefix split modes."
         raise TypeError(msg)

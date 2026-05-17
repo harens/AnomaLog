@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
-from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -23,6 +22,10 @@ from experiments.models.base import (
     SingleFitMixin,
 )
 from experiments.models.progress import fit_stage_description
+from experiments.models.sequence_masks import (
+    evaluation_event_index_mask,
+    training_event_index_mask,
+)
 
 if TYPE_CHECKING:
     import logging
@@ -38,7 +41,7 @@ class MarkovModelConfig(
     tag="markov",
     frozen=True,
 ):
-    """Normal-only template transition baseline for sequence-level comparison."""  # noqa: DOC601, DOC603
+    """Template transition baseline that respects DeepLog-style eligibility masks."""  # noqa: DOC601, DOC603
 
     order: Annotated[
         PositiveInt,
@@ -54,7 +57,7 @@ class MarkovModelConfig(
         msgspec.Meta(
             description=(
                 "Optional fixed anomaly score threshold. When omitted, the "
-                "detector calibrates from normal training scores only."
+                "detector calibrates from eligible training scores only."
             ),
         ),
     ] = None
@@ -90,12 +93,13 @@ class MarkovModelConfig(
 
 @dataclass(slots=True)
 class MarkovDetector(SingleFitMixin, ExperimentDetector):
-    """Score template sequences by normal-only transition likelihood.
+    """Score template sequences by masked transition likelihood.
 
-    The detector learns an n-gram transition model from normal training
-    sequences only. That makes it a deliberately simple sequence-order
-    comparator for DeepLog-style experiments rather than a direct competitor to
-    DeepCASE's workload-reduction metrics.
+    The detector learns an n-gram transition model from training sequences that
+    still carry eligible targets under the DeepLog masking contract. That makes
+    it a deliberately simple sequence-order comparator for DeepLog-style
+    experiments rather than a direct competitor to DeepCASE's
+    workload-reduction metrics.
 
     Attributes:
         detector_name (ClassVar[str]): Stable detector name for manifests/logging.
@@ -136,16 +140,17 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         progress: Progress,
         logger: logging.Logger | None = None,
     ) -> None:
-        """Fit the transition model from normal training sequences.
+        """Fit the transition model from eligible training sequences.
 
         Args:
             train_sequences (Iterable[TemplateSequence]): Training split
-                sequences. Only normal sequences are used for fitting.
+                sequences. Only sequences with eligible training targets are
+                used for fitting.
             progress (Progress): Progress reporter.
             logger (logging.Logger | None): Optional logger for fit diagnostics.
 
         Raises:
-            ValueError: If the training split contains no normal sequences.
+            ValueError: If the training split contains no eligible sequences.
         """
         del logger
         self._ensure_unfit(detector_name=self.detector_name)
@@ -154,12 +159,16 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             train_sequences,
             description=fit_stage_description(self.detector_name),
         ):
-            if is_anomalous_label(sequence.label):
+            eligible_target_indexes = training_event_index_mask(sequence)
+            if not eligible_target_indexes:
                 continue
             calibration_sequences.append(sequence)
             self.normal_sequence_count += 1
             self.normal_template_vocabulary.update(sequence.templates)
-            self.normal_transition_count += self._learn_sequence(sequence)
+            self.normal_transition_count += self._learn_sequence(
+                sequence,
+                eligible_target_indexes=eligible_target_indexes,
+            )
 
         if not calibration_sequences:
             msg = "markov detector requires at least one normal training sequence."
@@ -172,7 +181,11 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             return
 
         calibration_scores = sorted(
-            self.score(sequence) for sequence in calibration_sequences
+            self._score_sequence(
+                sequence,
+                eligible_target_indexes=training_event_index_mask(sequence),
+            )
+            for sequence in calibration_sequences
         )
         self.score_threshold = _quantile(calibration_scores, self.calibration_quantile)
         self.threshold_source = "train_score_quantile"
@@ -225,7 +238,31 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             float: Mean negative log transition probability under the learned
             Markov model.
         """
-        transitions = list(_sequence_transitions(sequence.templates, self.order))
+        return self._score_sequence(
+            sequence,
+            eligible_target_indexes=evaluation_event_index_mask(sequence),
+        )
+
+    def _score_sequence(
+        self,
+        sequence: TemplateSequence,
+        *,
+        eligible_target_indexes: list[int] | None,
+    ) -> float:
+        """Return the masked mean negative log transition probability."""
+        eligible_indexes = (
+            set(eligible_target_indexes)
+            if eligible_target_indexes is not None
+            else None
+        )
+        transitions = [
+            (context, next_template)
+            for target_index, context, next_template in _sequence_transitions(
+                sequence.templates,
+                self.order,
+            )
+            if eligible_indexes is None or target_index in eligible_indexes
+        ]
         if not transitions:
             return 0.0
         vocabulary_size = max(len(self.normal_template_vocabulary), 1)
@@ -244,20 +281,30 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             loss_sum += -math.log(numerator / denominator)
         return loss_sum / len(transitions)
 
-    def _learn_sequence(self, sequence: TemplateSequence) -> int:
+    def _learn_sequence(
+        self,
+        sequence: TemplateSequence,
+        *,
+        eligible_target_indexes: list[int],
+    ) -> int:
         """Update transition counts from one normal training sequence.
 
         Args:
             sequence (TemplateSequence): Training sequence to learn from.
+            eligible_target_indexes (list[int]): Target indexes allowed to
+                contribute transition counts.
 
         Returns:
             int: Number of learned transitions contributed by the sequence.
         """
+        eligible_indexes = set(eligible_target_indexes)
         transition_count = 0
-        for context, next_template in _sequence_transitions(
+        for target_index, context, next_template in _sequence_transitions(
             sequence.templates,
             self.order,
         ):
+            if target_index not in eligible_indexes:
+                continue
             context_counts = self.transition_counts_by_context.setdefault(
                 context,
                 Counter(),
@@ -277,8 +324,10 @@ class MarkovManifest(ModelManifest, frozen=True):
         threshold_source (str): Whether the threshold was configured or calibrated.
         calibration_quantile (float): Quantile used during calibration.
         smoothing (float): Additive smoothing applied to transition counts.
-        normal_sequence_count (int): Number of normal training sequences used.
-        normal_transition_count (int): Number of normal transitions seen during fit.
+        normal_sequence_count (int): Number of training sequences that
+            contributed eligible targets during fit.
+        normal_transition_count (int): Number of eligible transitions seen
+            during fit.
         normal_context_vocabulary (int): Number of learned transition contexts.
         normal_template_vocabulary (int): Number of unique templates seen in
             normal training.
@@ -298,7 +347,7 @@ class MarkovManifest(ModelManifest, frozen=True):
 def _sequence_transitions(
     templates: list[str],
     order: int,
-) -> Iterator[tuple[tuple[str, ...], str]]:
+) -> Iterator[tuple[int, tuple[str, ...], str]]:
     """Yield fixed-width transition contexts and next templates.
 
     Args:
@@ -311,7 +360,7 @@ def _sequence_transitions(
     if len(templates) <= order:
         return
     for index in range(order, len(templates)):
-        yield tuple(templates[index - order : index]), templates[index]
+        yield index, tuple(templates[index - order : index]), templates[index]
 
 
 def _quantile(sorted_values: list[float], q: float) -> float:

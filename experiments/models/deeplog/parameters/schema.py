@@ -26,8 +26,8 @@ from experiments.models.deeplog.shared import (
     NormalisationStats,
     ParameterFeatureSchema,
     ParameterModelState,
-    training_event_index_mask,
 )
+from experiments.models.sequence_masks import training_event_index_mask
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

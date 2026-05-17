@@ -20,15 +20,13 @@ from experiments.models.base import (
     PredictionOutcome,
     SequenceSummary,
 )
-from experiments.models.deeplog.shared import (
-    evaluation_event_mask_for_sequence,
-)
 from experiments.models.progress import (
     ProgressHint,
     RunProgressPlan,
     score_stage_description,
     with_known_total,
 )
+from experiments.models.sequence_masks import evaluation_event_mask_for_sequence
 
 if TYPE_CHECKING:
     import logging

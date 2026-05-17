@@ -26,7 +26,6 @@ from experiments.config import (
     LocalDirSourceConfig,
     LocalZipSourceConfig,
     RawEntryPrefixCountSplitConfig,
-    RawEntryPrefixFractionSplitConfig,
     RawEntryPrefixNormalFractionSplitConfig,
     RemoteZipSourceConfig,
     load_experiment_bundles,
@@ -122,7 +121,7 @@ def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
 def _assert_bgl_10pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(
         bundle.dataset.sequence.split,
-        RawEntryPrefixFractionSplitConfig,
+        RawEntryPrefixNormalFractionSplitConfig,
     )
     assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
     assert isinstance(bundle.model, DeepLogModelConfig)
