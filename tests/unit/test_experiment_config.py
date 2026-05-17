@@ -1079,13 +1079,11 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     assert {bundle.model.detector for bundle in bgl_1pct_bundles} == {
         "deeplog",
         "template_frequency",
-        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in bgl_10pct_bundles} == {
         "deeplog",
         "template_frequency",
-        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in hdfs_bundles} == {
@@ -1112,12 +1110,6 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     )
     _assert_template_frequency_baseline_bundle(
         bundle_named(hdfs_assign_first_bundles, "template_frequency"),
-    )
-    _assert_naive_bayes_baseline_bundle(
-        bundle_named(bgl_1pct_bundles, "naive_bayes"),
-    )
-    _assert_naive_bayes_baseline_bundle(
-        bundle_named(bgl_10pct_bundles, "naive_bayes"),
     )
     _assert_markov_baseline_bundle(bundle_named(hdfs_bundles, "markov"))
     _assert_markov_baseline_bundle(bundle_named(hdfs_assign_first_bundles, "markov"))

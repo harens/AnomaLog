@@ -54,10 +54,11 @@ models = [
 # DeepLog paper reproduction: the LSTM next-event target plus the three simple
 # floors that tell us whether the dataset is separable before the neural model
 # does anything interesting.
+# Naive Bayes is omitted because the paper's BGL training prefix is
+# single-class.
 models = [
   "deeplog_default",
   "template_frequency_default",
-  "naive_bayes_default",
   "markov_default",
 ]
 datasets = [
