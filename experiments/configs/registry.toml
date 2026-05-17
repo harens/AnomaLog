@@ -22,10 +22,10 @@ models = [
 dataset = "openstack/deeplog_preprocessed"
 # OpenStack is the paper's other DeepLog-style setting: a sessionised stream
 # with host identifiers, metric values, and a normal-only training prefix.
+# Naive Bayes is omitted because the train split is single-class.
 models = [
   "deeplog_default",
   "template_frequency_default",
-  "naive_bayes_default",
   "markov_default",
   "deepcase",
 ]
@@ -34,11 +34,10 @@ models = [
 [experiments.ait_ads]
 dataset = "ait_ads/base"
 # AIT-ADS is a single continuous alert chronology, so it can host the same
-# sequence baselines.
+# compatible sequence baselines.
 models = [
   "deeplog_default",
   "template_frequency_default",
-  "naive_bayes_default",
   "markov_default",
   "deepcase",
 ]
@@ -74,7 +73,6 @@ models = [
   "deeplog_default",
   "deepcase",
   "template_frequency_default",
-  "naive_bayes_default",
   "markov_default",
 ]
 datasets = [

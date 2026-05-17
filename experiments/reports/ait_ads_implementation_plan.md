@@ -34,6 +34,9 @@
 - The AIT comparison in the paper is not an "all baselines" suite. It uses one
   simple baseline, the global category malicious/investigation rate over a
   30-day lookback, plus DeepCase.
+- Naive Bayes is not a fit for the current AIT-ADS chronology because the
+  train fold is single-class in the label space we expose here, so it would be
+  a forced classifier rather than a meaningful comparator.
 - The dataset entry says `event_label` is the more precise label source and
   should be preferred over the coarser `time_label` intervals when available.
 - The dataset entry also says Wazuh timestamps must be normalised using the ISO

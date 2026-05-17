@@ -533,7 +533,6 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
     assert [bundle.model.detector for bundle in paper_bundles] == [
         "deeplog",
         "template_frequency",
-        "naive_bayes",
         "markov",
         "deepcase",
     ]
@@ -1065,14 +1064,12 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         "deeplog",
         "deepcase",
         "template_frequency",
-        "naive_bayes",
         "markov",
     }
     assert {bundle.model.detector for bundle in hdfs_assign_first_bundles} == {
         "deeplog",
         "deepcase",
         "template_frequency",
-        "naive_bayes",
         "markov",
     }
 
@@ -1089,16 +1086,10 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         bundle_named(hdfs_assign_first_bundles, "template_frequency"),
     )
     _assert_naive_bayes_baseline_bundle(
-        bundle_named(hdfs_bundles, "naive_bayes"),
-    )
-    _assert_naive_bayes_baseline_bundle(
         bundle_named(bgl_1pct_bundles, "naive_bayes"),
     )
     _assert_naive_bayes_baseline_bundle(
         bundle_named(bgl_10pct_bundles, "naive_bayes"),
-    )
-    _assert_naive_bayes_baseline_bundle(
-        bundle_named(hdfs_assign_first_bundles, "naive_bayes"),
     )
     _assert_markov_baseline_bundle(bundle_named(hdfs_bundles, "markov"))
     _assert_markov_baseline_bundle(bundle_named(hdfs_assign_first_bundles, "markov"))
@@ -1165,7 +1156,6 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
         "deeplog",
         "deepcase",
         "template_frequency",
-        "naive_bayes",
         "markov",
     }
     bundle = next(bundle for bundle in bundles if bundle.model.detector == "deeplog")
@@ -1291,7 +1281,6 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
         "deeplog_default",
         "deepcase",
         "template_frequency_default",
-        "naive_bayes_default",
         "markov_default",
     }
     bundle = next(
@@ -1462,12 +1451,11 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl/entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 5
+    assert len(hdfs_bundles) == 4
     assert {bundle.model.name for bundle in hdfs_bundles} == {
         "deeplog_default",
         "deepcase",
         "template_frequency_default",
-        "naive_bayes_default",
         "markov_default",
     }
     assert len(bgl_extension_bundles) == 4
@@ -1535,15 +1523,26 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         "markov_default",
         "deepcase",
     }
+    assert {bundle.model.detector for bundle in openstack_bundles} == {
+        "deeplog",
+        "template_frequency",
+        "markov",
+        "deepcase",
+    }
     assert {bundle.run_group for bundle in openstack_bundles} == {
         "baselines",
         "deeplog",
         "deepcase",
     }
+    assert {bundle.model.detector for bundle in ait_ads_bundles} == {
+        "deeplog",
+        "template_frequency",
+        "markov",
+        "deepcase",
+    }
     assert {bundle.run_group for bundle in ait_ads_bundles} == {
         "deeplog_default",
         "template_frequency_default",
-        "naive_bayes_default",
         "markov_default",
         "deepcase",
     }

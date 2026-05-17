@@ -86,6 +86,10 @@ the source-file split, and skips rows that do not expose one. That is the more
 defensible interpretation of the paper, but it also means the local archive
 does not match the paper's quoted counts.
 
+Naive Bayes is not included in that preset any more. It is a supervised
+label-separability baseline, so it needs both classes in the training split,
+whereas the OpenStack paper-style prefix is intentionally normal-only.
+
 Observed counts on the current archive with the strict instance-id parser:
 
 | Quantity | Count |
@@ -150,6 +154,10 @@ keeps the paper-faithful `instance_id` grouping while removing the accidental
 session-token leakage into Spell. The next faithful step would be to recover
 the exact paper corpus or a reconstruction that yields the target counts
 before tuning any detector behaviour.
+
+Naive Bayes is likewise omitted from the HDFS paper manifests. The HDFS
+prefix split keeps the training side normal-only, so the classifier cannot be
+fit there without changing the reproduction contract.
 
 To rerun the local preprocessing audit, use:
 
