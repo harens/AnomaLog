@@ -174,6 +174,31 @@ The listing shows the registry name, dataset config, model names, and the
 derived reporting groups. Use explicit experiment names when you need a
 specific dataset/model combination.
 
+To run one concrete dataset variant from the registry, pass `--experiment`
+with the exact registry name. For example, to run only the BGL 10% DeepLog
+paper-reproduction dataset variant:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --experiment bgl_deeplog_paper_10pct_entry_stream_no_online
+```
+
+If you want the full BGL DeepLog paper set instead, keep using the family
+group:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --group bgl_deeplog_paper
+```
+
+To submit the same single dataset variant on Slurm, use the backend submit
+command with the exact same registry experiment name:
+
+```bash
+uv run python -m experiments.execution.slurm submit \
+  --experiment bgl_deeplog_paper_10pct_entry_stream_no_online
+```
+
 To run a local group:
 
 ```bash
@@ -216,6 +241,18 @@ policy to Slurm itself. The selected experiment names are embedded directly
 into the wrapped script, so no manifest file is written. Array task logs are
 written beneath `experiments/results/slurm-logs/<selection-label>/` with
 `%A_%a` in the filenames.
+
+To check the full registry matrix for concrete runs that still need results,
+use:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --check-missing
+```
+
+The check reports one line per missing concrete run, including the dataset and
+model config paths, concrete run name, and expected output directory, then
+prints a `total` / `completed` / `missing` summary.
 
 If you do not have Slurm, the local suite runner is the canonical path for
 reproducing the paper experiments:

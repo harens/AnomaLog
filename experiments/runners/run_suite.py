@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from experiments import ConfigError
-from experiments.config import RegisteredExperiment, load_experiment_registry
+from experiments.config import (
+    ExperimentBundle,
+    ExperimentRegistry,
+    RegisteredExperiment,
+    load_experiment_registry,
+)
+from experiments.results import prepare_result_paths
 from experiments.runners.run_experiment import (
     RegisteredExperimentRunRequest,
     run_registered_experiment,
@@ -30,6 +36,8 @@ class SuiteRunRequest:
             to include.
         dry_run (bool): Whether to print the resolved command lines only.
         list_only (bool): Whether to print the selected registry entries only.
+        check_missing (bool): Whether to report selected concrete runs that do
+            not yet have a completed `metrics.json`.
         max_parallel (int): Maximum number of experiments to run concurrently.
         force (bool): Whether to replace existing deterministic run outputs.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
@@ -42,10 +50,32 @@ class SuiteRunRequest:
     experiment_names: tuple[str, ...] = ()
     dry_run: bool = False
     list_only: bool = False
+    check_missing: bool = False
     max_parallel: int = 1
     force: bool = False
     write_predictions: bool = False
     debug_reporting: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _RunStatus:
+    """Concrete run status derived from a resolved registry experiment.
+
+    Attributes:
+        experiment (RegisteredExperiment): Logical registry entry owning the
+            concrete bundle.
+        bundle (ExperimentBundle): Resolved concrete bundle under inspection.
+        run_dir (Path): Expected deterministic output directory.
+        metrics_path (Path): Expected metrics output file path.
+        missing_reason (str | None): Why the bundle is considered incomplete,
+            or ``None`` when the run looks complete.
+    """
+
+    experiment: RegisteredExperiment
+    bundle: ExperimentBundle
+    run_dir: Path
+    metrics_path: Path
+    missing_reason: str | None
 
 
 def run_suite(request: SuiteRunRequest) -> list[Path]:
@@ -67,9 +97,14 @@ def run_suite(request: SuiteRunRequest) -> list[Path]:
         repo_root=resolved_repo_root,
     )
     selected = registry.select(names=request.experiment_names, groups=request.groups)
-    if request.max_parallel < 1:
-        msg = "--max-parallel must be at least 1."
-        raise ConfigError(msg)
+    if request.check_missing:
+        _report_missing_runs(
+            registry=registry,
+            selected=selected,
+            registry_path=request.registry_path,
+            repo_root=resolved_repo_root,
+        )
+        return []
     if request.list_only:
         for experiment in selected:
             _write_line(_format_experiment_listing(experiment))
@@ -86,6 +121,9 @@ def run_suite(request: SuiteRunRequest) -> list[Path]:
                 ),
             )
         return []
+    if request.max_parallel < 1:
+        msg = "--max-parallel must be at least 1."
+        raise ConfigError(msg)
     if request.max_parallel == 1 or len(selected) <= 1:
         return _run_sequential_suite(request=request, selected=selected)
     return _run_parallel_suite(request=request, selected=selected)
@@ -216,6 +254,78 @@ def _format_run_finish(
     )
 
 
+def _report_missing_runs(
+    *,
+    registry: ExperimentRegistry,
+    selected: tuple[RegisteredExperiment, ...],
+    registry_path: Path,
+    repo_root: Path,
+) -> None:
+    statuses = _collect_run_statuses(
+        registry=registry,
+        selected=selected,
+        registry_path=registry_path,
+        repo_root=repo_root,
+    )
+    missing_statuses = [
+        status for status in statuses if status.missing_reason is not None
+    ]
+    for status in missing_statuses:
+        _write_line(_format_missing_run(status))
+    total = len(statuses)
+    completed = total - len(missing_statuses)
+    missing = len(missing_statuses)
+    _write_line(
+        f"Summary: total={total} completed={completed} missing={missing}",
+    )
+
+
+def _collect_run_statuses(
+    *,
+    registry: ExperimentRegistry,
+    selected: tuple[RegisteredExperiment, ...],
+    registry_path: Path,
+    repo_root: Path,
+) -> list[_RunStatus]:
+    statuses: list[_RunStatus] = []
+    for experiment in selected:
+        resolved = registry.resolve_experiment(
+            experiment.name,
+            registry_path=registry_path,
+            repo_root=repo_root,
+        )
+        for bundle in resolved.bundles:
+            result_paths = prepare_result_paths(bundle)
+            run_dir_exists = result_paths.run_dir.is_dir()
+            metrics_exists = result_paths.metrics_path.is_file()
+            missing_reason = None
+            if not run_dir_exists:
+                missing_reason = "missing output directory"
+            elif not metrics_exists:
+                missing_reason = "missing metrics.json"
+            statuses.append(
+                _RunStatus(
+                    experiment=experiment,
+                    bundle=bundle,
+                    run_dir=result_paths.run_dir,
+                    metrics_path=result_paths.metrics_path,
+                    missing_reason=missing_reason,
+                ),
+            )
+    return statuses
+
+
+def _format_missing_run(status: _RunStatus) -> str:
+    return (
+        f"{status.experiment.name}\t"
+        f"dataset={status.bundle.dataset_path.as_posix()}\t"
+        f"model={status.bundle.model_path.as_posix()}\t"
+        f"run={status.bundle.concrete_name}\t"
+        f"run_dir={status.run_dir.as_posix()}\t"
+        f"status={status.missing_reason}"
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for local suite execution.
 
@@ -265,6 +375,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="List the selected experiments without executing them.",
     )
     parser.add_argument(
+        "--check-missing",
+        action="store_true",
+        help=(
+            "Report selected concrete runs whose output directory is missing "
+            "or does not contain metrics.json."
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Replace any existing deterministic result directories.",
@@ -301,6 +419,7 @@ def main() -> int:
                 experiment_names=tuple(args.experiment),
                 dry_run=args.dry_run,
                 list_only=args.list_only,
+                check_missing=args.check_missing,
                 max_parallel=args.max_parallel,
                 force=args.force,
                 write_predictions=args.write_predictions,
