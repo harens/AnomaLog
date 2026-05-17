@@ -351,17 +351,15 @@ def _run_bundle(
         Path: Deterministic run directory containing the written artefacts.
 
     Raises:
-        FileExistsError: If the deterministic result directory already exists
-            and `force` is false.
+        FileExistsError: If the result path exists but is not a directory.
     """
     result_paths = prepare_result_paths(bundle)
     if result_paths.run_dir.exists():
-        if result_paths.metrics_path.is_file() and not force:
-            msg = (
-                f"Result directory already exists: {result_paths.run_dir}. "
-                "Use --force to replace it."
-            )
+        if not result_paths.run_dir.is_dir():
+            msg = f"Result path exists but is not a directory: {result_paths.run_dir}"
             raise FileExistsError(msg)
+        if result_paths.metrics_path.is_file() and not force:
+            return result_paths.run_dir
         shutil.rmtree(result_paths.run_dir)
     result_paths.run_dir.mkdir(parents=True, exist_ok=True)
 
