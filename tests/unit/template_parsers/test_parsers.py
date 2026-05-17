@@ -350,29 +350,22 @@ def test_spell_template_parser_uses_the_lightweight_spellpy_mode(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Spell parser should only request the template-mining artefacts it uses."""
+    """Spell parser should only request the template-mining artefacts it uses.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Redirects imports and the working
+            directory so the parser exercises a fake spellpy backend locally.
+        tmp_path (Path): Per-test filesystem sandbox for spell cache artefacts.
+    """
     captured: dict[str, object] = {}
 
     class _FakeLogParser:
-        def __init__(
-            self,
-            *,
-            indir: str,
-            outdir: str,
-            log_format: str,
-            tau: float,
-            keep_para: bool,
-        ) -> None:
-            captured.update(
-                {
-                    "indir": indir,
-                    "outdir": outdir,
-                    "log_format": log_format,
-                    "tau": tau,
-                    "keep_para": keep_para,
-                },
-            )
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+            outdir = captured["outdir"]
+            assert isinstance(outdir, str)
             self._outdir = Path(outdir)
+            self.parse_metrics = {"input_lines_processed": 2}
 
         def parse(self, logname: str) -> None:
             templates_path = self._outdir / f"{logname}_templates.csv"
@@ -397,6 +390,8 @@ def test_spell_template_parser_uses_the_lightweight_spellpy_mode(
         "outdir": str(tmp_path / ".cache" / "spell" / "demo_spell_output"),
         "log_format": "<Content>",
         "tau": 0.75,
+        "progress_interval": 1000,
+        "max_lcs_comparisons_per_line": 10000,
         "keep_para": False,
     }
     assert parser.inference("Build vm-3 complete") == (
@@ -426,3 +421,25 @@ def test_spell_template_parser_forwards_spellpy_module_logs() -> None:
     assert "spellpy.spell:Parsing file: demo_spell_input.log" in stream.getvalue()
     assert spell_logger.level == previous_level
     assert spell_logger.propagate == previous_propagate
+
+
+def test_spellpy_logger_context_uses_inherited_experiment_handlers() -> None:
+    """Spellpy logs should still flow when the run logger inherits handlers."""
+    stream = io.StringIO()
+    parent_logger = logging.getLogger("tests.spellpy_forwarding.parent")
+    parent_handler = logging.StreamHandler(stream)
+    parent_handler.setFormatter(logging.Formatter("%(name)s:%(message)s"))
+    parent_logger.handlers.clear()
+    parent_logger.addHandler(parent_handler)
+    parent_logger.setLevel(logging.INFO)
+    parent_logger.propagate = False
+
+    run_logger = logging.getLogger("tests.spellpy_forwarding.parent.child")
+    run_logger.handlers.clear()
+    run_logger.setLevel(logging.INFO)
+    run_logger.propagate = True
+
+    with template_parsers.spellpy_logger_context(run_logger):
+        logging.getLogger("spellpy.spell").info("checkpoint")
+
+    assert "spellpy.spell:checkpoint" in stream.getvalue()

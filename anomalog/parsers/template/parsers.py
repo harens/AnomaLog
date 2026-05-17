@@ -39,6 +39,10 @@ def spellpy_logger_context(
 ) -> Iterator[None]:
     """Forward `spellpy.spell` output into the active experiment logger.
 
+    Args:
+        run_logger (logging.Logger | logging.LoggerAdapter[logging.Logger]):
+            Active experiment logger that should receive spellpy module logs.
+
     Raises:
         TypeError: If the resolved logger is not a standard `logging.Logger`.
     """
@@ -49,9 +53,17 @@ def spellpy_logger_context(
         msg = "Active run logger is not a standard logging.Logger instance."
         raise TypeError(msg)
     spell_logger = logging.getLogger("spellpy.spell")
-    attached_handlers = experiment_logger.handlers.copy()
     previous_level = spell_logger.level
     previous_propagate = spell_logger.propagate
+
+    class _ForwardToExperimentHandler(logging.Handler):
+        """Forward spellpy records through the active experiment logger."""
+
+        @override
+        def emit(self, record: logging.LogRecord) -> None:
+            experiment_logger.handle(record)
+
+    forward_handler = _ForwardToExperimentHandler()
 
     spell_logger.setLevel(
         (
@@ -61,13 +73,11 @@ def spellpy_logger_context(
         ),
     )
     spell_logger.propagate = False
-    for handler in attached_handlers:
-        spell_logger.addHandler(handler)
+    spell_logger.addHandler(forward_handler)
     try:
         yield
     finally:
-        for handler in attached_handlers:
-            spell_logger.removeHandler(handler)
+        spell_logger.removeHandler(forward_handler)
         spell_logger.setLevel(previous_level)
         spell_logger.propagate = previous_propagate
 
@@ -354,11 +364,18 @@ class SpellTemplateParser(TemplateParser):
         name (ClassVar[str]): Registry/config name for the built-in parser.
         dataset_name (str | None): Optional dataset name used for cache paths.
         tau (float): Spell similarity threshold passed to Spell training.
+        progress_interval (int): Number of processed lines between spellpy
+            progress logs and raw-cache flushes.
+        max_lcs_comparisons_per_line (int | None): Maximum number of LCS
+            comparisons spellpy may perform for one line before it falls back
+            to creating or reusing a less-specific template.
     """
 
     name: ClassVar[str] = "spell"
     dataset_name: str | None = None
     tau: float = 0.5
+    progress_interval: int = 1000
+    max_lcs_comparisons_per_line: int | None = 10000
     _patterns: list[tuple[str, re.Pattern[str], int]] | None = None
 
     @override
@@ -401,21 +418,32 @@ class SpellTemplateParser(TemplateParser):
         if not any_lines:
             self._patterns = []
             return
-
+        keep_para = False
+        logger.info(
+            "Spell parser settings: keep_para=%s progress_interval=%s "
+            "max_lcs_comparisons_per_line=%s",
+            keep_para,
+            self.progress_interval,
+            self.max_lcs_comparisons_per_line,
+        )
         parser = spell.LogParser(
             indir=str(log_dir),
             outdir=str(outdir),
             log_format="<Content>",
             tau=self.tau,
+            progress_interval=self.progress_interval,
+            max_lcs_comparisons_per_line=self.max_lcs_comparisons_per_line,
             # AnomaLog only consumes the mined templates, so skip Spell's
             # per-row parameter extraction and the extra main-output append.
             keep_para=False,
         )
         with spellpy_logger_context(logger):
             parser.parse(raw_path.name)
-
+        if getattr(parser, "parse_metrics", None):
+            logger.info("Spell parse metrics: %s", parser.parse_metrics)
         templates_path = outdir / f"{raw_path.name}_templates.csv"
         rows = _read_spell_template_rows(templates_path)
+
         self._patterns = [
             (
                 template,
