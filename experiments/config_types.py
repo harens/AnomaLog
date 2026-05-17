@@ -945,6 +945,9 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
         Raises:
             TypeError: If msgspec returns a non-dict payload unexpectedly.
         """
+        sweep_path = _resolve_path(self.sweep_path, self.repo_root)
+        dataset_path = _resolve_path(self.dataset_path, self.repo_root)
+        model_path = _resolve_path(self.model_path, self.repo_root)
         payload = msgspec.to_builtins(
             {
                 "sweep": self.sweep,
@@ -965,9 +968,9 @@ class ExperimentBundle(msgspec.Struct, frozen=True):
                     else {}
                 ),
                 "paths": {
-                    "sweep": self.sweep_path.relative_to(self.repo_root).as_posix(),
-                    "dataset": self.dataset_path.relative_to(self.repo_root).as_posix(),
-                    "model": self.model_path.relative_to(self.repo_root).as_posix(),
+                    "sweep": sweep_path.relative_to(self.repo_root).as_posix(),
+                    "dataset": dataset_path.relative_to(self.repo_root).as_posix(),
+                    "model": model_path.relative_to(self.repo_root).as_posix(),
                 },
             },
             enc_hook=_path_to_string,
