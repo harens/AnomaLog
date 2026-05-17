@@ -208,9 +208,11 @@ uv run python -m experiments.runners.run_suite \
   --max-parallel 2
 ```
 
-Add `--force` to replace the deterministic output directories for the same
-concrete run variants. Add `--write-predictions` if you want each run to
-persist `predictions.jsonl` alongside the other result artefacts.
+Add `--force` to replace deterministic output directories for completed runs.
+If a result directory exists but `metrics.json` is missing, the runner treats
+it as stale and replaces it without requiring `--force`. Add
+`--write-predictions` if you want each run to persist `predictions.jsonl`
+alongside the other result artefacts.
 
 The same registry also drives the optional Slurm backend:
 
@@ -307,7 +309,8 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved manifest, dataset, and model config.
 - Re-running the exact same config reuses that deterministic output directory.
-  Use `--force` when you want to overwrite it.
+  Completed runs still require `--force` to overwrite, but stale directories
+  without `metrics.json` are replaced automatically.
 - Changing the dataset, sequence settings, or model config produces a new
   fingerprint and therefore a new result directory.
 - Detector training and test scoring are intentionally not cached as separate

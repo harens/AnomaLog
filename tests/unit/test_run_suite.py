@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import TYPE_CHECKING
 
 import pytest
@@ -240,21 +241,51 @@ def test_run_suite_check_missing_reports_incomplete_runs(
 
     output = capsys.readouterr().out.strip().splitlines()
     assert output == [
+        f"- missing_dir [{missing_dir_bundle.concrete_name}]",
+        f"  dataset: {missing_dir_bundle.dataset_path.as_posix()}",
+        f"  model: {missing_dir_bundle.model_path.as_posix()}",
+        f"  output: {prepare_result_paths(missing_dir_bundle).run_dir.as_posix()}",
+        "  status: missing output directory",
         (
-            "missing_dir\t"
-            f"dataset={missing_dir_bundle.dataset_path.as_posix()}\t"
-            f"model={missing_dir_bundle.model_path.as_posix()}\t"
-            f"run={missing_dir_bundle.concrete_name}\t"
-            f"run_dir={prepare_result_paths(missing_dir_bundle).run_dir.as_posix()}\t"
-            "status=missing output directory"
+            "  rerun: "
+            + shlex.join(
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "experiments.runners.run_experiment",
+                    "--experiment",
+                    "missing_dir",
+                    "--registry",
+                    registry_path.as_posix(),
+                    "--repo-root",
+                    tmp_path.as_posix(),
+                ],
+            )
         ),
+        f"- missing_metrics [{missing_metrics_bundle.concrete_name}]",
+        f"  dataset: {missing_metrics_bundle.dataset_path.as_posix()}",
+        f"  model: {missing_metrics_bundle.model_path.as_posix()}",
+        f"  output: {missing_metrics_paths.run_dir.as_posix()}",
+        "  status: missing metrics.json",
         (
-            "missing_metrics\t"
-            f"dataset={missing_metrics_bundle.dataset_path.as_posix()}\t"
-            f"model={missing_metrics_bundle.model_path.as_posix()}\t"
-            f"run={missing_metrics_bundle.concrete_name}\t"
-            f"run_dir={missing_metrics_paths.run_dir.as_posix()}\t"
-            "status=missing metrics.json"
+            "  rerun: "
+            + shlex.join(
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "experiments.runners.run_experiment",
+                    "--experiment",
+                    "missing_metrics",
+                    "--registry",
+                    registry_path.as_posix(),
+                    "--repo-root",
+                    tmp_path.as_posix(),
+                ],
+            )
         ),
         "Summary: total=3 completed=1 missing=2",
     ]

@@ -514,3 +514,93 @@ def test_run_bundle_rebuilds_sequence_views_for_each_stage(
 
     expected_apply_calls = 6
     assert sequence_config.apply_calls == expected_apply_calls
+
+
+def test_run_bundle_replaces_stale_output_directory_without_force(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stale run directory without metrics should be replaced without force.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces filesystem and orchestration
+            helpers so the test can focus on overwrite behaviour.
+        tmp_path (Path): Temporary filesystem root used for the fake run.
+    """
+    sequence_config = _SequenceConfig()
+
+    bundle = SimpleNamespace(
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(
+            dataset_name="demo",
+            sequence=sequence_config,
+        ),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="demo-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run.log").write_text("stale", encoding="utf-8")
+    run_paths = SimpleNamespace(
+        run_dir=run_dir,
+        metrics_path=tmp_path / "metrics.json",
+        run_log_path=tmp_path / "run.log",
+        predictions_path=tmp_path / "predictions.jsonl",
+    )
+    removed_paths: list[Path] = []
+
+    real_rmtree = runner.shutil.rmtree
+
+    def _recording_rmtree(path: Path) -> None:
+        removed_paths.append(path)
+        real_rmtree(path)
+
+    monkeypatch.setattr(runner, "prepare_result_paths", lambda _bundle: run_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, **_kwargs: (
+            list(sequence_factory()),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.shutil, "rmtree", _recording_rmtree)
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=False)
+
+    assert result == [run_dir]
+    assert removed_paths == [run_dir]
+    assert run_dir.exists()

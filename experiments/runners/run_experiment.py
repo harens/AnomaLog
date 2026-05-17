@@ -356,7 +356,7 @@ def _run_bundle(
     """
     result_paths = prepare_result_paths(bundle)
     if result_paths.run_dir.exists():
-        if not force:
+        if result_paths.metrics_path.is_file() and not force:
             msg = (
                 f"Result directory already exists: {result_paths.run_dir}. "
                 "Use --force to replace it."

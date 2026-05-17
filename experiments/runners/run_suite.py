@@ -271,7 +271,12 @@ def _report_missing_runs(
         status for status in statuses if status.missing_reason is not None
     ]
     for status in missing_statuses:
-        _write_line(_format_missing_run(status))
+        for line in _format_missing_run(
+            status,
+            registry_path=registry_path,
+            repo_root=repo_root,
+        ):
+            _write_line(line)
     total = len(statuses)
     completed = total - len(missing_statuses)
     missing = len(missing_statuses)
@@ -315,15 +320,46 @@ def _collect_run_statuses(
     return statuses
 
 
-def _format_missing_run(status: _RunStatus) -> str:
-    return (
-        f"{status.experiment.name}\t"
-        f"dataset={status.bundle.dataset_path.as_posix()}\t"
-        f"model={status.bundle.model_path.as_posix()}\t"
-        f"run={status.bundle.concrete_name}\t"
-        f"run_dir={status.run_dir.as_posix()}\t"
-        f"status={status.missing_reason}"
+def _format_missing_run(
+    status: _RunStatus,
+    *,
+    registry_path: Path,
+    repo_root: Path,
+) -> list[str]:
+    command = _build_rerun_command(
+        status.experiment.name,
+        registry_path=registry_path,
+        repo_root=repo_root,
     )
+    return [
+        f"- {status.experiment.name} [{status.bundle.concrete_name}]",
+        f"  dataset: {status.bundle.dataset_path.as_posix()}",
+        f"  model: {status.bundle.model_path.as_posix()}",
+        f"  output: {status.run_dir.as_posix()}",
+        f"  status: {status.missing_reason}",
+        f"  rerun: {shlex.join(command)}",
+    ]
+
+
+def _build_rerun_command(
+    experiment_name: str,
+    *,
+    registry_path: Path,
+    repo_root: Path,
+) -> list[str]:
+    return [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "experiments.runners.run_experiment",
+        "--experiment",
+        experiment_name,
+        "--registry",
+        registry_path.as_posix(),
+        "--repo-root",
+        repo_root.as_posix(),
+    ]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
