@@ -21,6 +21,8 @@ HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000
 AIT_ADS_SAMPLE_TS_MS = 1_642_410_287_000
 THUNDERBIRD_SAMPLE_TS_MS = 1_131_566_461_000
+THUNDERBIRD_EXIT_SIGNAL_TS_MS = 1_133_559_328_000
+THUNDERBIRD_FIXUP_TS_MS = 1_133_563_453_000
 
 
 def test_hdfs_parser_uses_component_when_block_id_is_missing() -> None:
@@ -205,6 +207,31 @@ def test_thunderbird_parser_treats_non_dash_labels_as_anomalous() -> None:
     assert parsed.timestamp_unix_ms is None
     assert parsed.anomalous == 1
     assert parsed.entity_id == "dn228/dn228"
+
+
+def test_thunderbird_parser_accepts_tails_without_component_separators() -> None:
+    """ThunderbirdParser should keep lines that do not use a colon separator."""
+    parsed = ThunderbirdParser().parse_line(
+        "- 1133559328 2005.12.02 #1# Dec 2 13:35:28 #1#/#1# exiting on signal 15",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms == THUNDERBIRD_EXIT_SIGNAL_TS_MS
+    assert parsed.entity_id == "#1#/#1#"
+    assert parsed.anomalous == 0
+    assert parsed.untemplated_message_text == "exiting on signal 15"
+
+
+def test_thunderbird_parser_accepts_colon_suffixed_tails() -> None:
+    """ThunderbirdParser should keep colon-suffixed message tails."""
+    parsed = ThunderbirdParser().parse_line(
+        "- 1133563453 2005.12.02 tsqe1 Dec 2 14:44:13 tsqe1/tsqe1 ifup:",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms == THUNDERBIRD_FIXUP_TS_MS
+    assert parsed.entity_id == "tsqe1/tsqe1"
+    assert parsed.untemplated_message_text == "ifup:"
 
 
 def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
