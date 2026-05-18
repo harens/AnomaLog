@@ -515,6 +515,56 @@ def test_fit_key_model_reports_example_preparation_progress(
     assert removed_tasks[0] == 0
 
 
+def test_fit_key_model_streams_batches_without_materialising_all_examples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key-model training should build only minibatch tensors, not the corpus.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records one-hot batch construction.
+    """
+    batch_sizes: list[int] = []
+    original_forward = KeyLSTM.forward
+
+    def _recording_forward(
+        self: KeyLSTM,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_sizes.append(int(inputs.shape[0]))
+        return original_forward(self, inputs)
+
+    monkeypatch.setattr(KeyLSTM, "forward", _recording_forward)
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C", "D", "E"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C", "D", "E"),
+        event_count=5,
+    )
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=1,
+        batch_size=2,
+        hidden_size=4,
+        num_layers=1,
+    )
+
+    with Progress(disable=True) as progress:
+        fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert batch_sizes == [2, 2]
+
+
 def test_fit_parameter_models_reports_schema_preparation_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
