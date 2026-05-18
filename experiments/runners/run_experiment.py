@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Protocol
 
 from prefect.logging.configuration import (
@@ -327,7 +328,7 @@ def _run_bundle_group_parallel(
     return results_by_index, failures_by_index
 
 
-def _run_bundle(
+def _run_bundle(  # noqa: PLR0914 - orchestration function intentionally tracks stage timings and artefact paths.
     bundle: ExperimentBundle,
     *,
     force: bool = False,
@@ -377,9 +378,16 @@ def _run_bundle(
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
         logger.info("Building dataset %s", bundle.dataset.dataset_name)
         templated = dataset_spec.build()
+        sequence_started_at = perf_counter()
         sequence_view_for_summary = bundle.dataset.sequence.apply(templated)
+        logger.info(
+            "Stage complete: sequence construction for %s in %.3fs",
+            bundle.dataset.dataset_name,
+            perf_counter() - sequence_started_at,
+        )
         logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
         split_counts_hint = sequence_view_for_summary.split_count_hint()
+        model_started_at = perf_counter()
         model_summary = run_model(
             sequence_factory=lambda: iter(
                 bundle.dataset.sequence.apply(templated),
@@ -408,10 +416,21 @@ def _run_bundle(
                 ),
             ),
         )
+        logger.info(
+            "Stage complete: model execution for %s in %.3fs",
+            bundle.model.detector,
+            perf_counter() - model_started_at,
+        )
+        split_summary_started_at = perf_counter()
         sequences_for_split_summary = bundle.dataset.sequence.apply(templated)
         split_summary = build_sequence_split_summary(
             sequences_for_split_summary,
             sequence_summary=model_summary.sequence_summary,
+        )
+        logger.info(
+            "Stage complete: split summary construction for %s in %.3fs",
+            bundle.dataset.dataset_name,
+            perf_counter() - split_summary_started_at,
         )
         train_on_normal_entities_only = split_summary.train_on_normal_entities_only
         if train_on_normal_entities_only is not None:
@@ -438,17 +457,24 @@ def _run_bundle(
                 split_summary.ineligible_train_pool_count,
                 total_sequences,
             )
+        metrics_started_at = perf_counter()
         metric_report = build_run_metrics_report(
             bundle=bundle,
             sequences=bundle.dataset.sequence.apply(templated),
             model_summary=model_summary,
             debug_reporting=debug_reporting,
         )
+        logger.info(
+            "Stage complete: run metric report construction for %s in %.3fs",
+            bundle.dataset.dataset_name,
+            perf_counter() - metrics_started_at,
+        )
         _log_metric_report(logger, metric_report, debug_reporting=debug_reporting)
         logger.info(
             "Model run complete with %s sequences",
             model_summary.sequence_summary.sequence_count,
         )
+        outputs_started_at = perf_counter()
         sequences_for_outputs = bundle.dataset.sequence.apply(templated)
         write_run_outputs(
             context=ResultWriteContext(
@@ -459,6 +485,11 @@ def _run_bundle(
                 result_paths=result_paths,
                 debug_reporting=debug_reporting,
             ),
+        )
+        logger.info(
+            "Stage complete: run output writing for %s in %.3fs",
+            bundle.dataset.dataset_name,
+            perf_counter() - outputs_started_at,
         )
         logger.info(
             "Wrote experiment artifacts to %s",

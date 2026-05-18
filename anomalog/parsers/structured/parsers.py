@@ -248,6 +248,130 @@ class BGLParser(StructuredParser):
 
 
 @dataclass(frozen=True, slots=True)
+class ThunderbirdParser(StructuredParser):
+    """Parse Thunderbird supercomputer log lines into structured fields.
+
+    Loghub's Thunderbird corpus uses a labelled raw-line format where the first
+    token marks alert status (`-` for normal, any other tag for an alert) and
+    the remaining header fields expose the event chronology plus the host,
+    component, and process identifier. The parser keeps the free-text message
+    body for template mining and collapses the label into AnomaLog's binary
+    anomaly flag.
+
+    The parser deliberately stays close to the observed raw structure so the
+    downstream template miner sees the message body rather than a Thunderbird-
+    specific normalisation of the header fields.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "thunderbird"
+
+    _THUNDERBIRD_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"""
+        ^\s*
+        (?P<label>\S+)\s+
+        (?:(?P<timestamp>\d+)\s+)?
+        (?P<date>\d{4}\.\d{2}\.\d{2})\s+
+        (?P<user>\S+)\s+
+        (?P<month>[A-Z][a-z]{2})\s+
+        (?P<day>\d{1,2})\s+
+        (?P<time>\d{2}:\d{2}:\d{2})\s+
+        (?P<location>\S+)\s+
+        (?P<component>.+?)
+        (?:\[(?P<pid>\d+)\])?:
+        \s*(?P<content>.*)
+        \s*$
+        """,
+        re.VERBOSE,
+    )
+
+    @staticmethod
+    def _timestamp_seconds_to_unix_ms(timestamp_s: str | None) -> int | None:
+        """Convert a Thunderbird epoch-second timestamp to milliseconds.
+
+        Args:
+            timestamp_s (str | None): Timestamp string from the raw log header.
+
+        Returns:
+            int | None: Parsed timestamp in Unix milliseconds, or `None` when
+                the source omits the field or the value is malformed.
+        """
+        if timestamp_s is None:
+            return None
+        try:
+            return int(timestamp_s) * 1000
+        except ValueError:
+            return None
+
+    @classmethod
+    def analyse_line(
+        cls,
+        raw_line: str,
+    ) -> tuple[BaseStructuredLine | None, str | None]:
+        """Parse one Thunderbird line and report the reason when skipped.
+
+        Args:
+            raw_line (str): Raw Thunderbird log line to inspect.
+
+        Returns:
+            tuple[BaseStructuredLine | None, str | None]: Parsed structured row
+            and an optional skip reason.
+        """
+        s = raw_line.rstrip("\n")
+        if not s.strip():
+            return None, "blank"
+
+        m = cls._THUNDERBIRD_RE.match(s)
+        if m is None:
+            return None, "malformed"
+
+        d = m.groupdict()
+        content = (d["content"] or "").strip()
+        if not content:
+            return None, "empty_message"
+
+        label = d["label"].strip()
+        anomalous = 0 if label == "-" else 1
+        timestamp_ms = cls._timestamp_seconds_to_unix_ms(d["timestamp"])
+        entity_id = d["location"].strip() or d["user"].strip() or d["component"].strip()
+
+        return (
+            BaseStructuredLine(
+                timestamp_unix_ms=timestamp_ms,
+                entity_id=entity_id,
+                untemplated_message_text=content,
+                anomalous=anomalous,
+            ),
+            None,
+        )
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse a single Thunderbird line; return `None` for skipped rows.
+
+        Args:
+            raw_line (str): Raw Thunderbird log line to parse.
+
+        Returns:
+            BaseStructuredLine | None: Parsed structured record, or `None`
+                when the line is blank, malformed, or has no message body.
+        """
+        logger = get_logger()
+        parsed, reason = self.analyse_line(raw_line)
+        if parsed is None:
+            if reason != "blank":
+                logger.warning(
+                    "Cannot parse Thunderbird line (%s): %r",
+                    reason,
+                    raw_line,
+                )
+            return None
+        return parsed
+
+
+@dataclass(frozen=True, slots=True)
 class OpenStackDeepLogParser(StructuredParser):
     r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
 

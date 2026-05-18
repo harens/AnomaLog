@@ -14,11 +14,13 @@ from anomalog.parsers.structured.parsers import (
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
+    ThunderbirdParser,
 )
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000
 AIT_ADS_SAMPLE_TS_MS = 1_642_410_287_000
+THUNDERBIRD_SAMPLE_TS_MS = 1_131_566_461_000
 
 
 def test_hdfs_parser_uses_component_when_block_id_is_missing() -> None:
@@ -176,6 +178,41 @@ def test_openstack_deeplog_parser_skips_rows_without_instance_handles(
         raw_line (str): Labelled OpenStack row lacking an instance id.
     """
     assert OpenStackDeepLogParser().parse_line(raw_line) is None
+
+
+def test_thunderbird_parser_reads_label_timestamp_and_message_body() -> None:
+    """ThunderbirdParser should keep the message body and anomaly label."""
+    parsed = ThunderbirdParser().parse_line(
+        "- 1131566461 2005.11.09 dn228 Nov 9 12:01:01 dn228/dn228 "
+        "crond(pam_unix)[2915]: session closed for user root",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms == THUNDERBIRD_SAMPLE_TS_MS
+    assert parsed.entity_id == "dn228/dn228"
+    assert parsed.anomalous == 0
+    assert parsed.untemplated_message_text == "session closed for user root"
+
+
+def test_thunderbird_parser_treats_non_dash_labels_as_anomalous() -> None:
+    """ThunderbirdParser should map any non-dash label token to anomaly."""
+    parsed = ThunderbirdParser().parse_line(
+        "+ 2005.11.09 dn228 Nov 9 12:02:02 dn228/dn228 "
+        "sshd[1234]: disk failure on /dev/sda",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms is None
+    assert parsed.anomalous == 1
+    assert parsed.entity_id == "dn228/dn228"
+
+
+def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
+    """ThunderbirdParser should skip blank and malformed lines cleanly."""
+    parser = ThunderbirdParser()
+
+    assert parser.analyse_line("   \n") == (None, "blank")
+    assert parser.analyse_line("not a thunderbird line") == (None, "malformed")
 
 
 def test_ait_ads_parser_reads_canonical_alert_rows() -> None:

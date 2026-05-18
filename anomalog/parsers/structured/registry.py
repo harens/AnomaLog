@@ -9,6 +9,7 @@ from anomalog.parsers.structured.parsers import (
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
+    ThunderbirdParser,
 )
 
 _STRUCTURED_PARSERS: dict[str, type[StructuredParser]] = {
@@ -17,6 +18,7 @@ _STRUCTURED_PARSERS: dict[str, type[StructuredParser]] = {
     "delimited_labelled_event": DelimitedLabelledEventParser,
     "hdfs_v1": HDFSV1Parser,
     "openstack_deeplog": OpenStackDeepLogParser,
+    "thunderbird": ThunderbirdParser,
 }
 
 

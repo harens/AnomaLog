@@ -6,6 +6,7 @@ from anomalog.parsers.structured import (
     HDFSV1Parser,
     OpenStackDeepLogParser,
     ParquetStructuredSink,
+    ThunderbirdParser,
 )
 from anomalog.parsers.template import (
     Drain3Parser,
@@ -22,4 +23,5 @@ __all__ = [
     "OpenStackDeepLogParser",
     "ParquetStructuredSink",
     "SpellTemplateParser",
+    "ThunderbirdParser",
 ]

@@ -14,6 +14,7 @@ from anomalog.parsers.structured.parsers import (
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
+    ThunderbirdParser,
 )
 from anomalog.parsers.structured.registry import (
     resolve_structured_parser,
@@ -30,6 +31,7 @@ __all__ = [
     "ParquetStructuredSink",
     "StructuredParser",
     "StructuredSink",
+    "ThunderbirdParser",
     "resolve_structured_parser",
     "structured_parser_names",
 ]
