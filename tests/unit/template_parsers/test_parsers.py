@@ -1,16 +1,12 @@
 """Tests for template parser implementations."""
 
-import io
-import logging
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypeAlias
 
 import pytest
 from prefect.logging import disable_run_logger
 
-import anomalog.parsers.template.parsers as template_parsers
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.template import (
     resolve_template_parser,
@@ -299,11 +295,11 @@ def test_spell_template_parser_trains_and_infers(
     assert parameters == ["vm-3"]
 
 
-def test_spell_template_parser_streams_input_without_materialising_it(
+def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Spell parser training should consume the input stream incrementally.
+    """Spell parser training should mine templates without legacy raw artefacts.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Patches the working directory and
@@ -316,130 +312,31 @@ def test_spell_template_parser_streams_input_without_materialising_it(
         raise AssertionError(msg)
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        "anomalog.parsers.template.parsers.list",
-        _forbid_list_materialisation,
-        raising=False,
-    )
-
     parser = SpellTemplateParser(dataset_name="demo")
-    parser.train(
-        lambda: iter(
-            [
-                "Build vm-1 complete",
-                "Build vm-2 complete",
-            ],
-        ),
-    )
+    with monkeypatch.context() as m:
+        m.setattr(
+            "anomalog.parsers.template.parsers.list",
+            _forbid_list_materialisation,
+            raising=False,
+        )
+        parser.train(
+            lambda: iter(
+                [
+                    "Build vm-1 complete",
+                    "Build vm-2 complete",
+                ],
+            ),
+        )
 
     raw_path = tmp_path / ".cache" / "spell" / "demo_spell_input.log"
-    assert raw_path.read_text(encoding="utf-8") == (
-        "Build vm-1 complete\nBuild vm-2 complete\n"
-    )
-    templates_path = (
-        tmp_path
-        / ".cache"
-        / "spell"
-        / "demo_spell_output"
-        / "demo_spell_input.log_templates.csv"
-    )
-    assert templates_path.exists()
-
-
-def test_spell_template_parser_uses_the_lightweight_spellpy_mode(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Spell parser should only request the template-mining artefacts it uses.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Redirects imports and the working
-            directory so the parser exercises a fake spellpy backend locally.
-        tmp_path (Path): Per-test filesystem sandbox for spell cache artefacts.
-    """
-    captured: dict[str, object] = {}
-
-    class _FakeLogParser:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-            outdir = captured["outdir"]
-            assert isinstance(outdir, str)
-            self._outdir = Path(outdir)
-            self.parse_metrics = {"input_lines_processed": 2}
-
-        def parse(self, logname: str) -> None:
-            templates_path = self._outdir / f"{logname}_templates.csv"
-            templates_path.write_text(
-                "EventTemplate,Occurrences\nBuild <*> complete,2\n",
-                encoding="utf-8",
-            )
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        "anomalog.parsers.template.parsers.importlib.import_module",
-        lambda _name: SimpleNamespace(
-            spell=SimpleNamespace(LogParser=_FakeLogParser),
-        ),
-    )
-
-    parser = SpellTemplateParser(dataset_name="demo", tau=0.75)
-    parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
-
-    assert captured == {
-        "indir": str(tmp_path / ".cache" / "spell"),
-        "outdir": str(tmp_path / ".cache" / "spell" / "demo_spell_output"),
-        "log_format": "<Content>",
-        "tau": 0.75,
-        "progress_interval": 1000,
-        "max_lcs_comparisons_per_line": 10000,
-        "keep_para": False,
-    }
+    output_dir = tmp_path / ".cache" / "spell" / "demo_spell_output"
+    assert not raw_path.exists()
+    assert output_dir.exists()
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "demo.log_structured.csv",
+        "demo.log_templates.csv",
+    ]
     assert parser.inference("Build vm-3 complete") == (
         "Build <*> complete",
         ["vm-3"],
     )
-
-
-def test_spell_template_parser_forwards_spellpy_module_logs() -> None:
-    """Spellpy module logs should flow through the active experiment logger."""
-    stream = io.StringIO()
-    run_logger = logging.getLogger("tests.spellpy_forwarding")
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(logging.Formatter("%(name)s:%(message)s"))
-    run_logger.handlers.clear()
-    run_logger.addHandler(handler)
-    run_logger.setLevel(logging.INFO)
-    run_logger.propagate = False
-
-    spell_logger = logging.getLogger("spellpy.spell")
-    previous_level = spell_logger.level
-    previous_propagate = spell_logger.propagate
-
-    with template_parsers.spellpy_logger_context(run_logger):
-        spell_logger.info("Parsing file: demo_spell_input.log")
-
-    assert "spellpy.spell:Parsing file: demo_spell_input.log" in stream.getvalue()
-    assert spell_logger.level == previous_level
-    assert spell_logger.propagate == previous_propagate
-
-
-def test_spellpy_logger_context_uses_inherited_experiment_handlers() -> None:
-    """Spellpy logs should still flow when the run logger inherits handlers."""
-    stream = io.StringIO()
-    parent_logger = logging.getLogger("tests.spellpy_forwarding.parent")
-    parent_handler = logging.StreamHandler(stream)
-    parent_handler.setFormatter(logging.Formatter("%(name)s:%(message)s"))
-    parent_logger.handlers.clear()
-    parent_logger.addHandler(parent_handler)
-    parent_logger.setLevel(logging.INFO)
-    parent_logger.propagate = False
-
-    run_logger = logging.getLogger("tests.spellpy_forwarding.parent.child")
-    run_logger.handlers.clear()
-    run_logger.setLevel(logging.INFO)
-    run_logger.propagate = True
-
-    with template_parsers.spellpy_logger_context(run_logger):
-        logging.getLogger("spellpy.spell").info("checkpoint")
-
-    assert "spellpy.spell:checkpoint" in stream.getvalue()

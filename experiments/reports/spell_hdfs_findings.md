@@ -5,7 +5,7 @@
 The original HDFS_V1 SPELL slowdown was real, but the primary bottleneck was in
 `spellpy`, not in AnomaLog's wrapper or in downstream DeepLog training.
 
-The updated `spellpy` package now appears to fix the root cause well enough that
+The updated `spellpy` package now fixes the root cause well enough that
 AnomaLog no longer needs its temporary in-memory SPELL workaround.
 
 ## Root Cause
@@ -41,21 +41,16 @@ reruns degraded much more sharply and long-running parses could appear hung.
 
 ## AnomaLog Changes Kept
 
-AnomaLog still keeps the following SPELL integration improvements:
+AnomaLog now keeps the following SPELL integration improvements:
 
-- `spellpy.spell` logs are forwarded through the active experiment logger even
-  when the run logger inherits its handlers
-- `SpellTemplateParser` passes `progress_interval=1000`
+- `SpellTemplateParser` delegates to `spellpy.LogParser.parse()` directly
 - `SpellTemplateParser` passes `max_lcs_comparisons_per_line=10000`
-- `SpellTemplateParser` logs `spellpy` parse metrics after parsing
+- `SpellTemplateParser` logs a final template/occurrence summary after parsing
 
-These changes improve observability and keep the useful guardrails enabled
-without duplicating upstream SPELL logic inside AnomaLog.
+These changes keep the useful guardrails enabled without duplicating upstream
+SPELL logic inside AnomaLog.
 
 ## AnomaLog Changes Removed
 
 The temporary in-memory SPELL miner and the stale-output cleanup workaround were
 removed after validating the upstream `spellpy` fix.
-
-That leaves `SpellTemplateParser` on the normal direct `spellpy.LogParser`
-path, which is simpler and easier to maintain.

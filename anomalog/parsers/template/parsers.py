@@ -1,23 +1,22 @@
 """Template parser implementations."""
 
-import csv
 import hashlib
 import importlib
-import logging
 import re
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from operator import itemgetter
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import ClassVar
 
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 from prefect.exceptions import MissingContextError
-from prefect.logging import get_run_logger
+from prefect.logging import get_logger, get_run_logger
 from typing_extensions import override
 
 from anomalog.cache import (
@@ -31,55 +30,6 @@ from anomalog.parsers.template.dataset import (
     TemplateParser,
     UntemplatedText,
 )
-
-
-@contextmanager
-def spellpy_logger_context(
-    run_logger: logging.Logger | logging.LoggerAdapter[logging.Logger],
-) -> Iterator[None]:
-    """Forward `spellpy.spell` output into the active experiment logger.
-
-    Args:
-        run_logger (logging.Logger | logging.LoggerAdapter[logging.Logger]):
-            Active experiment logger that should receive spellpy module logs.
-
-    Raises:
-        TypeError: If the resolved logger is not a standard `logging.Logger`.
-    """
-    experiment_logger: object = run_logger
-    if isinstance(run_logger, logging.LoggerAdapter):
-        experiment_logger = getattr(run_logger, "logger", None)
-    if not isinstance(experiment_logger, logging.Logger):
-        msg = "Active run logger is not a standard logging.Logger instance."
-        raise TypeError(msg)
-    spell_logger = logging.getLogger("spellpy.spell")
-    previous_level = spell_logger.level
-    previous_propagate = spell_logger.propagate
-
-    class _ForwardToExperimentHandler(logging.Handler):
-        """Forward spellpy records through the active experiment logger."""
-
-        @override
-        def emit(self, record: logging.LogRecord) -> None:
-            experiment_logger.handle(record)
-
-    forward_handler = _ForwardToExperimentHandler()
-
-    spell_logger.setLevel(
-        (
-            experiment_logger.level
-            if experiment_logger.level != logging.NOTSET
-            else logging.INFO
-        ),
-    )
-    spell_logger.propagate = False
-    spell_logger.addHandler(forward_handler)
-    try:
-        yield
-    finally:
-        spell_logger.removeHandler(forward_handler)
-        spell_logger.setLevel(previous_level)
-        spell_logger.propagate = previous_propagate
 
 
 # Note from https://github.com/logpai/logparser/blob/d9d4180784cde9afef990eeeb458591011933f9b/README.md
@@ -357,15 +307,14 @@ class SpellTemplateParser(TemplateParser):
     """Spell-based template parser for DeepLog-style key extraction.
 
     This parser trains Spell on the provided text stream, then performs
-    inference by matching lines against the mined templates. Matching is done
-    in template-occurrence order so frequently observed templates win first.
+    inference by matching lines against the mined templates. Training now
+    delegates to the upstream `spellpy` parser directly, which keeps the
+    implementation small while still avoiding the old raw CSV bottleneck.
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the built-in parser.
         dataset_name (str | None): Optional dataset name used for cache paths.
         tau (float): Spell similarity threshold passed to Spell training.
-        progress_interval (int): Number of processed lines between spellpy
-            progress logs and raw-cache flushes.
         max_lcs_comparisons_per_line (int | None): Maximum number of LCS
             comparisons spellpy may perform for one line before it falls back
             to creating or reusing a less-specific template.
@@ -374,9 +323,21 @@ class SpellTemplateParser(TemplateParser):
     name: ClassVar[str] = "spell"
     dataset_name: str | None = None
     tau: float = 0.5
-    progress_interval: int = 1000
     max_lcs_comparisons_per_line: int | None = 10000
     _patterns: list[tuple[str, re.Pattern[str], int]] | None = None
+    _occurrence_count: int | None = None
+
+    @property
+    def _spell_cache_dir(self) -> Path:
+        return Path.cwd() / ".cache" / "spell"
+
+    @property
+    def _spell_dataset_prefix(self) -> str:
+        return self.dataset_name or "dataset"
+
+    @property
+    def _spell_output_dir(self) -> Path:
+        return self._spell_cache_dir / f"{self._spell_dataset_prefix}_spell_output"
 
     @override
     def train(
@@ -393,65 +354,72 @@ class SpellTemplateParser(TemplateParser):
             ModuleNotFoundError: If optional `spellpy` is not installed.
         """
         try:
-            spell = importlib.import_module("spellpy").spell
+            spell_module = importlib.import_module("spellpy")
         except ModuleNotFoundError as exc:
             msg = "Spell template parsing requires optional dependency 'spellpy'."
             raise ModuleNotFoundError(msg) from exc
         try:
             logger = get_run_logger()
         except MissingContextError:
-            logger = logging.getLogger(__name__)
+            logger = get_logger(__name__)
 
-        log_dir = Path.cwd() / ".cache" / "spell"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        dataset_prefix = self.dataset_name or "dataset"
-        raw_path = log_dir / f"{dataset_prefix}_spell_input.log"
-        outdir = log_dir / f"{dataset_prefix}_spell_output"
-        outdir.mkdir(parents=True, exist_ok=True)
+        self._spell_output_dir.mkdir(parents=True, exist_ok=True)
+        started_at = perf_counter()
+        with TemporaryDirectory(dir=str(self._spell_cache_dir)) as input_dir:
+            input_path = Path(input_dir) / f"{self._spell_dataset_prefix}.log"
+            with input_path.open("w", encoding="utf-8") as raw_file:
+                for log_line in untemplated_text_iterator():
+                    raw_file.write(log_line)
+                    raw_file.write("\n")
 
-        any_lines = False
-        with raw_path.open("w", encoding="utf-8") as handle:
-            for log_line in untemplated_text_iterator():
-                handle.write(log_line)
-                handle.write("\n")
-                any_lines = True
-        if not any_lines:
-            self._patterns = []
-            return
-        keep_para = False
-        logger.info(
-            "Spell parser settings: keep_para=%s progress_interval=%s "
-            "max_lcs_comparisons_per_line=%s",
-            keep_para,
-            self.progress_interval,
-            self.max_lcs_comparisons_per_line,
-        )
-        parser = spell.LogParser(
-            indir=str(log_dir),
-            outdir=str(outdir),
-            log_format="<Content>",
-            tau=self.tau,
-            progress_interval=self.progress_interval,
-            max_lcs_comparisons_per_line=self.max_lcs_comparisons_per_line,
-            # AnomaLog only consumes the mined templates, so skip Spell's
-            # per-row parameter extraction and the extra main-output append.
-            keep_para=False,
-        )
-        with spellpy_logger_context(logger):
-            parser.parse(raw_path.name)
-        if getattr(parser, "parse_metrics", None):
-            logger.info("Spell parse metrics: %s", parser.parse_metrics)
-        templates_path = outdir / f"{raw_path.name}_templates.csv"
-        rows = _read_spell_template_rows(templates_path)
-
-        self._patterns = [
-            (
-                template,
-                _compile_spell_template_regex(template),
-                occurrences,
+            spell_log_parser = spell_module.spell.LogParser(
+                indir=input_dir,
+                outdir=str(self._spell_output_dir),
+                log_format="<Content>",
+                tau=self.tau,
+                keep_para=False,
+                max_lcs_comparisons_per_line=self.max_lcs_comparisons_per_line,
+                resume_state=False,
+                persist_state=False,
             )
-            for template, occurrences in rows
-        ]
+            spell_log_parser.parse(input_path.name)
+
+            log_clust_l = spell_log_parser.logCluL
+            if not log_clust_l:
+                logger.warning("No logs were parsed during training")
+                self._patterns = []
+                self._occurrence_count = 0
+                return
+
+            rows: list[tuple[str, re.Pattern[str], int]] = []
+            for cluster in log_clust_l:
+                template = " ".join(getattr(cluster, "logTemplate", ()))
+                occurrences = len(getattr(cluster, "logIDL", ()))
+                rows.append(
+                    (
+                        template,
+                        _compile_spell_template_regex(template),
+                        occurrences,
+                    ),
+                )
+
+            rows.sort(key=itemgetter(2), reverse=True)
+            self._patterns = rows
+            self._occurrence_count = sum(
+                occurrences for _template, _pattern, occurrences in rows
+            )
+
+        elapsed = perf_counter() - started_at
+        occurrence_count = self._occurrence_count
+        logger.info(
+            (
+                "Spell parser training finished: templates=%d "
+                "occurrences=%d elapsed=%.3fs"
+            ),
+            0 if self._patterns is None else len(self._patterns),
+            0 if occurrence_count is None else occurrence_count,
+            elapsed,
+        )
 
     @override
     def inference(
@@ -480,29 +448,6 @@ class SpellTemplateParser(TemplateParser):
                 continue
             return template, list(match.groups())
         return unstructured_text, []
-
-
-def _read_spell_template_rows(path: Path) -> list[tuple[str, int]]:
-    """Read Spell template rows in descending occurrence order.
-
-    Args:
-        path (Path): Spell templates CSV path.
-
-    Returns:
-        list[tuple[str, int]]: `(template, occurrences)` rows sorted by
-            descending occurrence.
-    """
-    rows: list[tuple[str, int]] = []
-    with path.open(encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            template = row.get("EventTemplate")
-            occurrences = row.get("Occurrences")
-            if template is None or occurrences is None:
-                continue
-            rows.append((template, int(occurrences)))
-    rows.sort(key=itemgetter(1), reverse=True)
-    return rows
 
 
 def _compile_spell_template_regex(template: str) -> re.Pattern[str]:
