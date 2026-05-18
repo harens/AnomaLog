@@ -25,7 +25,10 @@ from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
-from anomalog.sources.raw_prefix import materialise_raw_log_prefix
+from anomalog.sources.raw_prefix import (
+    materialise_raw_log_prefix,
+    materialise_raw_log_segment,
+)
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling.
@@ -122,11 +125,12 @@ thunderbird = (
                 raw_logs_relpath=Path("Thunderbird.log"),
             ),
             post_process=partial(
-                materialise_raw_log_prefix,
+                materialise_raw_log_segment,
                 source_log_relpath=Path("Thunderbird.log"),
+                start_line=160_000_000,
                 line_limit=10_000_000,
             ),
-            raw_logs_relpath=Path("preprocessed/thunderbird_prefix_10m.log"),
+            raw_logs_relpath=Path("preprocessed/thunderbird_slice_160m_10m.log"),
         ),
     )
     .parse_with(ThunderbirdParser())

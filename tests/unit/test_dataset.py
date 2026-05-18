@@ -250,7 +250,7 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
     thunderbird_source = thunderbird.source
     assert isinstance(thunderbird_source, PostProcessedSource)
     assert thunderbird_source.raw_logs_relpath == Path(
-        "preprocessed/thunderbird_prefix_10m.log",
+        "preprocessed/thunderbird_slice_160m_10m.log",
     )
     assert isinstance(thunderbird_source.base_source, RemoteZipSource)
     assert thunderbird_source.base_source.raw_logs_relpath == Path(
@@ -259,6 +259,7 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
     assert isinstance(thunderbird_source.post_process, partial)
     assert thunderbird_source.post_process.keywords == {
         "source_log_relpath": Path("Thunderbird.log"),
+        "start_line": 160_000_000,
         "line_limit": 10_000_000,
     }
     assert set(preset_names()) >= {

@@ -256,8 +256,10 @@ class ThunderbirdParser(StructuredParser):
     the remaining header fields expose the event chronology plus the host and
     location tokens. The parser keeps the free-text tail as the message body
     for template mining, stripping an optional ``component[pid]: `` prefix
-    when the raw line includes one, and collapses the label into AnomaLog's
-    binary anomaly flag.
+    when the raw line includes one. It also trims a trailing colon from bare
+    message tails such as `mysql_install_db:` so the template miner sees the
+    underlying command name rather than the punctuation artefact. The parser
+    collapses the label into AnomaLog's binary anomaly flag.
 
     The parser deliberately stays close to the observed raw structure so the
     downstream template miner sees the message body rather than a Thunderbird-
@@ -330,6 +332,8 @@ class ThunderbirdParser(StructuredParser):
         content = (d["tail"] or "").strip()
         if ": " in content:
             content = content.split(": ", maxsplit=1)[1].strip()
+        if content.endswith(":"):
+            content = content.rstrip(":").rstrip()
         if not content:
             return None, "empty_message"
 

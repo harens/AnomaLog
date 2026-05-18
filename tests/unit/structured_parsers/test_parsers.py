@@ -222,16 +222,16 @@ def test_thunderbird_parser_accepts_tails_without_component_separators() -> None
     assert parsed.untemplated_message_text == "exiting on signal 15"
 
 
-def test_thunderbird_parser_accepts_colon_suffixed_tails() -> None:
-    """ThunderbirdParser should keep colon-suffixed message tails."""
+def test_thunderbird_parser_strips_trailing_colons_from_message_tails() -> None:
+    """ThunderbirdParser should normalise colon-suffixed message tails."""
     parsed = ThunderbirdParser().parse_line(
-        "- 1133563453 2005.12.02 tsqe1 Dec 2 14:44:13 tsqe1/tsqe1 ifup:",
+        "- 1133563453 2005.12.02 tsqe1 Dec 2 14:44:13 tsqe1/tsqe1 mysql_install_db:",
     )
 
     assert parsed is not None
     assert parsed.timestamp_unix_ms == THUNDERBIRD_FIXUP_TS_MS
     assert parsed.entity_id == "tsqe1/tsqe1"
-    assert parsed.untemplated_message_text == "ifup:"
+    assert parsed.untemplated_message_text == "mysql_install_db"
 
 
 def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:

@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-from anomalog.sources.raw_prefix import materialise_raw_log_prefix
+from anomalog.sources.raw_prefix import (
+    materialise_raw_log_prefix,
+    materialise_raw_log_segment,
+)
 from anomalog.sources.remote_zip import RemoteZipSource
 
 
@@ -46,3 +49,24 @@ def test_materialise_raw_log_prefix_copies_the_explicit_archive_log(
     )
 
     assert raw_logs_path.read_text(encoding="utf-8") == "one\n\n"
+
+
+def test_materialise_raw_log_segment_copies_the_requested_line_range(
+    tmp_path: Path,
+) -> None:
+    """The Thunderbird benchmark helper should copy the configured slice."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source_log = source_root / "Thunderbird.log"
+    source_log.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "thunderbird_slice.log"
+    materialise_raw_log_segment(
+        source_root,
+        raw_logs_path,
+        source_log_relpath=Path("Thunderbird.log"),
+        start_line=3,
+        line_limit=2,
+    )
+
+    assert raw_logs_path.read_text(encoding="utf-8") == "three\nfour\n"
