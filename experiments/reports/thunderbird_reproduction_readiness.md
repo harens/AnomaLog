@@ -103,6 +103,11 @@ system administrators and that the raw structure can be irregular, and the
 later Thunderbird dataset notes emphasise that Thunderbird is one of the cases
 where custom parsing and template generation were needed to cover the corpus.
 
+The template training cache is now keyed against the materialised raw slice
+asset as well as the Drain3 config. That prevents a Thunderbird run from
+silently reusing a cache trained on a different archive slice, which was the
+root cause of the unmatched-template failure observed in the benchmark run.
+
 References:
 
 - J. Oliner et al., "What Supercomputers Say: A Study of Five System Logs"

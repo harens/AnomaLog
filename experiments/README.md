@@ -95,6 +95,9 @@ The checked-in dataset-manifest set is split by dataset family:
   present, and trims a trailing colon from bare command-like tails so the
   template vocabulary is driven by the normalised message body rather than
   Thunderbird header noise.
+  Template training is cached against the materialised raw slice asset as well
+  as the Drain3 config, so a Thunderbird slice change invalidates stale mined
+  templates instead of reusing an incompatible cache.
   The Thunderbird DeepCASE entry is an AnomaLog benchmark extension; the
   original DeepCASE paper does not evaluate Thunderbird.
 - `ait_ads/base.toml` is the paper-compatible AIT-ADS public-dataset probe.
