@@ -34,10 +34,11 @@ models = [
 
 [experiments.thunderbird]
 dataset = "thunderbird"
-# Thunderbird follows the 2022 Thunderbird protocol: the canonical
-# Thunderbird.log file, the first 10 million raw lines, and 100-log
-# chronological windows. We keep all benchmarked models together so the
-# registry exposes one public Thunderbird experiment.
+# Thunderbird follows the benchmark slice used by the public LogLLM/DeepLog
+# family: the canonical Thunderbird.log file, a 10-million-line range starting
+# at line 160,000,000, and 100-log chronological windows. We keep all
+# benchmarked models together so the registry exposes one public Thunderbird
+# experiment.
 models = [
   "deeplog_default",
   "deepcase",

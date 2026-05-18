@@ -1,12 +1,12 @@
 name = "thunderbird"
-description = "Thunderbird Loghub reproduction on the canonical Thunderbird.log file prefix, with the first 10 million raw lines and 100-log chronological windows."
+description = "Thunderbird Loghub reproduction on the canonical Thunderbird.log slice used by the benchmark code, with 100-log chronological windows."
 
 [dataset]
 name = "thunderbird"
 dataset_name = "THUNDERBIRD"
 preset = "thunderbird"
 template_parser = "drain3"
-description = "Thunderbird reproduction on the first 10 million raw Thunderbird.log lines, using 100-log chronological windows."
+description = "Thunderbird reproduction on the 160,000,000-170,000,000 raw Thunderbird.log line slice, using 100-log chronological windows."
 evaluation_unit = "sequence"
 
 [dataset.sequence]

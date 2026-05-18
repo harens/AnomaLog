@@ -80,15 +80,21 @@ The checked-in dataset-manifest set is split by dataset family:
 - `thunderbird.toml` is the LogHub Thunderbird corpus reproduction. It points
   at `https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1`
   with MD5 `0891b048df2919dc78c99c4428686b44`, reads the canonical
-  `Thunderbird.log` member, materialises the first 10 million raw lines, and
-  builds 100-log chronological windows over that contiguous prefix. That
-  matches the Thunderbird protocol described in the 2022 "How Far Are We?"
-  study, which reports `99,593` total windows with a `79,674 / 19,919`
-  train/test split for the chronological setting. Our current parser still
-  overshoots that window count slightly, so the remaining gap is a parser
-  fidelity issue rather than a split issue. The smoke preset keeps only a
-  shorter raw prefix of the same file so the parser and template pipeline
-  stay testable without pulling the full prefix in normal development.
+  `Thunderbird.log` member, materialises the `160,000,000`-`170,000,000`
+  raw-line slice used by later public Thunderbird benchmark code, and builds
+  100-log chronological windows over that contiguous slice. The current
+  parser-backed measurement is `99,996` total windows with a `79,996 / 20,000`
+  train/test split and `837 / 29` anomalous windows in train/test. That is
+  closer to the ICSE 2022 "How Far Are We?" table (`99,593` total windows and
+  `79,674 / 19,919` train/test) than the full archive prefix, but the paper's
+  table still reports a slightly shorter derived stream. The smoke preset keeps
+  only a shorter raw prefix of the same file so the parser and template
+  pipeline stay testable without pulling the benchmark slice in normal
+  development. The Thunderbird parser also preserves the message tail for
+  template mining, strips an optional `component[pid]: ` prefix when one is
+  present, and trims a trailing colon from bare command-like tails so the
+  template vocabulary is driven by the normalised message body rather than
+  Thunderbird header noise.
   The Thunderbird DeepCASE entry is an AnomaLog benchmark extension; the
   original DeepCASE paper does not evaluate Thunderbird.
 - `ait_ads/base.toml` is the paper-compatible AIT-ADS public-dataset probe.
