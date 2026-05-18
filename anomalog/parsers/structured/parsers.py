@@ -366,7 +366,7 @@ class ThunderbirdParser(StructuredParser):
         logger = get_logger()
         parsed, reason = self.analyse_line(raw_line)
         if parsed is None:
-            if reason != "blank":
+            if reason not in {"blank", "empty_message"}:
                 logger.warning(
                     "Cannot parse Thunderbird line (%s): %r",
                     reason,

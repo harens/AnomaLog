@@ -242,6 +242,23 @@ def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
     assert parser.analyse_line("not a thunderbird line") == (None, "malformed")
 
 
+def test_thunderbird_parser_skips_empty_message_lines_without_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ThunderbirdParser should treat header-only records as expected skips."""
+    parser = ThunderbirdParser()
+
+    with caplog.at_level("WARNING"):
+        assert (
+            parser.parse_line(
+                "- 1147467134 2006.05.12 #9# May 12 13:52:14 #9#/#9#",
+            )
+            is None
+        )
+
+    assert "empty_message" not in caplog.text
+
+
 def test_ait_ads_parser_reads_canonical_alert_rows() -> None:
     """AIT-ADS parser should map canonical JSON rows into structured lines."""
     parser = AITADSParser()
