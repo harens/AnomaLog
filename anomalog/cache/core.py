@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from hashlib import sha256
@@ -366,7 +366,7 @@ task = partial(
 def materialize(
     output_path: Path,
     *,
-    asset_deps: list[Asset | str] | None = None,
+    asset_deps: Sequence[Asset] | None = None,
     **task_kwargs: Unpack[MaterializeTaskOptions],
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Wrap Prefect materialsation with a local output existence check.
@@ -379,7 +379,7 @@ def materialize(
 
     Args:
         output_path (Path): Local path that must exist after Prefect returns.
-        asset_deps (list[Asset | str] | None): Upstream asset dependencies for
+        asset_deps (Sequence[Asset] | None): Upstream asset dependencies for
             the wrapped task materialisation.
         **task_kwargs (Unpack[MaterializeTaskOptions]): Additional Prefect task
             options forwarded to `prefect.assets.materialise`.
@@ -398,7 +398,7 @@ def materialize(
             asset_from_local_path(output_path),
             persist_result=True,
             cache_policy=cache_policy,
-            asset_deps=asset_deps,
+            asset_deps=list(asset_deps) if asset_deps is not None else None,
             result_storage=result_storage,
             **resolved_task_kwargs,
         )(func)

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from anomalog.cache import CachePathsConfig
+from anomalog.cache import CachePathsConfig, asset_from_local_path
 from anomalog.labels import AnomalyLabelLookup
 from anomalog.parsers.structured.contracts import (
     UNTEMPLATED_FIELD,
@@ -44,6 +44,7 @@ class StructuredDataset:
         Returns:
             TemplatedDataset: Structured dataset paired with the trained parser.
         """
+        asset_deps = [asset_from_local_path(self.sink.raw_dataset_path)]
         template_parser.train(
             lambda: (
                 row.untemplated_message_text
@@ -51,6 +52,7 @@ class StructuredDataset:
                     columns=[UNTEMPLATED_FIELD],
                 )()
             ),
+            asset_deps=asset_deps,
         )
 
         return TemplatedDataset(

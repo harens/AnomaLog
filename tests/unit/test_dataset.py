@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from prefect.assets import Asset
 from prefect.logging import disable_run_logger
 from typing_extensions import override
 
@@ -94,7 +95,10 @@ class _RecordingTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[str]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
+        del asset_deps
         type(self).seen_lines.extend(list(untemplated_text_iterator()))
 
 

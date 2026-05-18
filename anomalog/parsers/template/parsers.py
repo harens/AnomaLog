@@ -15,6 +15,7 @@ from typing import ClassVar
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
+from prefect.assets import Asset
 from prefect.exceptions import MissingContextError
 from prefect.logging import get_logger, get_run_logger
 from typing_extensions import override
@@ -184,12 +185,16 @@ class Drain3Parser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Train Drain3 on the dataset's untemplated message stream.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Optional upstream asset
+                dependencies to include in the training cache key.
         """
         self.resolved_cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -201,7 +206,10 @@ class Drain3Parser(TemplateParser):
         def _run_train() -> None:
             return self._train(untemplated_text_iterator)
 
-        materialize(self.cache_file_path)(_run_train)()
+        materialize(
+            self.cache_file_path,
+            asset_deps=asset_deps,
+        )(_run_train)()
 
         # The training task might be skipped if the Prefect asset cache hits.
         # Ensure we still have a callable bound to the persisted miner state.
@@ -291,14 +299,18 @@ class IdentityTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Ignore the training stream because identity inference is stateless.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Iterator factory accepted for contract compatibility.
+            asset_deps (list[Asset] | None): Ignored upstream asset
+                dependencies accepted for interface compatibility.
         """
-        del untemplated_text_iterator
+        del untemplated_text_iterator, asset_deps
         # No training needed for the identity parser
 
 
@@ -343,16 +355,21 @@ class SpellTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Train Spell templates from the text stream.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Ignored upstream asset
+                dependencies accepted for interface compatibility.
 
         Raises:
             ModuleNotFoundError: If optional `spellpy` is not installed.
         """
+        del asset_deps
         try:
             spell_module = importlib.import_module("spellpy")
         except ModuleNotFoundError as exc:

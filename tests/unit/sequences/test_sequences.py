@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from prefect.assets import Asset
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredLine
@@ -1165,8 +1166,10 @@ def test_templated_dataset_chronological_stream_view_is_constructible() -> None:
         @staticmethod
         def train(
             untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+            *,
+            asset_deps: list[Asset] | None = None,
         ) -> None:
-            del untemplated_text_iterator
+            del untemplated_text_iterator, asset_deps
 
     sink = _sink(
         structured_line(

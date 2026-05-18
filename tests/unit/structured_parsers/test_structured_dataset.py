@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from prefect.assets import Asset
 from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
@@ -28,10 +29,11 @@ TIME_SPAN_MS = 1_000
 TIME_STEP_MS = 250
 
 
-@dataclass(frozen=True)
+@dataclass
 class _RecordingTemplateParser(TemplateParser):
     name: ClassVar[str] = "recording"
     seen_lines: list[str]
+    seen_asset_deps: list[Asset] | None = None
     dataset_name: str | None = None
 
     @override
@@ -44,7 +46,10 @@ class _RecordingTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[str]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
+        self.seen_asset_deps = asset_deps
         self.seen_lines.extend(list(untemplated_text_iterator()))
 
 
@@ -93,6 +98,10 @@ def test_structured_dataset_mine_templates_trains_parser_from_sink_rows() -> Non
     templated = dataset.mine_templates_with(parser)
 
     assert parser.seen_lines == ["first", "second"]
+    assert parser.seen_asset_deps is not None
+    assert len(parser.seen_asset_deps) == 1
+    assert parser.seen_asset_deps[0].properties is not None
+    assert str(parser.seen_asset_deps[0].properties.url).endswith("/raw.log")
     assert templated.sink is sink
     assert templated.template_parser is parser
 

@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, runtime_checkable
 
+from prefect.assets import Asset
+
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredSink
 from anomalog.sequences import (
@@ -55,12 +57,16 @@ class TemplateParser(Protocol):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Train the parser on the dataset's untemplated message stream.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Optional upstream asset
+                dependencies to incorporate into the training cache key.
         """
 
 
