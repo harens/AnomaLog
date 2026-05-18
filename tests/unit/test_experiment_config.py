@@ -1451,6 +1451,57 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
     assert split_signatures[1] == expected
 
 
+def test_thunderbird_smoke_dataset_builds_chronological_stream(
+    tmp_path: Path,
+) -> None:
+    """Thunderbird smoke configs should build the raw-entry stream successfully.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the local fixture.
+    """
+    source_root = tmp_path / "thunderbird_source"
+    source_root.mkdir()
+    (source_root / "Thunderbird.log").write_text(
+        (
+            "- 1131566461 2005.11.09 dn228 Nov 9 12:01:01 dn228/dn228 "
+            "crond(pam_unix)[2915]: session closed for user root\n"
+            "+ 1131566522 2005.11.09 dn228 Nov 9 12:02:02 dn228/dn228 "
+            "sshd[1234]: disk failure on /dev/sda\n"
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_dataset_spec(
+        DatasetVariantConfig(
+            name="thunderbird_smoke_local",
+            dataset_name="THUNDERBIRD_SMOKE_LOCAL",
+            source=LocalDirSourceConfig(
+                path=source_root,
+                raw_logs_relpath=Path("Thunderbird.log"),
+            ),
+            structured_parser="thunderbird",
+            template_parser="drain3",
+            cache_paths=CachePathsConfigModel(namespace="thunderbird_smoke_test"),
+            sequence=ChronologicalStreamSequenceConfig(
+                chunk_size=2,
+                train_fraction=0.5,
+                test_fraction=0.5,
+                split=RawEntryPrefixNormalFractionSplitConfig(
+                    train_normal_entry_fraction=0.5,
+                ),
+            ),
+        ),
+        repo_root=tmp_path,
+    )
+    templated = spec.build()
+    sequences = list(templated.group_by_chronological_stream(chunk_size=2))
+
+    assert templated.sink.count_rows() == 2
+    assert len(sequences) == 1
+    assert len(sequences[0].events) == 2
+    assert sequences[0].label == 1
+
+
 @pytest.mark.allow_no_new_coverage
 def test_deepcase_configs_pin_expected_protocols() -> None:
     """DeepCASE manifests should keep their declared dataset and model contracts."""

@@ -12,14 +12,20 @@ from anomalog.parsers import (
     BGLParser,
     HDFSV1Parser,
     OpenStackDeepLogParser,
+    ThunderbirdParser,
 )
 from anomalog.parsers.structured import DelimitedLabelledEventParser
 from anomalog.parsers.template import IdentityTemplateParser, SpellTemplateParser
-from anomalog.sources import AITADSScenarioSource, PostProcessedSource, RemoteZipSource
+from anomalog.sources import (
+    AITADSScenarioSource,
+    PostProcessedSource,
+    RemoteZipSource,
+)
 from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
+from anomalog.sources.raw_prefix import materialise_raw_log_prefix
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling.
@@ -106,6 +112,46 @@ openstack_deeplog_preprocessed = (
     .template_with(SpellTemplateParser)
 )
 
+thunderbird = (
+    DatasetSpec("THUNDERBIRD")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1",
+                md5_checksum="0891b048df2919dc78c99c4428686b44",
+                raw_logs_relpath=Path("Thunderbird.log"),
+            ),
+            post_process=partial(
+                materialise_raw_log_prefix,
+                source_log_relpath=Path("Thunderbird.log"),
+                line_limit=10_000_000,
+            ),
+            raw_logs_relpath=Path("preprocessed/thunderbird_prefix_10m.log"),
+        ),
+    )
+    .parse_with(ThunderbirdParser())
+)
+
+thunderbird_smoke = (
+    DatasetSpec("THUNDERBIRD_SMOKE")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1",
+                md5_checksum="0891b048df2919dc78c99c4428686b44",
+                raw_logs_relpath=Path("Thunderbird.log"),
+            ),
+            post_process=partial(
+                materialise_raw_log_prefix,
+                source_log_relpath=Path("Thunderbird.log"),
+                line_limit=50_000,
+            ),
+            raw_logs_relpath=Path("preprocessed/thunderbird_prefix_50k.log"),
+        ),
+    )
+    .parse_with(ThunderbirdParser())
+)
+
 
 def _build_ait_ads_preset() -> DatasetSpec:
     return (
@@ -121,6 +167,8 @@ _PRESETS: dict[str, DatasetSpec] = {
     "hdfs_v1": hdfs_v1,
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
     "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
+    "thunderbird": thunderbird,
+    "thunderbird_smoke": thunderbird_smoke,
     "ait_ads": _build_ait_ads_preset(),
 }
 

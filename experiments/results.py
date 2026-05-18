@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import msgspec
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.parsers.structured.parsers import ThunderbirdParser
 from experiments.config import serialise_config
 from experiments.config_types import (
     ChronologicalStreamSequenceConfig,
@@ -46,6 +48,11 @@ if TYPE_CHECKING:
 
 class _DatasetStatisticsBundle(Protocol):
     dataset: DatasetVariantConfig
+
+
+class _DatasetStatisticsContext(Protocol):
+    templated: TemplatedDataset
+    model_summary: ModelRunSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,10 +250,11 @@ def build_dataset_manifest(
             {
                 "dataset_statistics": _build_dataset_statistics(
                     bundle=bundle,
-                    raw_logs_path=raw_logs_path,
+                    context=context,
                 ),
             }
             if bundle.dataset.preset == "ait_ads"
+            or bundle.dataset.preset in {"thunderbird", "thunderbird_smoke"}
             else {}
         ),
         "timestamp_bounds": {
@@ -286,21 +294,24 @@ def build_dataset_manifest(
 def _build_dataset_statistics(
     *,
     bundle: _DatasetStatisticsBundle,
-    raw_logs_path: Path,
+    context: _DatasetStatisticsContext,
 ) -> dict[str, object] | None:
     """Return optional dataset-specific manifest statistics.
 
     Args:
-        bundle (ExperimentBundle): Resolved bundle used to identify the
-            dataset family.
-        raw_logs_path (Path): Path to the raw log file backing the manifest.
+        bundle (_DatasetStatisticsBundle): Resolved bundle used to identify
+            the dataset family.
+        context (_DatasetStatisticsContext): Resolved result context backing
+            the manifest.
 
     Returns:
-        dict[str, object] | None: AIT-ADS-specific summary fields, or `None`
-        when the dataset family does not expose those statistics.
+        dict[str, object] | None: AIT-ADS or Thunderbird summary fields, or
+            `None` when the dataset family does not expose those statistics.
     """
     if bundle.dataset.preset != "ait_ads":
-        return None
+        if bundle.dataset.preset not in {"thunderbird", "thunderbird_smoke"}:
+            return None
+        return _build_thunderbird_dataset_statistics(context=context)
 
     total_alerts = 0
     anomalous_alert_count = 0
@@ -308,6 +319,7 @@ def _build_dataset_statistics(
     total_alerts_per_scenario: dict[str, int] = {}
     total_alerts_per_ids_source: dict[str, int] = {}
 
+    raw_logs_path = context.templated.sink.raw_dataset_path.resolve()
     for line in raw_logs_path.read_text(encoding="utf-8").splitlines():
         if not line:
             continue
@@ -340,6 +352,76 @@ def _build_dataset_statistics(
             0.0 if total_alerts == 0 else anomalous_alert_count / total_alerts
         ),
         "missing_timestamp_alert_count": missing_timestamp_alert_count,
+    }
+
+
+def _build_thunderbird_dataset_statistics(
+    *,
+    context: _DatasetStatisticsContext,
+) -> dict[str, object]:
+    """Return Thunderbird-specific manifest statistics.
+
+    Args:
+        context (_DatasetStatisticsContext): Resolved result context for the
+            build.
+
+    Returns:
+        dict[str, object]: Thunderbird-specific manifest statistics.
+    """
+    total_lines = 0
+    emitted_events = 0
+    normal_events = 0
+    anomalous_events = 0
+    missing_timestamp_events = 0
+    skipped_reasons: Counter[str] = Counter()
+
+    raw_logs_path = context.templated.sink.raw_dataset_path.resolve()
+    for raw_line in raw_logs_path.open(encoding="utf-8", errors="replace"):
+        total_lines += 1
+        parsed, reason = ThunderbirdParser.analyse_line(raw_line)
+        if parsed is None:
+            skipped_reasons[reason or "unknown"] += 1
+            continue
+        emitted_events += 1
+        if parsed.timestamp_unix_ms is None:
+            missing_timestamp_events += 1
+        if is_anomalous_label(parsed.anomalous):
+            anomalous_events += 1
+        else:
+            normal_events += 1
+
+    template_vocabulary: set[str] = set()
+    template_vocabulary.update(
+        context.templated.template_parser.inference(
+            row.untemplated_message_text,
+        )[0]
+        for row in context.templated.sink.iter_structured_lines(
+            columns=["untemplated_message_text"],
+        )()
+    )
+
+    return {
+        "total_lines_parsed": total_lines,
+        "total_events_emitted": emitted_events,
+        "normal_event_count": normal_events,
+        "anomalous_event_count": anomalous_events,
+        "anomalous_event_fraction": (
+            0.0 if emitted_events == 0 else anomalous_events / emitted_events
+        ),
+        "missing_timestamp_event_count": missing_timestamp_events,
+        "skipped_line_count": total_lines - emitted_events,
+        "skipped_line_reasons": dict(sorted(skipped_reasons.items())),
+        "sequence_window_count": context.model_summary.sequence_summary.sequence_count,
+        "train_sequence_count": (
+            context.model_summary.sequence_summary.train_sequence_count
+        ),
+        "test_sequence_count": (
+            context.model_summary.sequence_summary.test_sequence_count
+        ),
+        "ignored_sequence_count": (
+            context.model_summary.sequence_summary.ignored_sequence_count
+        ),
+        "template_vocabulary_size": len(template_vocabulary),
     }
 
 

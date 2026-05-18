@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -14,9 +14,6 @@ from experiments.config import (
     resolve_registry_experiment,
 )
 from experiments.models.deeplog import DeepLogModelConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_dataset_manifest(datasets_dir: Path, relative_path: str) -> None:
@@ -134,6 +131,26 @@ def test_load_experiment_registry_exposes_metadata(
     assert entry.model_sets == ("baselines", "deepcase")
     assert entry.preset == "entity_with_deepcase"
     assert entry.groups == ("entity_with_deepcase", "baselines", "deepcase")
+
+
+def test_load_experiment_registry_registers_thunderbird_runs() -> None:
+    """Thunderbird experiment names should resolve through the checked-in registry."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    thunderbird = registry.require("thunderbird")
+    assert thunderbird.dataset == "thunderbird"
+    assert thunderbird.preset is None
+    assert thunderbird.model_sets == (
+        "deeplog_default",
+        "deepcase",
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
+    )
 
 
 def test_registry_select_combines_names_and_groups() -> None:

@@ -77,6 +77,20 @@ The checked-in dataset-manifest set is split by dataset family:
   template vocabulary while preserving the file-boundary split contract.
   The manifest also carries template-frequency, Markov, and DeepCASE
   comparators for the same file boundary.
+- `thunderbird.toml` is the LogHub Thunderbird corpus reproduction. It points
+  at `https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1`
+  with MD5 `0891b048df2919dc78c99c4428686b44`, reads the canonical
+  `Thunderbird.log` member, materialises the first 10 million raw lines, and
+  builds 100-log chronological windows over that contiguous prefix. That
+  matches the Thunderbird protocol described in the 2022 "How Far Are We?"
+  study, which reports `99,593` total windows with a `79,674 / 19,919`
+  train/test split for the chronological setting. Our current parser still
+  overshoots that window count slightly, so the remaining gap is a parser
+  fidelity issue rather than a split issue. The smoke preset keeps only a
+  shorter raw prefix of the same file so the parser and template pipeline
+  stay testable without pulling the full prefix in normal development.
+  The Thunderbird DeepCASE entry is an AnomaLog benchmark extension; the
+  original DeepCASE paper does not evaluate Thunderbird.
 - `ait_ads/base.toml` is the paper-compatible AIT-ADS public-dataset probe.
   It combines all eight scenarios into one globally chronological alert
   stream, uses the combined `AIT_ADS` preset, and keeps the evaluation unit on
@@ -191,6 +205,15 @@ uv run python -m experiments.runners.run_suite \
   --group bgl_deeplog_paper
 ```
 
+Thunderbird has one public registry entry for the reproduction split:
+
+```bash
+uv run python -m experiments.runners.run_suite --experiment thunderbird
+```
+
+The smaller `thunderbird_smoke` preset remains available for tests and local
+development, but it is not exposed as a registry experiment.
+
 To submit the same single dataset variant on Slurm, use the backend submit
 command with the exact same registry experiment name:
 
@@ -275,6 +298,8 @@ uv run python -m experiments.runners.audit_deeplog_data
 
 The DeepCASE paper-readiness report is checked in at
 `experiments/reports/deepcase_reproduction_readiness.md`.
+The Thunderbird reproduction note is checked in at
+`experiments/reports/thunderbird_reproduction_readiness.md`.
 The baseline sanity report is checked in at
 `experiments/reports/baseline_sanity_report.md`.
 

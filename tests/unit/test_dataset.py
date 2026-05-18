@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import ClassVar
 
@@ -33,8 +34,10 @@ from anomalog.presets import (
     openstack_deeplog_preprocessed,
     preset_names,
     resolve_preset,
+    thunderbird,
+    thunderbird_smoke,
 )
-from anomalog.sources import DatasetSource
+from anomalog.sources import DatasetSource, PostProcessedSource, RemoteZipSource
 from anomalog.sources.local import LocalZipSource
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
@@ -242,11 +245,29 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
         resolve_preset("openstack_deeplog_preprocessed")
         is openstack_deeplog_preprocessed
     )
+    assert resolve_preset("thunderbird") is thunderbird
+    assert resolve_preset("thunderbird_smoke") is thunderbird_smoke
+    thunderbird_source = thunderbird.source
+    assert isinstance(thunderbird_source, PostProcessedSource)
+    assert thunderbird_source.raw_logs_relpath == Path(
+        "preprocessed/thunderbird_prefix_10m.log",
+    )
+    assert isinstance(thunderbird_source.base_source, RemoteZipSource)
+    assert thunderbird_source.base_source.raw_logs_relpath == Path(
+        "Thunderbird.log",
+    )
+    assert isinstance(thunderbird_source.post_process, partial)
+    assert thunderbird_source.post_process.keywords == {
+        "source_log_relpath": Path("Thunderbird.log"),
+        "line_limit": 10_000_000,
+    }
     assert set(preset_names()) >= {
         "bgl",
         "hdfs_v1",
         "hdfs_wuyifan18_deeplog_preprocessed",
         "openstack_deeplog_preprocessed",
+        "thunderbird",
+        "thunderbird_smoke",
     }
 
 

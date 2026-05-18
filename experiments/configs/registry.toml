@@ -31,6 +31,21 @@ models = [
 ]
 
 [experiments.openstack_deeplog_preprocessed.overrides.deeplog_default]
+
+[experiments.thunderbird]
+dataset = "thunderbird"
+# Thunderbird follows the 2022 Thunderbird protocol: the canonical
+# Thunderbird.log file, the first 10 million raw lines, and 100-log
+# chronological windows. We keep all benchmarked models together so the
+# registry exposes one public Thunderbird experiment.
+models = [
+  "deeplog_default",
+  "deepcase",
+  "template_frequency_default",
+  "naive_bayes_default",
+  "markov_default",
+]
+
 [experiments.ait_ads]
 dataset = "ait_ads/base"
 # AIT-ADS is a single continuous alert chronology, so it keeps the
