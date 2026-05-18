@@ -108,6 +108,12 @@ asset as well as the Drain3 config. That prevents a Thunderbird run from
 silently reusing a cache trained on a different archive slice, which was the
 root cause of the unmatched-template failure observed in the benchmark run.
 
+Thunderbird also contains header-only rows whose tail is empty after the
+structured parser normalises the line. Those rows are now treated as expected
+skips rather than warnings, because they do not contribute any message body
+for template mining and would otherwise flood the runtime logs without adding
+new information.
+
 References:
 
 - J. Oliner et al., "What Supercomputers Say: A Study of Five System Logs"
@@ -142,6 +148,30 @@ The Thunderbird preset now:
   slice of that archive member;
 - keeps a smaller smoke prefix for local development;
 - builds 100-log chronological windows for the experiment layer.
+
+## DeepLog Training Memory Note
+
+On `2026-05-19` I ran a controlled temporary A/B comparison between the
+current streaming key-model trainer and the pre-refactor `HEAD` version.
+
+The comparison used:
+
+- a fixed synthetic corpus with two short normal sequences;
+- `history_size = 1`;
+- `epochs = 2`;
+- `batch_size = 64`, which is larger than the example count so both trainers
+  execute the same full-batch update for this check;
+- fixed `torch` and Python random seeds (`1234`).
+
+Observed result:
+
+- the old and new trainers produced the same scored findings on the held-out
+  sequence;
+- the largest absolute parameter difference between the two fitted models was
+  `1.863e-09`, which is numerical noise rather than a behavioural change.
+
+This confirms that the memory fix changes how the training examples are
+materialised, not the observable scoring result in the controlled comparison.
 
 ## Temporary Verification
 
