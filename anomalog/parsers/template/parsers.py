@@ -380,7 +380,6 @@ class SpellTemplateParser(TemplateParser):
                 keep_para=False,
                 max_lcs_comparisons_per_line=self.max_lcs_comparisons_per_line,
                 resume_state=False,
-                persist_state=False,
             )
             spell_log_parser.parse(input_path.name)
 

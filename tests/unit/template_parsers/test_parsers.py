@@ -1,5 +1,7 @@
 """Tests for template parser implementations."""
 
+import math
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias
@@ -336,6 +338,84 @@ def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outpu
         "demo.log_structured.csv",
         "demo.log_templates.csv",
     ]
+    assert parser.inference("Build vm-3 complete") == (
+        "Build <*> complete",
+        ["vm-3"],
+    )
+
+
+def test_spell_template_parser_omits_removed_persist_state_argument(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser training should match the installed LogParser signature.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Redirect the `spellpy` import to a
+            strict fake module that rejects removed keyword arguments.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            expected_tau = 0.5
+            expected_max_lcs_comparisons_per_line = 10_000
+            assert "persist_state" not in kwargs
+            assert set(kwargs) == {
+                "indir",
+                "outdir",
+                "log_format",
+                "tau",
+                "keep_para",
+                "max_lcs_comparisons_per_line",
+                "resume_state",
+            }
+            indir = kwargs["indir"]
+            assert isinstance(indir, str)
+            assert Path(indir).parent == tmp_path / ".cache" / "spell"
+            outdir = kwargs["outdir"]
+            assert isinstance(outdir, str)
+            assert outdir == str(
+                tmp_path / ".cache" / "spell" / "demo_spell_output",
+            )
+            log_format = kwargs["log_format"]
+            assert isinstance(log_format, str)
+            assert log_format == "<Content>"
+            tau = kwargs["tau"]
+            assert isinstance(tau, float)
+            assert math.isclose(tau, expected_tau)
+            keep_para = kwargs["keep_para"]
+            assert isinstance(keep_para, bool)
+            assert keep_para is False
+            max_lcs_comparisons_per_line = kwargs["max_lcs_comparisons_per_line"]
+            assert isinstance(max_lcs_comparisons_per_line, int)
+            assert max_lcs_comparisons_per_line == expected_max_lcs_comparisons_per_line
+            resume_state = kwargs["resume_state"]
+            assert isinstance(resume_state, bool)
+            assert resume_state is False
+            self.logCluL = [
+                types.SimpleNamespace(
+                    logTemplate=["Build", "<*>", "complete"],
+                    logIDL=[1, 2],
+                ),
+            ]
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
+
     assert parser.inference("Build vm-3 complete") == (
         "Build <*> complete",
         ["vm-3"],
