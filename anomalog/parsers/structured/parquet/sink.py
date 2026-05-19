@@ -313,12 +313,30 @@ class ParquetStructuredSink(StructuredSink):
             ds.Dataset: PyArrow dataset over the structured parquet cache.
         """
         self._repair_structured_cache_if_needed()
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        try:
+            return self._structured_dataset(cache_dir)
+        except FileNotFoundError:
+            self._rebuild_structured_cache()
+            return self._structured_dataset(cache_dir)
+
+    @staticmethod
+    def _structured_dataset(cache_dir: Path) -> ds.Dataset:
+        """Build the Arrow dataset view over one structured parquet cache.
+
+        Args:
+            cache_dir (Path): Directory containing the partitioned parquet
+                fragments for one structured dataset.
+
+        Returns:
+            ds.Dataset: Arrow dataset view over the structured parquet cache.
+        """
         # Give Arrow the full row schema up front so projection and filter
         # binding do not depend on fragment inference over the hive partition
         # directory structure. The materialised dataset always carries these
         # structured fields, even when a scan only asks for a subset.
         return ds.dataset(
-            self.structured_data_cache(self.dataset_name),
+            cache_dir,
             format="parquet",
             schema=STRUCTURED_BATCH_SCHEMA,
             exclude_invalid_files=True,
@@ -329,23 +347,23 @@ class ParquetStructuredSink(StructuredSink):
         )
 
     def _repair_structured_cache_if_needed(self) -> None:
-        """Rebuild the structured parquet cache if any parquet file is invalid.
+        """Rebuild the structured parquet cache if it is missing or invalid.
 
         The structured cache can be left in a partially written state after an
         interrupted or stale Prefect materialisation. PyArrow will otherwise
         ignore unreadable files when `exclude_invalid_files=True`, which can make
-        the cache look empty and surface as downstream zero-train failures. The
-        repair itself is serialised under the dataset-build lock so concurrent
-        model runs do not delete and rebuild the same cache namespace at once.
+        the cache look empty and surface as downstream zero-train failures. A
+        missing cache directory is equally stale, so the repair path restores the
+        whole structured dataset before any read continues. The repair itself is
+        serialised under the dataset-build lock so concurrent model runs do not
+        delete and rebuild the same cache namespace at once.
         """
         cache_dir = self.structured_data_cache(self.dataset_name)
-        if not cache_dir.exists():
+        if not cache_dir.exists() or not cache_dir.is_dir():
+            self._rebuild_structured_cache()
             return
 
         with dataset_build_lock(self.dataset_name, cache_paths=self.cache_paths):
-            if not cache_dir.exists():
-                return
-
             parquet_files = list(cache_dir.rglob("*.parquet"))
             if not parquet_files:
                 return
@@ -358,6 +376,16 @@ class ParquetStructuredSink(StructuredSink):
                 return
 
             shutil.rmtree(cache_dir)
+            self.write_structured_lines(refresh_cache=True)
+
+    def _rebuild_structured_cache(self) -> None:
+        """Delete and recreate the structured parquet cache under lock."""
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        with dataset_build_lock(self.dataset_name, cache_paths=self.cache_paths):
+            if cache_dir.exists() and cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+            elif cache_dir.exists():
+                cache_dir.unlink()
             self.write_structured_lines(refresh_cache=True)
 
     @staticmethod

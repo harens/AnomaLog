@@ -1,5 +1,6 @@
 """Tests for `ParquetStructuredSink`."""
 
+import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -498,6 +499,36 @@ def test_sink_repairs_corrupted_parquet_cache_before_reading(
     )
     metadata = pq.read_metadata(rebuilt_file)
     assert metadata.num_rows > 0
+
+
+def test_sink_rebuilds_missing_structured_cache_directory_before_reading(
+    tmp_path: Path,
+) -> None:
+    """A missing structured cache directory should be rebuilt on the next read.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+
+    shutil.rmtree(sink.structured_data_cache(sink.dataset_name))
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+    sequences = list(sink.iter_entity_sequences()())
+
+    assert (normal_entities, total_entities) == (1, 2)
+    assert [[row.entity_id for row in rows] for rows in sequences] == [
+        ["node-b"],
+        ["node-a", "node-a"],
+    ]
+    assert sink.entity_chronology_index_path().exists()
+    assert sink.structured_data_cache(sink.dataset_name).exists()
 
 
 def test_sink_entity_grouping_merges_buckets_chronologically(
