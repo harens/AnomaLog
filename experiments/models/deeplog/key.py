@@ -30,6 +30,8 @@ from experiments.models.deeplog.shared import (
 )
 from experiments.models.sequence_masks import training_event_index_mask
 
+_KEY_TRAINING_MICROBATCH_SIZE = 64
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
@@ -382,23 +384,30 @@ def _optimise_key_training_batch(
         batch_histories (list[list[int]]): Encoded history windows.
         batch_targets (list[int]): Matching next-key indexes.
     """
+    batch_size = len(batch_histories)
+    microbatch_size = min(batch_size, _KEY_TRAINING_MICROBATCH_SIZE)
     optimizer.zero_grad()
-    logits = model(
-        _one_hot_histories(
-            histories=batch_histories,
-            vocab_size=len(training_run.template_to_index),
-            device=training_run.device,
-        ),
-    )
-    loss = training_run.criterion(
-        logits,
-        torch.tensor(
-            batch_targets,
-            dtype=torch.long,
-            device=training_run.device,
-        ),
-    )
-    loss.backward()
+    for start in range(0, batch_size, microbatch_size):
+        end = start + microbatch_size
+        microbatch_histories = batch_histories[start:end]
+        microbatch_targets = batch_targets[start:end]
+        logits = model(
+            _one_hot_histories(
+                histories=microbatch_histories,
+                vocab_size=len(training_run.template_to_index),
+                device=training_run.device,
+            ),
+        )
+        loss = training_run.criterion(
+            logits,
+            torch.tensor(
+                microbatch_targets,
+                dtype=torch.long,
+                device=training_run.device,
+            ),
+        )
+        scaled_loss = loss * (len(microbatch_histories) / batch_size)
+        scaled_loss.backward()
     optimizer.step()
 
 

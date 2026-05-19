@@ -565,6 +565,56 @@ def test_fit_key_model_streams_batches_without_materialising_all_examples(
     assert batch_sizes == [2, 2]
 
 
+def test_fit_key_model_splits_large_training_batches_into_microbatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Large key-model batches should be processed in smaller GPU-safe chunks."""
+    batch_sizes: list[int] = []
+    original_forward = KeyLSTM.forward
+
+    def _recording_forward(
+        self: KeyLSTM,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_sizes.append(int(inputs.shape[0]))
+        return original_forward(self, inputs)
+
+    monkeypatch.setattr(KeyLSTM, "forward", _recording_forward)
+    monkeypatch.setattr(
+        "experiments.models.deeplog.key._KEY_TRAINING_MICROBATCH_SIZE",
+        2,
+    )
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C", "D", "E", "F"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C", "D", "E", "F"),
+        event_count=6,
+    )
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=1,
+        batch_size=5,
+        hidden_size=4,
+        num_layers=1,
+    )
+
+    with Progress(disable=True) as progress:
+        fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert batch_sizes == [2, 2, 1]
+
+
 def test_fit_parameter_models_reports_schema_preparation_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
