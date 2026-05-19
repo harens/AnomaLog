@@ -1,4 +1,6 @@
 name = "template_frequency_default"
 detector = "template_frequency"
+primary_metric_scope = "event_level_detection"
+secondary_metric_scopes = ["sequence_level_detection"]
 smoothing = 1.0
-description = "Unsupervised sequence-level sanity baseline using mean negative log template likelihood."
+description = "Unsupervised template-frequency sanity baseline that reports event-level metrics when labels are available."

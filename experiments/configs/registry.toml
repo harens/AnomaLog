@@ -20,8 +20,10 @@ models = [
 
 [experiments.openstack_deeplog_preprocessed]
 dataset = "openstack/deeplog_preprocessed"
-# OpenStack is the paper's other DeepLog-style setting: a sessionised stream
-# with host identifiers, metric values, and a normal-only training prefix.
+# OpenStack stays key-only because the current structured parser and spell
+# normalisation make paper-style parameter comparison unreliable. The run is
+# still useful as a DeepLog-style comparison against the same file-boundary
+# split, but it should not be read as a full parameter-anomaly reproduction.
 # Naive Bayes is omitted because the train split is single-class.
 models = [
   "deeplog_default",
@@ -79,7 +81,8 @@ models = [
 [experiment_sets.bgl_deeplog_paper]
 # DeepLog paper reproduction: the LSTM next-event target plus the three simple
 # floors that tell us whether the dataset is separable before the neural model
-# does anything interesting.
+# does anything interesting. The simple baselines now foreground
+# event-level detection on BGL because the dataset labels individual log lines.
 # Naive Bayes is omitted because the paper's BGL training prefix is
 # single-class.
 models = [

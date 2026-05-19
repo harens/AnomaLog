@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+import msgspec
 import pytest
 from rich.progress import Progress, TextColumn
 from typing_extensions import override
@@ -89,6 +90,7 @@ def _sequence(  # noqa: PLR0913
     templates: list[str],
     label: int | None,
     split_label: SplitLabel = SplitLabel.TRAIN,
+    event_labels: tuple[int | None, ...] | None = None,
     training_event_mask: tuple[bool, ...] | None = None,
     evaluation_event_mask: tuple[bool, ...] | None = None,
 ) -> TemplateSequence:
@@ -98,6 +100,7 @@ def _sequence(  # noqa: PLR0913
         entity_ids=[f"entity-{window_id}"],
         window_id=window_id,
         split_label=split_label,
+        event_labels=event_labels,
         training_event_mask=training_event_mask,
         evaluation_event_mask=evaluation_event_mask,
     )
@@ -779,6 +782,7 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
     )
 
     assert detector.threshold_source == "train_score_quantile"
+    assert detector.event_threshold_source == "train_event_score_quantile"
     assert detector.score_threshold <= max(normal_scores)
     assert detector.predict(train_sequences[0]).predicted_label == 0
     assert detector.predict(anomalous_sequence).predicted_label == 1
@@ -836,6 +840,80 @@ def test_template_frequency_detector_uses_event_masks_for_fit_and_scoring() -> N
     assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
 
 
+def test_template_frequency_detector_reports_event_level_metrics() -> None:
+    """Template-frequency event metrics should count events, not sequences."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    train_sequences = [
+        _sequence(
+            50,
+            templates=["normal login", "normal read", "normal read"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+        _sequence(
+            51,
+            templates=["normal read", "normal login"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True),
+        ),
+    ]
+    test_sequences = [
+        _sequence(
+            60,
+            templates=["normal login", "panic failure", "normal read"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 1, 0),
+            evaluation_event_mask=(True, True, True),
+        ),
+        _sequence(
+            61,
+            templates=["normal read", "normal read"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0),
+            evaluation_event_mask=(True, True),
+        ),
+    ]
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    for sequence in test_sequences:
+        detector.predict(sequence)
+
+    expected_event_count = sum(len(sequence.events) for sequence in test_sequences)
+    expected_anomalous_event_count = 1
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=4,
+            train_sequence_count=2,
+            test_sequence_count=2,
+            train_label_counts={0: 2},
+            test_label_counts={0: 1, 1: 1},
+        ),
+    )
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    event_metrics = metrics["event_level_detection"]
+
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
+    assert event_metrics["events_seen"] == expected_event_count
+    assert event_metrics["events_eligible"] == expected_event_count
+    assert event_metrics["events_seen"] > len(test_sequences)
+    assert event_metrics["anomalous_event_count"] == expected_anomalous_event_count
+    assert (
+        event_metrics["tp"]
+        + event_metrics["tn"]
+        + event_metrics["fp"]
+        + event_metrics["fn"]
+        == expected_event_count
+    )
+
+
 def test_markov_detector_predictions_are_repeatable() -> None:
     """Repeated predictions from the transition detector should be identical."""
     detector = _markov_config(name="markov").build_detector()
@@ -864,7 +942,7 @@ def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
     train_sequence = _sequence(
         42,
         templates=["A", "B", "C", "D"],
-        label=1,
+        label=0,
         split_label=SplitLabel.TRAIN,
         training_event_mask=(True, False, True, False),
     )
@@ -884,6 +962,80 @@ def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
     assert detector.context_counts == Counter({("B",): 1})
     assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
     assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
+
+
+def test_markov_detector_reports_event_level_metrics() -> None:
+    """Markov event metrics should count labelled events, not chunks."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequences = [
+        _sequence(
+            70,
+            templates=["A", "B", "C"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+        _sequence(
+            71,
+            templates=["B", "C", "D"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+    ]
+    test_sequences = [
+        _sequence(
+            80,
+            templates=["A", "B", "panic failure"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0, 1),
+            evaluation_event_mask=(True, True, True),
+        ),
+        _sequence(
+            81,
+            templates=["B", "C"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0),
+            evaluation_event_mask=(True, True),
+        ),
+    ]
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    for sequence in test_sequences:
+        detector.predict(sequence)
+
+    expected_event_count = sum(
+        max(len(sequence.events) - detector.order, 0) for sequence in test_sequences
+    )
+    expected_anomalous_event_count = 1
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=4,
+            train_sequence_count=2,
+            test_sequence_count=2,
+            train_label_counts={0: 2},
+            test_label_counts={0: 1, 1: 1},
+        ),
+    )
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    event_metrics = metrics["event_level_detection"]
+
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
+    assert event_metrics["events_seen"] == expected_event_count
+    assert event_metrics["events_eligible"] == expected_event_count
+    assert event_metrics["events_seen"] > len(test_sequences)
+    assert event_metrics["anomalous_event_count"] == expected_anomalous_event_count
+    assert (
+        event_metrics["tp"]
+        + event_metrics["tn"]
+        + event_metrics["fp"]
+        + event_metrics["fn"]
+        == expected_event_count
+    )
 
 
 def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:
@@ -907,6 +1059,8 @@ def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:
     assert manifest.order == 1
     assert manifest.score_threshold >= 0.0
     assert manifest.threshold_source == "train_score_quantile"
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
     assert manifest.normal_sequence_count == EXPECTED_MARKOV_NORMAL_SEQUENCE_COUNT
     assert manifest.normal_transition_count == EXPECTED_MARKOV_NORMAL_TRANSITION_COUNT
     assert manifest.normal_context_vocabulary == EXPECTED_MARKOV_CONTEXT_VOCABULARY

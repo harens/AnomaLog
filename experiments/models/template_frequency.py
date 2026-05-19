@@ -20,6 +20,10 @@ from experiments.models.base import (
     SequenceSummary,
     SingleFitMixin,
 )
+from experiments.models.event_level_detection import (
+    EventLevelDetectionDiagnostics,
+    EventLevelDetectionState,
+)
 from experiments.models.progress import fit_stage_description
 from experiments.models.sequence_masks import (
     evaluation_event_mask_for_sequence,
@@ -45,7 +49,8 @@ class TemplateFrequencyModelConfig(
     The detector counts templates in the train prefix and turns unexpectedly
     rare sequences into high anomaly scores. When the threshold is not fixed by
     config, calibration uses the same eligible training targets as the DeepLog
-    event masks, rather than whole-sequence labels.
+    event masks, rather than whole-sequence labels. When event labels are
+    available, the detector can also report event-level anomaly metrics.
     """  # noqa: DOC601, DOC603
 
     score_threshold: Annotated[
@@ -101,6 +106,9 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         total_events (int): Total number of training events seen.
         score_threshold (float): Effective anomaly threshold after fitting.
         threshold_source (str): Whether the threshold was configured or calibrated.
+        event_score_threshold (float): Effective event-level anomaly threshold.
+        event_threshold_source (str): Whether the event threshold was configured
+            or calibrated.
     """
 
     detector_name: ClassVar[str] = "template_frequency"
@@ -111,6 +119,13 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
     total_events: int = 0
     score_threshold: float = 0.0
     threshold_source: str = "configured"
+    event_score_threshold: float = 0.0
+    event_threshold_source: str = "configured"
+    _event_level_state: EventLevelDetectionState = field(
+        default_factory=EventLevelDetectionState,
+        init=False,
+        repr=False,
+    )
 
     def fit(
         self,
@@ -137,6 +152,7 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         total_events = 0
         del logger
         calibration_templates: list[list[str]] = []
+        self._event_level_state.reset()
         for sequence in progress.track(
             train_sequences,
             description=fit_stage_description(self.detector_name),
@@ -162,6 +178,8 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         if self.configured_score_threshold is not None:
             self.score_threshold = self.configured_score_threshold
             self.threshold_source = "configured"
+            self.event_score_threshold = self.configured_score_threshold
+            self.event_threshold_source = "configured"
             self._mark_fit_complete()
             return
 
@@ -174,11 +192,21 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         calibration_scores = sorted(
             self._score_templates(templates) for templates in calibration_templates
         )
+        calibration_event_scores = sorted(
+            self._score_template(template)
+            for templates in calibration_templates
+            for template in templates
+        )
         self.score_threshold = _quantile(
             calibration_scores,
             self.calibration_quantile,
         )
         self.threshold_source = "train_score_quantile"
+        self.event_score_threshold = _quantile(
+            sorted(calibration_event_scores),
+            self.calibration_quantile,
+        )
+        self.event_threshold_source = "train_event_score_quantile"
         self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
@@ -191,13 +219,18 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             PredictionOutcome: Predicted label and anomaly score for the sequence.
         """
         score = self.score(sequence)
+        self._record_event_level_predictions(sequence)
         predicted_label = int(score > self.score_threshold)
         return PredictionOutcome(
             predicted_label=predicted_label,
             score=score,
         )
 
-    def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+    def model_manifest(
+        self,
+        *,
+        sequence_summary: SequenceSummary,
+    ) -> TemplateFrequencyManifest:
         """Return serialisable detector metadata.
 
         Args:
@@ -205,13 +238,16 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
                 for the run.
 
         Returns:
-            ModelManifest: Serialisable template-frequency manifest for the run.
+            TemplateFrequencyManifest: Serialisable template-frequency manifest
+                for the run.
         """
         return TemplateFrequencyManifest.from_sequence_summary(
             detector=self.detector_name,
             sequence_summary=sequence_summary,
             score_threshold=self.score_threshold,
             threshold_source=self.threshold_source,
+            event_score_threshold=self.event_score_threshold,
+            event_threshold_source=self.event_threshold_source,
             calibration_quantile=self.calibration_quantile,
             smoothing=self.smoothing,
             train_event_count=self.total_events,
@@ -233,18 +269,59 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         )
         return self._score_templates(templates)
 
+    def _score_template(self, template: str) -> float:
+        """Return the negative log-probability for one template."""
+        vocab_size = max(len(self.template_counts), 1)
+        denominator = self.total_events + (self.smoothing * vocab_size)
+        numerator = self.template_counts.get(template, 0) + self.smoothing
+        probability = numerator / denominator
+        return -math.log(probability)
+
     def _score_templates(self, templates: list[str]) -> float:
         """Return the mean negative log-probability for a template list."""
         if not templates:
             return 0.0
-        vocab_size = max(len(self.template_counts), 1)
-        denominator = self.total_events + (self.smoothing * vocab_size)
         loss_sum = 0.0
         for template in templates:
-            numerator = self.template_counts.get(template, 0) + self.smoothing
-            probability = numerator / denominator
-            loss_sum += -math.log(probability)
+            loss_sum += self._score_template(template)
         return loss_sum / len(templates)
+
+    def _record_event_level_predictions(self, sequence: TemplateSequence) -> None:
+        """Accumulate event-level confusion counts for one scored sequence."""
+        if sequence.event_labels is None:
+            return
+        eligible_event_mask = evaluation_event_mask_for_sequence(sequence)
+        if not any(eligible_event_mask):
+            return
+        for template, actual_label, is_eligible in zip(
+            sequence.templates,
+            sequence.event_labels,
+            eligible_event_mask,
+            strict=True,
+        ):
+            if not is_eligible or actual_label is None:
+                continue
+            predicted_label = int(
+                self._score_template(template) > self.event_score_threshold,
+            )
+            self._event_level_state.record(
+                actual_label=actual_label,
+                predicted_label=predicted_label,
+            )
+
+    def _event_level_state_snapshot(self) -> EventLevelDetectionDiagnostics | None:
+        """Return the latest event-level detection diagnostics."""
+        return self._event_level_state.snapshot(task="event_level_detection")
+
+    def run_metrics(
+        self,
+        *,
+        run_metrics: dict[str, int | float | dict[int, int]],
+    ) -> object | None:
+        """Return event-level diagnostics for the latest scored run."""
+        del run_metrics
+        snapshot = self._event_level_state_snapshot()
+        return None if snapshot is None else {"event_level_detection": snapshot}
 
 
 class TemplateFrequencyManifest(ModelManifest, frozen=True):
@@ -253,6 +330,9 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
     Attributes:
         score_threshold (float): Effective anomaly threshold after fitting.
         threshold_source (str): Whether the threshold was configured or calibrated.
+        event_score_threshold (float): Effective event-level anomaly threshold.
+        event_threshold_source (str): Whether the event threshold was configured
+            or calibrated.
         calibration_quantile (float): Quantile used during calibration.
         smoothing (float): Additive smoothing applied to template counts.
         train_event_count (int): Total number of training events seen.
@@ -261,6 +341,8 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
 
     score_threshold: float
     threshold_source: str
+    event_score_threshold: float
+    event_threshold_source: str
     calibration_quantile: float
     smoothing: float
     train_event_count: int

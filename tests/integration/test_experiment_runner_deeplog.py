@@ -309,52 +309,24 @@ def _assert_deeplog_manifest(
     assert manifest["stream_segment_policy"]["mode"] == "continuous_event_stream"
 
 
-def test_run_experiment_with_deeplog_matches_resolved_config(
-    tmp_path: Path,
+def _assert_deeplog_run_artifacts(
+    *,
+    run_dir: Path,
+    deeplog_model: DeepLogModelConfig,
+    bundle: ExperimentBundle,
 ) -> None:
-    """DeepLog runs should match the resolved config and flag both anomaly modes.
-
-    Args:
-        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
-    """
-    sweep_config = _prepare_run_tree(tmp_path)
-    bundles = load_experiment_bundles(sweep_config)
-    deeplog_bundle = _bundle_named(bundles, "deeplog")
-    baseline_bundle = _bundle_named(bundles, "template_frequency")
-
-    run_dirs = run_experiment(sweep_config, write_predictions=True)
-    assert {_detector_name(run_dir) for run_dir in run_dirs} == {
-        deeplog_bundle.model.detector,
-        baseline_bundle.model.detector,
-    }
-    deeplog_model = deeplog_bundle.model
-    assert isinstance(deeplog_model, DeepLogModelConfig)
-
-    deeplog_run_dir = next(
-        run_dir
-        for run_dir in run_dirs
-        if _detector_name(run_dir) == deeplog_model.detector
-    )
-    baseline_run_dir = next(
-        run_dir
-        for run_dir in run_dirs
-        if _detector_name(run_dir) == baseline_bundle.model.detector
-    )
-
-    metrics = json.loads((deeplog_run_dir / "metrics.json").read_text(encoding="utf-8"))
+    """Check the run directory written by DeepLog."""
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(
-        (deeplog_run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
+        (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
     )
-    predictions = _read_predictions(deeplog_run_dir)
-    run_log = (deeplog_run_dir / "run.log").read_text(encoding="utf-8")
-    baseline_metrics = json.loads(
-        (baseline_run_dir / "metrics.json").read_text(encoding="utf-8"),
-    )
+    predictions = _read_predictions(run_dir)
+    run_log = (run_dir / "run.log").read_text(encoding="utf-8")
 
     _assert_deeplog_metrics(metrics, list(deeplog_model.top_g_values))
     _assert_deeplog_manifest(
         metrics=metrics,
-        bundle=deeplog_bundle,
+        bundle=bundle,
         manifest=manifest,
     )
 
@@ -378,6 +350,68 @@ def test_run_experiment_with_deeplog_matches_resolved_config(
     assert "Fitting deeplog detector" in run_log
     assert "DeepLog resolved torch device:" in run_log
     assert "Primary metric scope: event_level_detection" in run_log
-    assert baseline_metrics["primary_metric_scope"] == "sequence_level_detection"
-    assert baseline_metrics["prediction_unit"] == "sequence"
-    assert baseline_metrics["label_unit"] == "sequence"
+
+
+def _assert_baseline_run_artifacts(run_dir: Path) -> None:
+    """Check the template-frequency baseline run directory."""
+    baseline_metrics = json.loads(
+        (run_dir / "metrics.json").read_text(encoding="utf-8"),
+    )
+    assert baseline_metrics["primary_metric_scope"] == "event_level_detection"
+    assert baseline_metrics["prediction_unit"] == "event"
+    assert baseline_metrics["label_unit"] == "event"
+    baseline_metric_blocks = _object_dict(baseline_metrics["metric_blocks"])
+    baseline_event_block = _object_dict(baseline_metric_blocks["event_level_detection"])
+    baseline_sequence_block = _object_dict(
+        baseline_metric_blocks["sequence_level_detection"],
+    )
+    assert baseline_event_block["status"] == "valid"
+    assert (
+        baseline_event_block["evaluation_unit_count"]
+        > baseline_metrics["test_sequence_count"]
+    )
+    assert (
+        baseline_event_block["counted_predictions"]
+        == baseline_event_block["evaluation_unit_count"]
+    )
+    assert baseline_sequence_block["status"] == "invalid"
+    assert baseline_sequence_block["invalid_reason"] == "single_class_test_set"
+
+
+def test_run_experiment_with_deeplog_matches_resolved_config(
+    tmp_path: Path,
+) -> None:
+    """DeepLog runs should match the resolved config and flag both anomaly modes.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for copied config fixtures.
+    """
+    sweep_config = _prepare_run_tree(tmp_path)
+    bundles = load_experiment_bundles(sweep_config)
+    deeplog_bundle = _bundle_named(bundles, "deeplog")
+    baseline_bundle = _bundle_named(bundles, "template_frequency")
+
+    run_dirs = run_experiment(sweep_config, write_predictions=True)
+    assert {_detector_name(run_dir) for run_dir in run_dirs} == {
+        deeplog_bundle.model.detector,
+        baseline_bundle.model.detector,
+    }
+    assert isinstance(deeplog_bundle.model, DeepLogModelConfig)
+
+    deeplog_run_dir = next(
+        run_dir
+        for run_dir in run_dirs
+        if _detector_name(run_dir) == deeplog_bundle.model.detector
+    )
+    baseline_run_dir = next(
+        run_dir
+        for run_dir in run_dirs
+        if _detector_name(run_dir) == baseline_bundle.model.detector
+    )
+
+    _assert_deeplog_run_artifacts(
+        run_dir=deeplog_run_dir,
+        deeplog_model=deeplog_bundle.model,
+        bundle=deeplog_bundle,
+    )
+    _assert_baseline_run_artifacts(baseline_run_dir)
