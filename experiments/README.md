@@ -217,10 +217,18 @@ uv run python -m experiments.runners.run_suite \
   --group bgl_deeplog_paper
 ```
 
-Thunderbird has one public registry entry for the reproduction split:
+Thunderbird has one public registry entry for the chronological DeepLog
+reproduction split:
 
 ```bash
 uv run python -m experiments.runners.run_suite --experiment thunderbird
+```
+
+The entity-grouped DeepCASE extension is exposed separately:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --experiment thunderbird_entity_chronological
 ```
 
 The smaller `thunderbird_smoke` preset remains available for tests and local

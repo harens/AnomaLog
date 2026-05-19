@@ -1553,6 +1553,38 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
     assert bgl_deepcase_bundle.dataset.sequence.train_on_normal_entities_only is False
 
 
+@pytest.mark.allow_no_new_coverage
+def test_thunderbird_entity_manifest_uses_entity_grouping() -> None:
+    """Thunderbird DeepCASE runs should use an entity-local sequence view."""
+    paper_bundles = load_experiment_bundles(
+        Path("experiments/configs/datasets") / "thunderbird/entity_chronological.toml",
+    )
+
+    assert {bundle.model.name for bundle in paper_bundles} == {
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
+        "deepcase",
+    }
+    assert all(
+        isinstance(bundle.dataset.sequence, EntitySequenceConfig)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
+        for bundle in paper_bundles
+    )
+    assert all(
+        bundle.dataset.evaluation_unit is EvaluationUnit.SEQUENCE
+        for bundle in paper_bundles
+    )
+    assert {bundle.dataset.preset for bundle in paper_bundles} == {"thunderbird"}
+
+
 def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
     """Mixed manifests should separate heavyweight models into their own groups."""
     repo_root = Path(__file__).resolve().parents[2]

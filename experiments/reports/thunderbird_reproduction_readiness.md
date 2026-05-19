@@ -139,9 +139,15 @@ The original DeepCASE paper does not evaluate Thunderbird. The Thunderbird
 DeepCASE registry entry in this repository is therefore a benchmark extension,
 not a paper reproduction target.
 
+Like the other entity-local DeepCASE benchmarks in this repository, the
+Thunderbird extension uses entity grouping rather than the chronological
+100-log windows used by the DeepLog reproduction. The public Thunderbird
+reproduction experiment therefore stays stream-shaped, while the entity-local
+DeepCASE run is exposed separately as `thunderbird_entity_chronological`.
+
 ## Local contract
 
-The Thunderbird preset now:
+The Thunderbird reproduction preset now:
 
 - targets the exact `Thunderbird.log` archive member directly;
 - keeps the reproduction preset to the `160,000,000`-`170,000,000` raw line

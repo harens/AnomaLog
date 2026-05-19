@@ -8,7 +8,7 @@
   slice used by the public benchmark code; keep a shorter smoke prefix for
   local development.
 - Keep the default Thunderbird experiment shape on 100-log chronological
-  windows, then expose DeepLog, DeepCASE, and baseline registry entries for
-  both smoke and full variants.
+  windows for the DeepLog-style reproduction, then expose a separate
+  entity-grouped Thunderbird extension for DeepCASE and shared baselines.
 - Extend the dataset manifest statistics with Thunderbird-specific parsing and
   split counts without changing the shared sequence/model code.

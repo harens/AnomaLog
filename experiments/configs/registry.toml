@@ -36,15 +36,25 @@ models = [
 dataset = "thunderbird"
 # Thunderbird follows the benchmark slice used by the public LogLLM/DeepLog
 # family: the canonical Thunderbird.log file, a 10-million-line range starting
-# at line 160,000,000, and 100-log chronological windows. We keep all
-# benchmarked models together so the registry exposes one public Thunderbird
-# experiment.
+# at line 160,000,000, and 100-log chronological windows. The DeepLog-style
+# reproduction stays stream-shaped and keeps the simple baselines together.
 models = [
   "deeplog_default",
-  "deepcase",
   "template_frequency_default",
   "naive_bayes_default",
   "markov_default",
+]
+
+[experiments.thunderbird_entity_chronological]
+dataset = "thunderbird/entity_chronological"
+# DeepCASE needs entity-local sequences, so the Thunderbird extension is split
+# out into its own entity-grouped experiment rather than sharing the
+# chronological reproduction contract.
+models = [
+  "template_frequency_default",
+  "naive_bayes_default",
+  "markov_default",
+  "deepcase",
 ]
 
 [experiments.ait_ads]

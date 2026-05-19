@@ -146,10 +146,29 @@ def test_load_experiment_registry_registers_thunderbird_runs() -> None:
     assert thunderbird.preset is None
     assert thunderbird.model_sets == (
         "deeplog_default",
-        "deepcase",
         "template_frequency_default",
         "naive_bayes_default",
         "markov_default",
+    )
+
+
+@pytest.mark.allow_no_new_coverage
+def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
+    """Thunderbird entity-grouped runs should resolve through the registry."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    thunderbird_entity = registry.require("thunderbird_entity_chronological")
+    assert thunderbird_entity.dataset == "thunderbird/entity_chronological"
+    assert thunderbird_entity.preset is None
+    assert thunderbird_entity.model_sets == (
+        "template_frequency_default",
+        "naive_bayes_default",
+        "markov_default",
+        "deepcase",
     )
 
 
