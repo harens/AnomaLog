@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import msgspec
 import numpy as np
@@ -23,6 +23,7 @@ from experiments.models.base import (
     SingleFitMixin,
 )
 from experiments.models.deepcase.shared import (
+    DeepCaseClusterScoreStrategy,
     DeepCaseEventFinding,
     DeepCaseEventIdMap,
     DeepCaseManifest,
@@ -37,6 +38,7 @@ from experiments.models.deepcase.shared import (
     build_sample_batch,
     build_training_batch,
     build_workload_reduction_metrics,
+    cluster_scores_for_labels,
     decision_label_for_score,
     finding_reason_for_score,
 )
@@ -59,10 +61,6 @@ if TYPE_CHECKING:
 
     from anomalog.sequences import TemplateSequence
     from experiments.models.deepcase.shared import DeepCaseSampleBatch
-
-DeepCaseClusterScoreStrategy = Literal["max", "min", "avg"]
-"""Defined within DeepCase Library's fit method
-for how event scores are aggregated within a cluster."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +169,9 @@ class DeepCaseModelConfig(
         vocabulary_policy (VocabularyPolicy): Vocabulary policy for
             next-event diagnostics.
         cluster_score_strategy (DeepCaseClusterScoreStrategy): Cluster score
-            aggregation strategy.
+            labelling strategy.
+        cluster_anomaly_fraction_threshold (Probability): Minimum anomaly
+            fraction required by the thresholded cluster policy.
         no_score (int): Special no-score sentinel value.
         device (TorchDeviceName): Requested Torch device policy.
         random_seed (int): Deterministic random seed.
@@ -310,8 +310,25 @@ class DeepCaseModelConfig(
     ] = VocabularyPolicy.FULL_DATASET
     cluster_score_strategy: Annotated[
         DeepCaseClusterScoreStrategy,
-        msgspec.Meta(description="How event scores are aggregated within a cluster."),
-    ] = "max"
+        msgspec.Meta(
+            description=(
+                "Cluster-labelling policy used after interpreter clustering. "
+                "'max' keeps the paper-faithful any-anomalous baseline, "
+                "'majority_vote' labels clusters by the strict majority, "
+                "'threshold_fraction' uses the configured anomaly fraction "
+                "cut-off, and 'abstain_mixed' defers mixed clusters."
+            ),
+        ),
+    ] = DeepCaseClusterScoreStrategy.ANY_ANOMALOUS
+    cluster_anomaly_fraction_threshold: Annotated[
+        Probability,
+        msgspec.Meta(
+            description=(
+                "Minimum anomaly fraction required by the "
+                "'threshold_fraction' cluster policy."
+            ),
+        ),
+    ] = 0.75
     no_score: Annotated[
         int,
         msgspec.Meta(
@@ -451,16 +468,21 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         progress.update(fit_task, description="DeepCase: clustering interpreter")
         if logger is not None:
             logger.info("Clustering DeepCase interpreter")
-        model.interpreter.fit(
+        model.interpreter.cluster(
             X=contexts,
             y=events,
-            scores=batch.scores,
             iterations=self.config.iterations,
             batch_size=self.config.query_batch_size,
-            strategy=self.config.cluster_score_strategy,
-            NO_SCORE=self.config.no_score,
             verbose=False,
         )
+        cluster_scores = cluster_scores_for_labels(
+            model.interpreter.clusters,
+            batch.scores,
+            strategy=self.config.cluster_score_strategy,
+            anomaly_fraction_threshold=self.config.cluster_anomaly_fraction_threshold,
+            no_score=self.config.no_score,
+        )
+        model.interpreter.score(scores=cluster_scores, verbose=False)
         progress.advance(fit_task)
         progress.update(fit_task, description="DeepCase: fit complete")
 
@@ -474,19 +496,19 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.known_cluster_count = len(
             {cluster for cluster in model.interpreter.clusters if cluster != -1},
         )
-        scored_clusters = model.interpreter.score_clusters(
-            scores=batch.scores,
-            strategy=self.config.cluster_score_strategy,
-            NO_SCORE=self.config.no_score,
-        )
+        scored_clusters = cluster_scores
         self.known_benign_cluster_count = int(
-            np.count_nonzero(scored_clusters == 0),
+            np.count_nonzero(
+                (model.interpreter.clusters != -1) & np.isclose(scored_clusters, 0.0),
+            ),
         )
         self.known_malicious_cluster_count = int(
-            np.count_nonzero(scored_clusters > 0),
+            np.count_nonzero(
+                (model.interpreter.clusters != -1) & np.isclose(scored_clusters, 1.0),
+            ),
         )
         self.unknown_cluster_score_count = int(
-            np.count_nonzero(scored_clusters == self.config.no_score),
+            np.count_nonzero(np.isclose(scored_clusters, float(self.config.no_score))),
         )
         self._reset_next_event_prediction_state()
         self._reset_prediction_diagnostics()
@@ -613,7 +635,8 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             label_policy=(
                 "event-label supervision when available: each event-centered "
                 "sample uses its target event label and falls back to the "
-                "parent TemplateSequence label when the event label is missing"
+                "parent TemplateSequence label when the event label is missing; "
+                f"cluster labelling uses {self.config.cluster_score_strategy.value}"
             ),
             context_length=self.config.context_length,
             timeout_seconds=self.config.timeout_seconds,
@@ -628,7 +651,8 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             teach_ratio=self.config.teach_ratio,
             iterations=self.config.iterations,
             query_batch_size=self.config.query_batch_size,
-            cluster_score_strategy=self.config.cluster_score_strategy,
+            cluster_score_strategy=self.config.cluster_score_strategy.value,
+            cluster_anomaly_fraction_threshold=self.config.cluster_anomaly_fraction_threshold,
             no_score=self.config.no_score,
             device=str(self.device),
             random_seed=self.config.random_seed,
@@ -1012,9 +1036,7 @@ def _summarise_findings(
             confident_anomaly_event_count += 1
     confident_event_count = len(findings) - abstained_event_count
     if confident_anomaly_event_count > 0:
-        sequence_decision: Literal[DeepCaseSequenceDecision.CONFIDENT_ANOMALY] = (
-            DeepCaseSequenceDecision.CONFIDENT_ANOMALY
-        )
+        sequence_decision = DeepCaseSequenceDecision.CONFIDENT_ANOMALY
         predicted_label = 1
     elif abstained_event_count > 0:
         sequence_decision = DeepCaseSequenceDecision.ABSTAINED

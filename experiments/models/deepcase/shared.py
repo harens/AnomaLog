@@ -77,6 +77,26 @@ class DeepCaseSequenceDecision(str, Enum):
     CONFIDENT_ANOMALY = "confident_anomaly"
 
 
+class DeepCaseClusterScoreStrategy(str, Enum):
+    """Stable cluster-labelling policies for DeepCASE ablations.
+
+    Attributes:
+        ANY_ANOMALOUS: Conservative, paper-faithful baseline. A cluster is
+            labelled anomalous when any member event is anomalous.
+        MAJORITY_VOTE: A cluster is labelled anomalous when anomalous labels
+            outnumber normal labels; ties fall back to normal.
+        THRESHOLD_FRACTION: A cluster is labelled anomalous when the anomaly
+            fraction meets or exceeds the configured threshold.
+        ABSTAIN_MIXED: Mixed clusters are deferred for manual inspection
+            instead of forcing a binary label.
+    """
+
+    ANY_ANOMALOUS = "max"
+    MAJORITY_VOTE = "majority_vote"
+    THRESHOLD_FRACTION = "threshold_fraction"
+    ABSTAIN_MIXED = "abstain_mixed"
+
+
 class DeepCaseEventDecisionMetrics(msgspec.Struct, frozen=True):
     """Automatic event-level DeepCASE decision metrics.
 
@@ -588,7 +608,10 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         iterations (int): Maximum interpreter query iterations used while
             building clusters and during prediction-time attention queries.
         query_batch_size (int): Batch size used during querying/prediction.
-        cluster_score_strategy (str): Cluster score aggregation strategy.
+        cluster_score_strategy (str): Cluster-labelling policy used after
+            interpreter clustering.
+        cluster_anomaly_fraction_threshold (float): Cut-off used by the
+            thresholded anomaly-fraction policy.
         no_score (int): Special no-score value passed to DeepCASE.
         device (str): Resolved runtime torch device.
         random_seed (int): Configured random seed used for the run.
@@ -629,6 +652,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     iterations: int
     query_batch_size: int
     cluster_score_strategy: str
+    cluster_anomaly_fraction_threshold: float
     no_score: int
     device: str
     random_seed: int
@@ -928,6 +952,99 @@ def aggregate_sequence_score(raw_scores: Sequence[float]) -> float:
         float: Sequence-level score for the experiment metrics contract.
     """
     return max((score for score in raw_scores if score > 0), default=0.0)
+
+
+def cluster_score_for_labels(
+    labels: Sequence[int | float] | np.ndarray,
+    *,
+    strategy: DeepCaseClusterScoreStrategy,
+    anomaly_fraction_threshold: float = 0.75,
+    no_score: int = -1,
+) -> float:
+    """Return one cluster score from the labels attached to its members.
+
+    Args:
+        labels (Sequence[int | float] | np.ndarray): Labels attached to
+            samples within one cluster. ``no_score`` values are ignored.
+        strategy (DeepCaseClusterScoreStrategy): Cluster-labelling policy.
+        anomaly_fraction_threshold (float): Minimum anomaly fraction required
+            by ``threshold_fraction``.
+        no_score (int): Sentinel used for ignored or abstained samples.
+
+    Returns:
+        float: Cluster score suitable for DeepCASE's ``score()`` contract.
+    """
+    observed_labels = np.asarray(labels)
+    observed_labels = observed_labels[observed_labels != no_score]
+    if observed_labels.size == 0:
+        return float(no_score)
+
+    anomalous_count = int(np.count_nonzero(observed_labels != 0))
+    normal_count = len(observed_labels) - anomalous_count
+
+    if strategy is DeepCaseClusterScoreStrategy.ANY_ANOMALOUS:
+        return 1.0 if anomalous_count else 0.0
+
+    if strategy is DeepCaseClusterScoreStrategy.MAJORITY_VOTE:
+        return 1.0 if anomalous_count > normal_count else 0.0
+
+    if strategy is DeepCaseClusterScoreStrategy.THRESHOLD_FRACTION:
+        anomaly_fraction = anomalous_count / len(observed_labels)
+        return 1.0 if anomaly_fraction >= anomaly_fraction_threshold else 0.0
+
+    if anomalous_count and normal_count:
+        return float(no_score)
+    return 1.0 if anomalous_count else 0.0
+
+
+def cluster_scores_for_labels(
+    clusters: Sequence[int] | np.ndarray,
+    labels: Sequence[int | float] | np.ndarray,
+    *,
+    strategy: DeepCaseClusterScoreStrategy,
+    anomaly_fraction_threshold: float = 0.75,
+    no_score: int = -1,
+) -> np.ndarray:
+    """Return one score per sample by labelling each non-noise cluster.
+
+    Args:
+        clusters (Sequence[int] | np.ndarray): Cluster id per sample, using
+            ``-1`` for noise or unmatched samples.
+        labels (Sequence[int | float] | np.ndarray): Labels attached to
+            samples.
+        strategy (DeepCaseClusterScoreStrategy): Cluster-labelling policy.
+        anomaly_fraction_threshold (float): Minimum anomaly fraction required
+            by ``threshold_fraction``.
+        no_score (int): Sentinel used for ignored or abstained samples.
+
+    Returns:
+        np.ndarray: Per-sample cluster scores ready for ``Interpreter.score``.
+
+    Raises:
+        ValueError: If the cluster and label arrays do not share a shape.
+    """
+    clusters_array = np.asarray(clusters)
+    labels_array = np.asarray(labels)
+    if clusters_array.shape != labels_array.shape:
+        msg = (
+            "Clusters and labels should have the same shape, but instead "
+            f"found {clusters_array.shape!r} clusters and "
+            f"{labels_array.shape!r} labels."
+        )
+        raise ValueError(msg)
+
+    result = np.full(labels_array.shape[0], float(no_score), dtype=float)
+    for cluster_id in np.unique(clusters_array):
+        if cluster_id == -1:
+            continue
+        indices = np.flatnonzero(clusters_array == cluster_id)
+        result[indices] = cluster_score_for_labels(
+            labels_array[indices],
+            strategy=strategy,
+            anomaly_fraction_threshold=anomaly_fraction_threshold,
+            no_score=no_score,
+        )
+    return result
 
 
 def _event_id_for_template(

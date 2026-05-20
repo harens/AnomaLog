@@ -11,11 +11,39 @@ models = [
   "markov_default",
 ]
 
+[model_sets.deepcase_majority_vote]
+models = ["deepcase"]
+
+[model_sets.deepcase_majority_vote.overrides.deepcase]
+"model.name" = "deepcase_majority_vote"
+"model.cluster_score_strategy" = "majority_vote"
+
+[model_sets.deepcase_threshold_fraction]
+models = ["deepcase"]
+
+[model_sets.deepcase_threshold_fraction.overrides.deepcase]
+"model.name" = "deepcase_threshold_fraction"
+"model.cluster_score_strategy" = "threshold_fraction"
+"model.cluster_anomaly_fraction_threshold" = 0.75
+
+[model_sets.deepcase_abstain_mixed]
+models = ["deepcase"]
+
+[model_sets.deepcase_abstain_mixed.overrides.deepcase]
+"model.name" = "deepcase_abstain_mixed"
+"model.cluster_score_strategy" = "abstain_mixed"
+
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
 # Entity-chronological runs compare DeepCASE against the shared sanity
-# baselines and keep the non-paper DeepLog extension inline.
-model_sets = ["baselines_with_nb"]
+# baselines, keep the non-paper DeepLog extension inline, and add cluster
+# labelling ablations only where BGL's event labels make them meaningful.
+model_sets = [
+  "baselines_with_nb",
+  "deepcase_majority_vote",
+  "deepcase_threshold_fraction",
+  "deepcase_abstain_mixed",
+]
 models = [
   "deepcase",
   "deeplog_default",
@@ -56,8 +84,15 @@ models = ["deeplog_default"]
 dataset = "thunderbird/entity_chronological"
 # DeepCASE needs entity-local sequences, so the Thunderbird extension is split
 # out into its own entity-grouped experiment rather than sharing the
-# chronological reproduction contract.
-model_sets = ["baselines_with_nb"]
+# chronological reproduction contract. The cluster-labelling ablations are
+# kept here as a benchmark extension because Thunderbird labels are available
+# at the alert level.
+model_sets = [
+  "baselines_with_nb",
+  "deepcase_majority_vote",
+  "deepcase_threshold_fraction",
+  "deepcase_abstain_mixed",
+]
 models = [
   "deepcase",
   "deeplog_default",

@@ -160,7 +160,12 @@ def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
     thunderbird_entity = registry.require("thunderbird_entity_chronological")
     assert thunderbird_entity.dataset == "thunderbird/entity_chronological"
     assert thunderbird_entity.models == ("deepcase", "deeplog_default")
-    assert thunderbird_entity.model_sets == ("baselines_with_nb",)
+    assert thunderbird_entity.model_sets == (
+        "baselines_with_nb",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
+    )
 
 
 def test_registry_select_combines_names_and_groups() -> None:
@@ -211,6 +216,8 @@ def test_experiment_set_uses_set_name_as_group(
     models_dir.mkdir(parents=True, exist_ok=True)
     _write_dataset_manifest(datasets_dir, "demo")
     _write_dataset_manifest(datasets_dir, "alt")
+    _write_dataset_manifest(datasets_dir, "paper_demo")
+    _write_dataset_manifest(datasets_dir, "paper_alt")
     (models_dir / "template_frequency_default.toml").write_text(
         'name = "template_frequency_default"\ndetector = "template_frequency"\n',
         encoding="utf-8",
@@ -236,10 +243,10 @@ def test_experiment_set_uses_set_name_as_group(
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
     selected = registry.select(groups=("paper_group",))
 
-    assert [experiment.name for experiment in selected] == [
+    assert {experiment.name for experiment in selected} == {
         "paper_demo",
         "paper_alt",
-    ]
+    }
     assert all("paper_group" in experiment.groups for experiment in selected)
 
 

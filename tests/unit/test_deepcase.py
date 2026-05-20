@@ -21,6 +21,7 @@ from experiments.models.deepcase import DeepCaseModelConfig
 from experiments.models.deepcase import shared as deepcase_shared
 from experiments.models.deepcase.detector import DeepCaseDetector, DeepCaseRunMetrics
 from experiments.models.deepcase.shared import (
+    DeepCaseClusterScoreStrategy,
     DeepCaseEventIdMap,
     DeepCaseSampleBatch,
     DeepCaseSequenceDecision,
@@ -31,6 +32,8 @@ from experiments.models.deepcase.shared import (
     build_sample_batch,
     build_training_batch,
     build_workload_reduction_metrics,
+    cluster_score_for_labels,
+    cluster_scores_for_labels,
     decision_label_for_score,
     finding_reason_for_score,
 )
@@ -373,6 +376,95 @@ def test_deepcase_model_config_validates_hyperparameters() -> None:
         _deep_case_config(name="bad", device="tpu")
 
 
+@pytest.mark.parametrize(
+    ("strategy", "labels", "threshold", "expected"),
+    [
+        (
+            DeepCaseClusterScoreStrategy.ANY_ANOMALOUS,
+            [0, 1, 0],
+            0.75,
+            1.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.ANY_ANOMALOUS,
+            [0, 0, 0],
+            0.75,
+            0.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.MAJORITY_VOTE,
+            [0, 1, 1],
+            0.75,
+            1.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.MAJORITY_VOTE,
+            [0, 0, 1],
+            0.75,
+            0.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.THRESHOLD_FRACTION,
+            [0, 1, 1, 1],
+            0.75,
+            1.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.THRESHOLD_FRACTION,
+            [0, 0, 1, 1],
+            0.75,
+            0.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.ABSTAIN_MIXED,
+            [0, 1],
+            0.75,
+            -1.0,
+        ),
+        (
+            DeepCaseClusterScoreStrategy.ABSTAIN_MIXED,
+            [1, 1],
+            0.75,
+            1.0,
+        ),
+    ],
+)
+def test_deepcase_cluster_score_for_labels_supports_ablation_policies(
+    strategy: DeepCaseClusterScoreStrategy,
+    labels: list[int],
+    threshold: float,
+    expected: float,
+) -> None:
+    """DeepCase cluster-labelling policies should match their declared semantics.
+
+    Args:
+        strategy (DeepCaseClusterScoreStrategy): Cluster policy under test.
+        labels (list[int]): Cluster member labels used as the synthetic sample.
+        threshold (float): Anomaly-fraction threshold for thresholded runs.
+        expected (float): Expected cluster score for the labelled sample set.
+    """
+    assert (
+        cluster_score_for_labels(
+            labels,
+            strategy=strategy,
+            anomaly_fraction_threshold=threshold,
+        )
+        == expected
+    )
+
+
+def test_deepcase_cluster_scores_for_labels_map_clusters_independently() -> None:
+    """DeepCase cluster scores should be assigned cluster-by-cluster."""
+    scores = cluster_scores_for_labels(
+        clusters=[-1, 0, 0, 1, 1, 1],
+        labels=[0, 0, 1, 0, 0, 0],
+        strategy=DeepCaseClusterScoreStrategy.ABSTAIN_MIXED,
+        anomaly_fraction_threshold=0.75,
+    )
+
+    assert scores.tolist() == [-1.0, -1.0, -1.0, 0.0, 0.0, 0.0]
+
+
 @pytest.mark.allow_no_new_coverage
 def test_deepcase_model_config_accepts_mps_device() -> None:
     """DeepCase configs should allow MPS for Apple Silicon runs."""
@@ -388,6 +480,8 @@ def test_deepcase_model_config_defaults_next_event_policy() -> None:
     config = _deep_case_config(name="deepcase")
 
     assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
+    assert config.cluster_score_strategy is DeepCaseClusterScoreStrategy.ANY_ANOMALOUS
+    assert config.cluster_anomaly_fraction_threshold == pytest.approx(0.75)
 
 
 def test_deepcase_model_config_accepts_train_only_next_event_policy() -> None:
@@ -1385,18 +1479,25 @@ def test_deepcase_manifest_reports_cluster_score_diagnostics(
         del kwargs
         return self
 
-    def _fit_interpreter(self: Interpreter, **kwargs: object) -> Interpreter:
+    def _cluster_interpreter(self: Interpreter, **kwargs: object) -> np.ndarray:
         del kwargs
         self.clusters = np.array([0, -1, 1, 2])
-        self.labels = {
-            0: {0: 0.0},
-            1: {0: 1.0},
-            2: {0: 0.0},
-        }
+        self.events = np.array([0, 1, 2, 3])
+        self.vectors = torch.zeros((4, 1), dtype=torch.float32)
+        return self.clusters
+
+    def _score_interpreter(
+        self: Interpreter,
+        *,
+        scores: np.ndarray,
+        verbose: bool,
+    ) -> Interpreter:
+        del scores, verbose
         return self
 
     monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
-    monkeypatch.setattr(Interpreter, "fit", _fit_interpreter)
+    monkeypatch.setattr(Interpreter, "cluster", _cluster_interpreter)
+    monkeypatch.setattr(Interpreter, "score", _score_interpreter)
 
     with Progress(disable=True) as progress:
         detector.fit(train_sequences, progress=progress)
@@ -1417,6 +1518,91 @@ def test_deepcase_manifest_reports_cluster_score_diagnostics(
     assert manifest.known_benign_cluster_count == expected_benign_cluster_count
     assert manifest.known_malicious_cluster_count == expected_malicious_cluster_count
     assert manifest.unknown_cluster_score_count == expected_unknown_cluster_score_count
+
+
+def test_deepcase_fit_uses_cluster_label_abstention_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase fitting should apply the configured cluster-labelling policy.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream fit-stage
+            hooks so the test can isolate the cluster-labelling policy.
+    """
+    train_sequences = (
+        _sequence(templates=["A"], label=0),
+        _sequence(templates=["B"], label=1),
+    )
+    detector = DeepCaseDetector(
+        config=_deep_case_config(
+            name="deepcase",
+            epochs=1,
+            iterations=100,
+            cluster_score_strategy="abstain_mixed",
+        ),
+    )
+    batch = DeepCaseSampleBatch(
+        contexts=torch.zeros((4, 1), dtype=torch.long),
+        context_original_event_ids=[[0], [0], [1], [1]],
+        events=torch.tensor([0, 0, 1, 1], dtype=torch.long),
+        scores=np.array([0, 1, 1, 1], dtype=float),
+        event_indexes=[0, 1, 2, 3],
+        templates=["A", "A", "B", "B"],
+        original_event_ids=[0, 0, 1, 1],
+        parent_sequence_fallback_count=0,
+    )
+    event_id_map = DeepCaseEventIdMap.from_sequences(train_sequences)
+    expected_cluster_scores = [-1.0, -1.0, 1.0, 1.0]
+
+    def _fake_build_training_batch(
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[DeepCaseEventIdMap, DeepCaseSampleBatch]:
+        del args, kwargs
+        return event_id_map, batch
+
+    def _fake_context_fit(self: ContextBuilder, **kwargs: object) -> ContextBuilder:
+        del kwargs
+        return self
+
+    def _fake_cluster(self: Interpreter, **kwargs: object) -> np.ndarray:
+        del kwargs
+        self.clusters = np.array([0, 0, 1, 1])
+        self.events = batch.events.cpu().numpy()
+        self.vectors = torch.zeros((4, 1), dtype=torch.float32)
+        return self.clusters
+
+    captured_scores: list[float] = []
+
+    def _fake_score(
+        self: Interpreter,
+        *,
+        scores: np.ndarray,
+        verbose: bool,
+    ) -> Interpreter:
+        del verbose
+        captured_scores.extend(scores.tolist())
+        return self
+
+    monkeypatch.setattr(
+        "experiments.models.deepcase.detector.build_training_batch",
+        _fake_build_training_batch,
+    )
+    monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
+    monkeypatch.setattr(Interpreter, "cluster", _fake_cluster)
+    monkeypatch.setattr(Interpreter, "score", _fake_score)
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+
+    assert captured_scores == expected_cluster_scores
+    assert detector.known_benign_cluster_count == 0
+    expected_known_malicious_cluster_count = len(train_sequences)
+    expected_unknown_cluster_score_count = len(train_sequences)
+    assert detector.known_malicious_cluster_count == (
+        expected_known_malicious_cluster_count
+    )
+    assert detector.unknown_cluster_score_count == expected_unknown_cluster_score_count
 
 
 def test_deepcase_predict_all_batches_multiple_sequences(

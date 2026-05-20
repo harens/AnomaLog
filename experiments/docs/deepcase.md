@@ -150,7 +150,19 @@ semi-automatic definitions. It also avoids the old behaviour where the
 reported coverage could accidentally mirror the sequence-level anomaly
 wrapper.
 
-The anomaly detector itself remains unchanged.
+Cluster labelling is now exposed as an ablation policy on top of the stable
+DeepCASE clustering pipeline. `max` remains the conservative any-anomalous
+baseline, while `majority_vote`, `threshold_fraction`, and `abstain_mixed`
+are sensitivity checks for how mixed clusters should be treated.
+
+For HDFS, read those runs as label-smearing sensitivity analyses rather than
+paper reproduction improvements. For BGL, and for Thunderbird as a benchmark
+extension, the same cluster policies are a meaningful event-label ablation
+because event-level labels are available.
+
+`mean anomaly rate` is not used as a final decision policy here, because by
+itself it does not create a distinct binary or abstain decision rule under the
+shared AnomaLog score thresholding contract.
 
 The model should be run with entity grouping:
 

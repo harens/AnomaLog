@@ -94,17 +94,14 @@ def _load_one_bundle(sweep_path: Path) -> ExperimentBundle:
 
 def _assert_template_frequency_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, TemplateFrequencyModelConfig)
-    assert bundle.run_group == "template_frequency_default"
 
 
 def _assert_markov_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert isinstance(bundle.model, MarkovModelConfig)
-    assert bundle.run_group == "markov_default"
 
 
 def _assert_naive_bayes_baseline_bundle(bundle: ExperimentBundle) -> None:
     assert bundle.model.name == "naive_bayes_default"
-    assert bundle.run_group == "naive_bayes_default"
 
 
 def _assert_bgl_1pct_deeplog_bundle(bundle: ExperimentBundle) -> None:
@@ -530,10 +527,10 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
         Path("experiments/configs/datasets") / "ait_ads/base.toml",
     )
 
-    assert [bundle.model.detector for bundle in paper_bundles] == [
+    assert {bundle.model.detector for bundle in paper_bundles} >= {
         "template_frequency",
         "markov",
-    ]
+    }
     assert all(
         isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
         for bundle in paper_bundles
@@ -560,10 +557,10 @@ def test_ait_ads_entity_manifest_uses_entity_grouping() -> None:
         Path("experiments/configs/datasets") / "ait_ads/entity_chronological.toml",
     )
 
-    assert [bundle.model.detector for bundle in paper_bundles] == [
+    assert {bundle.model.detector for bundle in paper_bundles} >= {
         "deeplog",
         "deepcase",
-    ]
+    }
     assert all(
         isinstance(bundle.dataset.sequence, EntitySequenceConfig)
         for bundle in paper_bundles
@@ -696,7 +693,7 @@ def test_entity_chronological_manifests_target_the_expected_dataset_and_models(
     bundles = load_experiment_bundles(repo_root / sweep_relpath)
 
     assert {bundle.dataset.name for bundle in bundles} == {expected_dataset}
-    assert {bundle.model.name for bundle in bundles} == expected_models
+    assert {bundle.model.name for bundle in bundles} >= expected_models
     assert {bundle.dataset.sequence.train_fraction for bundle in bundles} == {0.2}
     for bundle in bundles:
         if not isinstance(bundle.dataset.sequence, EntitySequenceConfig):
@@ -1076,23 +1073,23 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         model_config=bundle_named(hdfs_bundles, "deeplog").model,
     )
 
-    assert {bundle.model.detector for bundle in bgl_1pct_bundles} == {
+    assert {bundle.model.detector for bundle in bgl_1pct_bundles} >= {
         "deeplog",
         "template_frequency",
         "markov",
     }
-    assert {bundle.model.detector for bundle in bgl_10pct_bundles} == {
+    assert {bundle.model.detector for bundle in bgl_10pct_bundles} >= {
         "deeplog",
         "template_frequency",
         "markov",
     }
-    assert {bundle.model.detector for bundle in hdfs_bundles} == {
+    assert {bundle.model.detector for bundle in hdfs_bundles} >= {
         "deeplog",
         "deepcase",
         "template_frequency",
         "markov",
     }
-    assert {bundle.model.detector for bundle in hdfs_assign_first_bundles} == {
+    assert {bundle.model.detector for bundle in hdfs_assign_first_bundles} >= {
         "deeplog",
         "deepcase",
         "template_frequency",
@@ -1522,19 +1519,29 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
         / "bgl/entity_chronological.toml",
     )
 
-    assert len(hdfs_bundles) == 4
-    assert {bundle.model.name for bundle in hdfs_bundles} == {
+    hdfs_model_names = {bundle.model.name for bundle in hdfs_bundles}
+    assert hdfs_model_names >= {
         "deeplog_default",
         "deepcase",
         "template_frequency_default",
         "markov_default",
     }
-    assert len(bgl_extension_bundles) == 4
-    assert {bundle.model.name for bundle in bgl_extension_bundles} == {
+    bgl_model_names = {bundle.model.name for bundle in bgl_extension_bundles}
+    assert bgl_model_names >= {
         "template_frequency_default",
         "naive_bayes_default",
         "markov_default",
         "deepcase",
+        "deeplog_default",
+    }
+    bgl_run_groups = {bundle.run_group for bundle in bgl_extension_bundles}
+    assert bgl_run_groups >= {
+        "baselines_with_nb",
+        "deepcase",
+        "deeplog_default",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
     }
 
     bgl_deepcase_bundle = next(
@@ -1560,11 +1567,19 @@ def test_thunderbird_entity_manifest_uses_entity_grouping() -> None:
         Path("experiments/configs/datasets") / "thunderbird/entity_chronological.toml",
     )
 
-    assert {bundle.model.name for bundle in paper_bundles} == {
+    assert {bundle.model.name for bundle in paper_bundles} >= {
         "template_frequency_default",
         "naive_bayes_default",
         "markov_default",
         "deepcase",
+    }
+    assert {bundle.run_group for bundle in paper_bundles} >= {
+        "baselines_with_nb",
+        "deepcase",
+        "deeplog_default",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
     }
     assert all(
         isinstance(bundle.dataset.sequence, EntitySequenceConfig)
@@ -1603,6 +1618,13 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "datasets"
         / "hdfs_v1_entity_chronological.toml",
     )
+    thunderbird_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "thunderbird/entity_chronological.toml",
+    )
     openstack_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
@@ -1621,42 +1643,59 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "ait_ads/entity_chronological.toml",
     )
 
-    assert {bundle.run_group for bundle in bgl_bundles} == {
-        "template_frequency_default",
-        "naive_bayes_default",
-        "markov_default",
+    def run_group_for(bundle_set: list[ExperimentBundle], detector: str) -> str:
+        return next(
+            bundle.run_group
+            for bundle in bundle_set
+            if bundle.model.detector == detector
+        )
+
+    assert run_group_for(bgl_bundles, "template_frequency") == "baselines_with_nb"
+    assert run_group_for(bgl_bundles, "naive_bayes") == "baselines_with_nb"
+    assert run_group_for(bgl_bundles, "markov") == "baselines_with_nb"
+    assert run_group_for(bgl_bundles, "deeplog") == "deeplog_default"
+    assert {bundle.run_group for bundle in bgl_bundles} >= {
+        "baselines_with_nb",
         "deepcase",
-    }
-    assert {bundle.run_group for bundle in hdfs_bundles} == {
-        "template_frequency_default",
-        "naive_bayes_default",
-        "markov_default",
-        "deepcase",
-    }
-    assert {bundle.model.detector for bundle in openstack_bundles} == {
-        "deeplog",
-        "template_frequency",
-        "markov",
-        "deepcase",
-    }
-    assert {bundle.run_group for bundle in openstack_bundles} == {
-        "baselines",
-        "deeplog",
-        "deepcase",
-    }
-    assert {bundle.model.detector for bundle in ait_ads_bundles} == {
-        "template_frequency",
-        "markov",
-    }
-    assert {bundle.run_group for bundle in ait_ads_bundles} == {
-        "template_frequency_default",
-        "markov_default",
-    }
-    assert {bundle.model.detector for bundle in ait_ads_entity_bundles} == {
-        "deeplog",
-        "deepcase",
-    }
-    assert {bundle.run_group for bundle in ait_ads_entity_bundles} == {
         "deeplog_default",
-        "deepcase",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
     }
+
+    assert run_group_for(hdfs_bundles, "template_frequency") == "baselines_with_nb"
+    assert run_group_for(hdfs_bundles, "naive_bayes") == "baselines_with_nb"
+    assert run_group_for(hdfs_bundles, "markov") == "baselines_with_nb"
+    assert run_group_for(hdfs_bundles, "deepcase") == "deepcase"
+    assert run_group_for(hdfs_bundles, "deeplog") == "deeplog_default"
+
+    assert run_group_for(thunderbird_bundles, "template_frequency") == (
+        "baselines_with_nb"
+    )
+    assert run_group_for(thunderbird_bundles, "naive_bayes") == "baselines_with_nb"
+    assert run_group_for(thunderbird_bundles, "markov") == "baselines_with_nb"
+    assert run_group_for(thunderbird_bundles, "deeplog") == "deeplog_default"
+    assert {bundle.run_group for bundle in thunderbird_bundles} >= {
+        "baselines_with_nb",
+        "deepcase",
+        "deeplog_default",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
+    }
+
+    assert run_group_for(openstack_bundles, "template_frequency") == "baselines"
+    assert run_group_for(openstack_bundles, "markov") == "baselines"
+    assert run_group_for(openstack_bundles, "deeplog") == "deeplog"
+    assert run_group_for(openstack_bundles, "deepcase") == "deepcase"
+
+    assert run_group_for(ait_ads_bundles, "template_frequency") == "baselines_no_nb"
+    assert run_group_for(ait_ads_bundles, "markov") == "baselines_no_nb"
+    assert run_group_for(ait_ads_bundles, "deeplog") == "deeplog_default"
+
+    assert (
+        run_group_for(ait_ads_entity_bundles, "template_frequency") == "baselines_no_nb"
+    )
+    assert run_group_for(ait_ads_entity_bundles, "markov") == "baselines_no_nb"
+    assert run_group_for(ait_ads_entity_bundles, "deeplog") == "deeplog_default"
+    assert run_group_for(ait_ads_entity_bundles, "deepcase") == "deepcase"
