@@ -314,6 +314,9 @@ def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outpu
         raise AssertionError(msg)
 
     monkeypatch.chdir(tmp_path)
+    stale_output_dir = tmp_path / ".cache" / "spell" / "demo_spell_output"
+    stale_output_dir.mkdir(parents=True, exist_ok=True)
+    (stale_output_dir / "stale.txt").write_text("stale", encoding="utf-8")
     parser = SpellTemplateParser(dataset_name="demo")
     with monkeypatch.context() as m:
         m.setattr(
@@ -334,6 +337,7 @@ def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outpu
     output_dir = tmp_path / ".cache" / "spell" / "demo_spell_output"
     assert not raw_path.exists()
     assert output_dir.exists()
+    assert not (output_dir / "stale.txt").exists()
     assert sorted(path.name for path in output_dir.iterdir()) == [
         "demo.log_structured.csv",
         "demo.log_templates.csv",

@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 import re
+import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -380,6 +381,8 @@ class SpellTemplateParser(TemplateParser):
         except MissingContextError:
             logger = get_logger(__name__)
 
+        if self._spell_output_dir.exists():
+            shutil.rmtree(self._spell_output_dir)
         self._spell_output_dir.mkdir(parents=True, exist_ok=True)
         started_at = perf_counter()
         with TemporaryDirectory(dir=str(self._spell_cache_dir)) as input_dir:
