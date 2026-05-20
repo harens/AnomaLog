@@ -43,6 +43,10 @@ def _write_suite_registry_tree(tmp_path: Path) -> Path:
         'name = "template_frequency_default"\ndetector = "template_frequency"\n',
         encoding="utf-8",
     )
+    (models_dir / "naive_bayes_default.toml").write_text(
+        'name = "naive_bayes_default"\ndetector = "naive_bayes"\n',
+        encoding="utf-8",
+    )
     (models_dir / "markov_default.toml").write_text(
         'name = "markov_default"\ndetector = "markov"\n',
         encoding="utf-8",
@@ -50,15 +54,14 @@ def _write_suite_registry_tree(tmp_path: Path) -> Path:
     registry_path = experiments_root / "configs" / "registry.toml"
     registry_path.write_text(
         (
-            "[model_sets.baselines]\n"
-            'models = ["template_frequency_default", "markov_default"]\n'
-            "\n"
-            "[experiment_presets.entity_with_deepcase]\n"
-            'models = ["baselines"]\n'
+            "[model_sets.baselines_with_nb]\n"
+            'models = ["template_frequency_default", '
+            '"naive_bayes_default", "markov_default"]\n'
             "\n"
             "[experiments.demo]\n"
             'dataset = "demo"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines_with_nb"]\n'
+            'models = ["deepcase"]\n'
         ),
         encoding="utf-8",
     )
@@ -114,15 +117,15 @@ def _write_missing_runs_suite_registry_tree(tmp_path: Path) -> Path:
             "\n"
             "[experiments.complete]\n"
             'dataset = "demo"\n'
-            'models = ["complete"]\n'
+            'model_sets = ["complete"]\n'
             "\n"
             "[experiments.missing_dir]\n"
             'dataset = "demo"\n'
-            'models = ["missing_dir"]\n'
+            'model_sets = ["missing_dir"]\n'
             "\n"
             "[experiments.missing_metrics]\n"
             'dataset = "demo"\n'
-            'models = ["missing_metrics"]\n'
+            'model_sets = ["missing_metrics"]\n'
         ),
         encoding="utf-8",
     )
@@ -146,14 +149,18 @@ def test_run_suite_list_only_filters_by_group(
         SuiteRunRequest(
             registry_path=registry_path,
             repo_root=tmp_path,
-            groups=("baselines",),
+            groups=("baselines_with_nb",),
             list_only=True,
         ),
     )
 
     output = capsys.readouterr().out.strip().splitlines()
     assert output == [
-        "demo\tdataset=demo\tpreset=entity_with_deepcase\tmodels=baselines\tgroups=entity_with_deepcase,baselines",
+        (
+            "demo\tdataset=demo\tmodel_sets=baselines_with_nb\t"
+            "models=template_frequency_default,naive_bayes_default,"
+            "markov_default,deepcase\tgroups=demo,baselines_with_nb"
+        ),
     ]
 
 

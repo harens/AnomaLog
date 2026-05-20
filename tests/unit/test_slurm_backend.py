@@ -36,16 +36,13 @@ def _write_slurm_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Pat
             "[model_sets.baselines]\n"
             'models = ["template_frequency_default"]\n'
             "\n"
-            "[experiment_presets.entity_with_deepcase]\n"
-            'models = ["baselines"]\n'
-            "\n"
             "[experiments.demo]\n"
             'dataset = "demo"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines"]\n'
             "\n"
             "[experiments.demo_two]\n"
             'dataset = "demo"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines"]\n'
         ),
         encoding="utf-8",
     )
@@ -76,16 +73,16 @@ def _make_submission(
         RegisteredExperiment(
             name="demo",
             dataset="demo",
+            models=(),
             model_sets=("baselines",),
-            groups=("baselines",),
-            preset="entity_with_deepcase",
+            groups=("demo", "baselines"),
         ),
         RegisteredExperiment(
             name="demo_two",
             dataset="demo",
+            models=(),
             model_sets=("baselines",),
-            groups=("baselines",),
-            preset="entity_with_deepcase",
+            groups=("demo_two", "baselines"),
         ),
     )
     return slurm._SlurmSubmission(  # noqa: SLF001
@@ -367,16 +364,16 @@ def test_submit_experiments_dry_run_prints_command_and_skips_subprocess(
                 RegisteredExperiment(
                     name="demo",
                     dataset="demo",
+                    models=(),
                     model_sets=("baselines",),
-                    groups=("baselines",),
-                    preset="entity_with_deepcase",
+                    groups=("demo", "baselines"),
                 ),
                 RegisteredExperiment(
                     name="demo_two",
                     dataset="demo",
+                    models=(),
                     model_sets=("baselines",),
-                    groups=("baselines",),
-                    preset="entity_with_deepcase",
+                    groups=("demo_two", "baselines"),
                 ),
             ),
         )

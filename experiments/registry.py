@@ -1,9 +1,9 @@
 """Named experiment registry loading and expansion.
 
 The registry is the central catalogue for experiment composition. It keeps the
-user-facing TOML compact by letting experiments name concrete model configs
-directly, while the runtime still expands those logical entries into concrete
-bundles.
+user-facing TOML compact by letting experiments combine shared model groups
+with inline model references, while the runtime still expands those logical
+entries into concrete bundles.
 """
 
 from __future__ import annotations
@@ -61,44 +61,27 @@ class ModelSetDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class ExperimentPresetDefinition:
-    """Reusable experiment profile composed from model sets.
-
-    Attributes:
-        name (str): Registry name of the preset.
-        model_sets (tuple[str, ...]): Named model sets expanded by the preset.
-        overrides (dict[str, dict[str, object]]): Preset-specific model
-            overrides keyed by model set name.
-        description (str | None): Optional human-readable description.
-    """
-
-    name: str
-    model_sets: tuple[str, ...]
-    overrides: dict[str, dict[str, object]] = field(default_factory=dict)
-    description: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class RegisteredExperiment:
     """Logical experiment entry resolved from the registry.
 
     Attributes:
         name (str): Registry experiment name.
         dataset (str): Dataset manifest name resolved by the registry.
-        model_sets (tuple[str, ...]): Named model sets used by the
+        models (tuple[str, ...]): Inline model references defined directly on
+            the experiment.
+        model_sets (tuple[str, ...]): Shared model sets used by the
             experiment.
         groups (tuple[str, ...]): Derived reporting and scheduling groups.
-        preset (str | None): Preset name when the experiment came from one.
         overrides (dict[str, dict[str, object]]): Experiment-specific model
-            overrides keyed by model-set name.
+            overrides keyed by model or model-set name.
         description (str | None): Optional human-readable description.
     """
 
     name: str
     dataset: str
+    models: tuple[str, ...]
     model_sets: tuple[str, ...]
     groups: tuple[str, ...]
-    preset: str | None = None
     overrides: dict[str, dict[str, object]] = field(default_factory=dict)
     description: str | None = None
 
@@ -171,20 +154,19 @@ class _ExperimentSetBuildRequest:
 
     Attributes:
         datasets (tuple[str, ...]): Dataset names included in the set.
-        dataset_prefix (str | None): Optional prefix prepended to dataset
-            names when building concrete experiments.
-        model_sets (tuple[str, ...]): Model sets associated with the set.
+        model_sets (tuple[str, ...]): Shared model sets associated with the
+            set.
+        models (tuple[str, ...]): Inline model references associated with the
+            set.
         groups (tuple[str, ...]): Derived groups assigned to the experiments.
-        preset_name (str | None): Optional preset name attached to the set.
         overrides (dict[str, dict[str, object]]): Override map for the set.
         description (str | None): Optional human-readable description.
     """
 
     datasets: tuple[str, ...]
-    dataset_prefix: str | None
     model_sets: tuple[str, ...]
+    models: tuple[str, ...]
     groups: tuple[str, ...]
-    preset_name: str | None
     overrides: dict[str, dict[str, object]]
     description: str | None
 
@@ -221,13 +203,11 @@ class _RegistryFile(msgspec.Struct, frozen=True):
 
     Attributes:
         model_sets (dict[str, object]): Raw model-set tables.
-        experiment_presets (dict[str, object]): Raw preset tables.
         experiments (dict[str, object]): Raw named experiment tables.
         experiment_sets (dict[str, object]): Raw experiment-set tables.
     """
 
     model_sets: dict[str, object] = msgspec.field(default_factory=dict)
-    experiment_presets: dict[str, object] = msgspec.field(default_factory=dict)
     experiments: dict[str, object] = msgspec.field(default_factory=dict)
     experiment_sets: dict[str, object] = msgspec.field(default_factory=dict)
 
@@ -622,46 +602,15 @@ def _decode_model_set(name: str, obj: object) -> ModelSetDefinition:
     )
 
 
-def _decode_experiment_preset(name: str, obj: object) -> ExperimentPresetDefinition:
-    raw = _normalize_toml_table(obj, expected_type=f"experiment preset {name}")
-    model_sets = raw.get("models")
-    if not isinstance(model_sets, list) or not model_sets:
-        msg = f"experiment preset {name!r} must define a non-empty `models` array."
-        raise TypeError(msg)
-    preset_model_sets: list[str] = []
-    for model_set in model_sets:
-        if not isinstance(model_set, str) or not model_set.strip():
-            msg = f"experiment preset {name!r} contains an invalid model set."
-            raise TypeError(msg)
-        preset_model_sets.append(model_set)
-    overrides = _decode_overrides_map(
-        raw.get("overrides", {}),
-        context=f"experiment preset {name!r}",
-    )
-    description = _optional_str(raw.get("description"))
-    _reject_unknown_keys(
-        raw,
-        allowed={"models", "overrides", "description"},
-        context=f"experiment preset {name!r}",
-    )
-    return ExperimentPresetDefinition(
-        name=name,
-        model_sets=tuple(preset_model_sets),
-        overrides=overrides,
-        description=description,
-    )
-
-
 def _decode_experiment_definition(
     name: str,
     obj: object,
     *,
-    presets: dict[str, ExperimentPresetDefinition],
     experiment_kind: str,
-) -> list[RegisteredExperiment]:
+) -> RegisteredExperiment:
     raw = _normalize_toml_table(obj, expected_type=experiment_kind)
     dataset = raw.get("dataset")
-    preset_name, models = _require_preset_or_models(
+    inline_models, model_sets = _decode_model_ref_lists(
         raw,
         context=f"{experiment_kind} {name!r}",
     )
@@ -675,51 +624,31 @@ def _decode_experiment_definition(
         msg = f"{experiment_kind} {name!r} must define a non-empty `dataset`."
         raise TypeError(msg)
 
-    if preset_name is not None:
-        if not isinstance(preset_name, str) or not preset_name.strip():
-            msg = f"{experiment_kind} {name!r} has an invalid `preset`."
-            raise TypeError(msg)
-        preset = presets.get(preset_name)
-        if preset is None:
-            msg = f"Unknown experiment preset {preset_name!r} referenced by {name!r}."
-            raise ConfigError(msg)
-        model_sets = preset.model_sets
-        resolved_groups = _derive_groups(preset_name=preset_name, model_sets=model_sets)
-    else:
-        model_sets = _require_string_list(
-            models,
-            context=f"{experiment_kind} {name!r}",
-            field_name="models",
-        )
-        resolved_groups = _derive_groups(preset_name=name, model_sets=model_sets)
+    groups = _derive_groups(entry_name=name, model_sets=model_sets)
 
     _reject_unknown_keys(
         raw,
-        allowed={"dataset", "preset", "models", "overrides", "description"},
+        allowed={"dataset", "models", "model_sets", "overrides", "description"},
         context=f"{experiment_kind} {name!r}",
     )
 
-    return [
-        RegisteredExperiment(
-            name=name,
-            dataset=dataset,
-            model_sets=model_sets,
-            groups=resolved_groups,
-            preset=None if preset_name is None else str(preset_name),
-            overrides=overrides,
-            description=description,
-        ),
-    ]
+    return RegisteredExperiment(
+        name=name,
+        dataset=dataset,
+        models=inline_models,
+        model_sets=model_sets,
+        groups=groups,
+        overrides=overrides,
+        description=description,
+    )
 
 
 def _decode_experiment_set_definition(
     name: str,
     obj: object,
-    *,
-    presets: dict[str, ExperimentPresetDefinition],
 ) -> list[RegisteredExperiment]:
     raw = _normalize_toml_table(obj, expected_type=f"experiment set {name}")
-    preset_name, models = _require_preset_or_models(
+    inline_models, model_sets = _decode_model_ref_lists(
         raw,
         context=f"experiment set {name!r}",
     )
@@ -728,54 +657,25 @@ def _decode_experiment_set_definition(
         context=f"experiment set {name!r}",
         field_name="datasets",
     )
-    dataset_prefix = raw.get("dataset_prefix")
     overrides = _decode_overrides_map(
         raw.get("overrides", {}),
         context=f"experiment set {name!r}",
     )
     description = _optional_str(raw.get("description"))
-    if dataset_prefix is not None and not isinstance(dataset_prefix, str):
-        msg = f"experiment set {name!r} has an invalid `dataset_prefix`."
-        raise TypeError(msg)
-
-    if preset_name is not None:
-        if not isinstance(preset_name, str) or not preset_name.strip():
-            msg = f"experiment set {name!r} has an invalid `preset`."
-            raise TypeError(msg)
-        preset = presets.get(preset_name)
-        if preset is None:
-            msg = f"Unknown experiment preset {preset_name!r} referenced by {name!r}."
-            raise ConfigError(msg)
-        model_sets = preset.model_sets
-        resolved_groups = _derive_groups(preset_name=preset_name, model_sets=model_sets)
-    else:
-        model_sets = _require_string_list(
-            models,
-            context=f"experiment set {name!r}",
-            field_name="models",
-        )
-        resolved_groups = _derive_groups(preset_name=name, model_sets=model_sets)
+    groups = _derive_groups(entry_name=name, model_sets=model_sets)
 
     _reject_unknown_keys(
         raw,
-        allowed={
-            "preset",
-            "models",
-            "datasets",
-            "dataset_prefix",
-            "overrides",
-            "description",
-        },
+        allowed={"models", "model_sets", "datasets", "overrides", "description"},
         context=f"experiment set {name!r}",
     )
 
     return _build_experiment_set_entries(
         _ExperimentSetBuildRequest(
             datasets=datasets,
-            dataset_prefix=dataset_prefix,
             model_sets=model_sets,
-            groups=resolved_groups,
-            preset_name=None if preset_name is None else str(preset_name),
+            models=inline_models,
+            groups=groups,
             overrides=overrides,
             description=description,
         ),
@@ -799,20 +699,35 @@ def _decode_overrides_map(
     return overrides
 
 
-def _require_preset_or_models(
+def _decode_model_ref_lists(
     raw: dict[str, object],
     *,
     context: str,
-) -> tuple[str | None, object | None]:
-    preset_name = raw.get("preset")
-    models = raw.get("models")
-    if preset_name is not None and models is not None:
-        msg = f"{context} may define either `preset` or `models`, not both."
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    inline_models = raw.get("models")
+    model_sets = raw.get("model_sets")
+    decoded_inline_models = (
+        _require_string_list(
+            inline_models,
+            context=context,
+            field_name="models",
+        )
+        if inline_models is not None
+        else ()
+    )
+    decoded_model_sets = (
+        _require_string_list(
+            model_sets,
+            context=context,
+            field_name="model_sets",
+        )
+        if model_sets is not None
+        else ()
+    )
+    if not decoded_inline_models and not decoded_model_sets:
+        msg = f"{context} must define `models` or `model_sets`."
         raise TypeError(msg)
-    if preset_name is None and models is None:
-        msg = f"{context} must define `preset` or `models`."
-        raise TypeError(msg)
-    return (None if preset_name is None else str(preset_name), models)
+    return decoded_inline_models, decoded_model_sets
 
 
 def _require_string_list(
@@ -833,34 +748,16 @@ def _require_string_list(
     return tuple(values)
 
 
-def _resolve_dataset_name(
-    *,
-    dataset_prefix: str | None,
-    dataset: str,
-) -> str:
-    if dataset_prefix and "/" not in dataset:
-        return f"{dataset_prefix}/{dataset}"
-    return dataset
-
-
 def _build_experiment_set_entries(
     request: _ExperimentSetBuildRequest,
 ) -> list[RegisteredExperiment]:
     return [
         RegisteredExperiment(
-            name=_slugify_label(
-                _resolve_dataset_name(
-                    dataset_prefix=request.dataset_prefix,
-                    dataset=dataset,
-                ),
-            ),
-            dataset=_resolve_dataset_name(
-                dataset_prefix=request.dataset_prefix,
-                dataset=dataset,
-            ),
+            name=_slugify_label(dataset),
+            dataset=dataset,
+            models=request.models,
             model_sets=request.model_sets,
             groups=request.groups,
-            preset=request.preset_name,
             overrides=request.overrides,
             description=request.description,
         )
@@ -882,12 +779,12 @@ def _reject_unknown_keys(
 
 def _derive_groups(
     *,
-    preset_name: str | None,
+    entry_name: str | None,
     model_sets: tuple[str, ...],
 ) -> tuple[str, ...]:
     groups: list[str] = []
-    if preset_name is not None:
-        groups.append(preset_name)
+    if entry_name is not None:
+        groups.append(entry_name)
     groups.extend(model_sets)
     deduped: list[str] = []
     for group in groups:
@@ -903,29 +800,18 @@ def _slugify_label(value: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ExperimentRegistry:
-    """Validated registry of logical experiments and reusable presets.
+    """Validated registry of logical experiments and reusable model sets.
 
     Attributes:
         model_sets (tuple[ModelSetDefinition, ...]): Loaded model-set
             definitions.
-        experiment_presets (tuple[ExperimentPresetDefinition, ...]): Loaded
-            experiment presets.
         experiments (tuple[RegisteredExperiment, ...]): Loaded logical
             experiments.
-        inline_models (bool): Whether registry entries name concrete model
-            configs directly instead of referring to `model_sets`.
     """
 
     model_sets: tuple[ModelSetDefinition, ...]
-    experiment_presets: tuple[ExperimentPresetDefinition, ...]
     experiments: tuple[RegisteredExperiment, ...]
-    inline_models: bool = False
     _model_sets_by_name: dict[str, ModelSetDefinition] = field(
-        init=False,
-        repr=False,
-        default_factory=dict,
-    )
-    _presets_by_name: dict[str, ExperimentPresetDefinition] = field(
         init=False,
         repr=False,
         default_factory=dict,
@@ -942,11 +828,6 @@ class ExperimentRegistry:
             self,
             "_model_sets_by_name",
             {model_set.name: model_set for model_set in self.model_sets},
-        )
-        object.__setattr__(
-            self,
-            "_presets_by_name",
-            {preset.name: preset for preset in self.experiment_presets},
         )
         object.__setattr__(
             self,
@@ -1043,24 +924,6 @@ class ExperimentRegistry:
             msg = f"Unknown model set: {name!r}"
             raise ConfigError(msg) from exc
 
-    def preset(self, name: str) -> ExperimentPresetDefinition:
-        """Return one named experiment preset.
-
-        Args:
-            name (str): Experiment-preset name to resolve.
-
-        Returns:
-            ExperimentPresetDefinition: Loaded preset definition.
-
-        Raises:
-            ConfigError: If the preset name is not present in the registry.
-        """
-        try:
-            return self._presets_by_name[name]
-        except KeyError as exc:
-            msg = f"Unknown experiment preset: {name!r}"
-            raise ConfigError(msg) from exc
-
     def resolve_experiment(
         self,
         name: str,
@@ -1107,7 +970,7 @@ def load_experiment_registry(
 
     Returns:
         ExperimentRegistry: Validated registry with resolved model sets,
-            presets, and logical experiments.
+            and logical experiments.
 
     Raises:
         ConfigError: If the registry file is missing or malformed, or if any
@@ -1121,30 +984,14 @@ def load_experiment_registry(
             f"{resolved_registry_path}: registry config must decode from a TOML table."
         )
         raise ConfigError(msg)
-    inline_models = not raw_registry.model_sets
-    if inline_models:
-        if raw_registry.experiment_presets:
-            msg = (
-                f"{resolved_registry_path}: inline registry entries cannot use "
-                "experiment presets."
-            )
-            raise ConfigError(msg)
-        model_sets: tuple[ModelSetDefinition, ...] = ()
-        experiment_presets: tuple[ExperimentPresetDefinition, ...] = ()
-    else:
-        model_sets = _load_model_sets(raw_registry.model_sets)
-        experiment_presets = _load_experiment_presets(raw_registry.experiment_presets)
+    model_sets = _load_model_sets(raw_registry.model_sets)
     experiments = _load_registered_experiments(
         raw_registry.experiments,
         raw_registry.experiment_sets,
-        experiment_presets=experiment_presets,
-        inline_models=inline_models,
     )
     registry = ExperimentRegistry(
         model_sets=model_sets,
-        experiment_presets=experiment_presets,
         experiments=experiments,
-        inline_models=inline_models,
     )
     _validate_registry_references(
         registry,
@@ -1187,8 +1034,7 @@ def _load_model_sets(
     raw_model_sets: dict[str, object],
 ) -> tuple[ModelSetDefinition, ...]:
     if not raw_model_sets:
-        msg = "Registry must define at least one model set."
-        raise ConfigError(msg)
+        return ()
     model_sets: list[ModelSetDefinition] = []
     seen: set[str] = set()
     for name, obj in raw_model_sets.items():
@@ -1204,33 +1050,10 @@ def _load_model_sets(
     return tuple(model_sets)
 
 
-def _load_experiment_presets(
-    raw_presets: dict[str, object],
-) -> tuple[ExperimentPresetDefinition, ...]:
-    presets: list[ExperimentPresetDefinition] = []
-    seen: set[str] = set()
-    for name, obj in raw_presets.items():
-        if name in seen:
-            msg = f"Duplicate experiment preset definition: {name!r}"
-            raise ConfigError(msg)
-        seen.add(name)
-        try:
-            presets.append(_decode_experiment_preset(name, obj))
-        except (TypeError, ValueError) as exc:
-            msg = f"experiment preset {name!r}: {exc}"
-            raise ConfigError(msg) from exc
-    return tuple(presets)
-
-
 def _load_registered_experiments(
     raw_experiments: dict[str, object],
     raw_experiment_sets: dict[str, object],
-    *,
-    experiment_presets: tuple[ExperimentPresetDefinition, ...],
-    inline_models: bool,
 ) -> tuple[RegisteredExperiment, ...]:
-    del inline_models
-    presets = {preset.name: preset for preset in experiment_presets}
     experiments: list[RegisteredExperiment] = []
     seen: set[str] = set()
     for name, obj in raw_experiments.items():
@@ -1238,24 +1061,21 @@ def _load_registered_experiments(
             resolved = _decode_experiment_definition(
                 name,
                 obj,
-                presets=presets,
                 experiment_kind="experiment",
             )
         except (TypeError, ValueError) as exc:
             msg = f"experiment {name!r}: {exc}"
             raise ConfigError(msg) from exc
-        for experiment in resolved:
-            if experiment.name in seen:
-                msg = f"Duplicate experiment name: {experiment.name!r}"
-                raise ConfigError(msg)
-            seen.add(experiment.name)
-            experiments.append(experiment)
+        if resolved.name in seen:
+            msg = f"Duplicate experiment name: {resolved.name!r}"
+            raise ConfigError(msg)
+        seen.add(resolved.name)
+        experiments.append(resolved)
     for name, obj in raw_experiment_sets.items():
         try:
             resolved = _decode_experiment_set_definition(
                 name,
                 obj,
-                presets=presets,
             )
         except (TypeError, ValueError) as exc:
             msg = f"experiment set {name!r}: {exc}"
@@ -1279,9 +1099,8 @@ def _validate_registry_references(
 ) -> None:
     experiments_root = _find_experiments_root(registry_path)
     models_root = experiments_root / "configs" / "models"
-    if not registry.inline_models:
+    if registry.model_sets:
         _validate_model_set_configs(registry, models_root=models_root)
-        _validate_preset_model_sets(registry)
     _validate_experiment_definitions(
         registry,
         experiments_root=experiments_root,
@@ -1297,19 +1116,6 @@ def _validate_model_set_configs(
     for model_set in registry.model_sets:
         for model_ref in model_set.models:
             _resolve_named_config(models_root, model_ref)
-
-
-def _validate_preset_model_sets(registry: ExperimentRegistry) -> None:
-    for preset in registry.experiment_presets:
-        for model_set_name in preset.model_sets:
-            registry.model_set(model_set_name)
-        for override_name in preset.overrides:
-            if override_name not in preset.model_sets:
-                msg = (
-                    f"Experiment preset {preset.name!r} overrides unknown "
-                    f"model set {override_name!r}."
-                )
-                raise ConfigError(msg)
 
 
 def _validate_experiment_definitions(
@@ -1329,19 +1135,17 @@ def _validate_experiment_definitions(
                 f"{experiment.name!r}: {dataset_path}"
             )
             raise ConfigError(msg)
-        if registry.inline_models:
-            for model_ref in experiment.model_sets:
+        for model_ref in experiment.models:
+            _resolve_named_config(models_root, model_ref)
+        for model_set_name in experiment.model_sets:
+            model_set = registry.model_set(model_set_name)
+            for model_ref in model_set.models:
                 _resolve_named_config(models_root, model_ref)
-        else:
-            for model_set_name in experiment.model_sets:
-                model_set = registry.model_set(model_set_name)
-                for model_ref in model_set.models:
-                    _resolve_named_config(models_root, model_ref)
         for override_name in experiment.overrides:
-            if override_name not in experiment.model_sets:
+            if override_name not in {*experiment.models, *experiment.model_sets}:
                 msg = (
                     f"Registry experiment {experiment.name!r} overrides "
-                    f"unknown model set {override_name!r}."
+                    f"unknown model or model set {override_name!r}."
                 )
                 raise ConfigError(msg)
 
@@ -1364,44 +1168,38 @@ def _build_experiment_bundles(
         config=_load_dataset_experiment_config(dataset_path),
     )
     bundles: list[ExperimentBundle] = []
-    if registry.inline_models:
+    for model_set_name in experiment.model_sets:
+        model_set = registry.model_set(model_set_name)
+        model_overrides = _merge_model_overrides(
+            model_set.overrides,
+            experiment.overrides.get(model_set_name, {}),
+        )
         bundles.extend(
             _build_concrete_bundle(
                 request=_ConcreteBundleRequest(
                     context=context,
                     model_ref=model_ref,
-                    run_group=model_ref,
-                    model_overrides=experiment.overrides.get(model_ref, {}),
+                    run_group=model_set_name,
+                    model_overrides=model_overrides,
                     experiment=experiment,
                     repo_root=repo_root,
                 ),
             )
-            for model_ref in experiment.model_sets
+            for model_ref in model_set.models
         )
-    else:
-        preset_overrides = (
-            registry.preset(experiment.preset).overrides if experiment.preset else {}
+    bundles.extend(
+        _build_concrete_bundle(
+            request=_ConcreteBundleRequest(
+                context=context,
+                model_ref=model_ref,
+                run_group=model_ref,
+                model_overrides=experiment.overrides.get(model_ref, {}),
+                experiment=experiment,
+                repo_root=repo_root,
+            ),
         )
-        for model_set_name in experiment.model_sets:
-            model_set = registry.model_set(model_set_name)
-            model_overrides = _merge_model_overrides(
-                model_set.overrides,
-                preset_overrides.get(model_set_name, {}),
-                experiment.overrides.get(model_set_name, {}),
-            )
-            bundles.extend(
-                _build_concrete_bundle(
-                    request=_ConcreteBundleRequest(
-                        context=context,
-                        model_ref=model_ref,
-                        run_group=model_set_name,
-                        model_overrides=model_overrides,
-                        experiment=experiment,
-                        repo_root=repo_root,
-                    ),
-                )
-                for model_ref in model_set.models
-            )
+        for model_ref in experiment.models
+    )
     return bundles
 
 

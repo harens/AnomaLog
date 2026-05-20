@@ -107,7 +107,7 @@ def run_suite(request: SuiteRunRequest) -> list[Path]:
         return []
     if request.list_only:
         for experiment in selected:
-            _write_line(_format_experiment_listing(experiment))
+            _write_line(_format_experiment_listing(registry, experiment))
         return []
     if request.dry_run:
         for experiment in selected:
@@ -230,14 +230,29 @@ def _build_experiment_command(
     return command
 
 
-def _format_experiment_listing(experiment: RegisteredExperiment) -> str:
+def _format_experiment_listing(
+    registry: ExperimentRegistry,
+    experiment: RegisteredExperiment,
+) -> str:
+    model_refs = _expand_model_refs(registry, experiment)
     return (
         f"{experiment.name}\t"
         f"dataset={experiment.dataset}\t"
-        f"preset={experiment.preset or '-'}\t"
-        f"models={','.join(experiment.model_sets)}\t"
+        f"model_sets={','.join(experiment.model_sets) or '-'}\t"
+        f"models={','.join(model_refs)}\t"
         f"groups={','.join(experiment.groups)}"
     )
+
+
+def _expand_model_refs(
+    registry: ExperimentRegistry,
+    experiment: RegisteredExperiment,
+) -> tuple[str, ...]:
+    model_refs: list[str] = []
+    for model_set_name in experiment.model_sets:
+        model_refs.extend(registry.model_set(model_set_name).models)
+    model_refs.extend(experiment.models)
+    return tuple(model_refs)
 
 
 def _format_run_start(experiment: RegisteredExperiment) -> str:

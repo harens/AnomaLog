@@ -47,12 +47,19 @@ def _write_registry_tree(tmp_path: Path) -> Path:
 
     for relative_path in (
         "demo",
+        "alt",
+        "paper_demo",
+        "paper_alt",
         "ait_ads/base",
     ):
         _write_dataset_manifest(datasets_dir, relative_path)
 
     (models_dir / "template_frequency_default.toml").write_text(
         'name = "template_frequency_default"\ndetector = "template_frequency"\n',
+        encoding="utf-8",
+    )
+    (models_dir / "naive_bayes_default.toml").write_text(
+        'name = "naive_bayes_default"\ndetector = "naive_bayes"\n',
         encoding="utf-8",
     )
     (models_dir / "markov_default.toml").write_text(
@@ -71,39 +78,36 @@ def _write_registry_tree(tmp_path: Path) -> Path:
     registry_path = experiments_root / "configs" / "registry.toml"
     registry_path.write_text(
         (
-            "[model_sets.baselines]\n"
+            "[model_sets.baselines_with_nb]\n"
+            'models = ["template_frequency_default", '
+            '"naive_bayes_default", "markov_default"]\n'
+            "\n"
+            "[model_sets.baselines_no_nb]\n"
             'models = ["template_frequency_default", "markov_default"]\n'
-            "\n"
-            "[model_sets.deepcase]\n"
-            'models = ["deepcase"]\n'
-            "\n"
-            "[model_sets.deeplog]\n"
-            'models = ["deeplog_default"]\n'
-            "\n"
-            "[model_sets.deeplog.overrides]\n"
-            '"model.parameter_detection_enabled" = false\n'
-            "\n"
-            "[experiment_presets.entity_with_deepcase]\n"
-            'models = ["baselines", "deepcase"]\n'
-            "\n"
-            "[experiment_presets.paper_deeplog]\n"
-            'models = ["deeplog", "baselines"]\n'
-            "\n"
-            "[experiment_presets.paper_deeplog.overrides.deeplog]\n"
-            '"model.top_g_values" = [1, 3, 5]\n'
-            '"model.parameter_detection_enabled" = false\n'
             "\n"
             "[experiments.demo]\n"
             'dataset = "demo"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines_with_nb"]\n'
+            'models = ["deepcase", "deeplog_default"]\n'
             "\n"
             "[experiments.demo_deeplog]\n"
             'dataset = "demo"\n'
-            'preset = "paper_deeplog"\n'
+            'model_sets = ["baselines_no_nb"]\n'
+            'models = ["deeplog_default"]\n'
+            "\n"
+            "[experiments.demo_deeplog.overrides.deeplog_default]\n"
+            '"model.top_g_values" = [1, 3, 5]\n'
+            '"model.parameter_detection_enabled" = false\n'
             "\n"
             "[experiments.ait_ads]\n"
             'dataset = "ait_ads/base"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines_with_nb"]\n'
+            'models = ["deepcase"]\n'
+            "\n"
+            "[experiment_sets.paper_group]\n"
+            'model_sets = ["baselines_no_nb"]\n'
+            'models = ["deepcase"]\n'
+            'datasets = ["paper_demo", "paper_alt"]\n'
         ),
         encoding="utf-8",
     )
@@ -113,11 +117,7 @@ def _write_registry_tree(tmp_path: Path) -> Path:
 def test_load_experiment_registry_exposes_metadata(
     tmp_path: Path,
 ) -> None:
-    """Registry entries should decode into stable logical experiment metadata.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Registry entries should decode into stable logical experiment metadata."""
     registry_path = _write_registry_tree(tmp_path)
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
 
@@ -125,12 +125,14 @@ def test_load_experiment_registry_exposes_metadata(
         "demo",
         "demo_deeplog",
         "ait_ads",
+        "paper_demo",
+        "paper_alt",
     )
     entry = registry.require("demo")
     assert entry.dataset == "demo"
-    assert entry.model_sets == ("baselines", "deepcase")
-    assert entry.preset == "entity_with_deepcase"
-    assert entry.groups == ("entity_with_deepcase", "baselines", "deepcase")
+    assert entry.models == ("deepcase", "deeplog_default")
+    assert entry.model_sets == ("baselines_with_nb",)
+    assert entry.groups == ("demo", "baselines_with_nb")
 
 
 def test_load_experiment_registry_registers_thunderbird_runs() -> None:
@@ -143,16 +145,10 @@ def test_load_experiment_registry_registers_thunderbird_runs() -> None:
 
     thunderbird = registry.require("thunderbird")
     assert thunderbird.dataset == "thunderbird"
-    assert thunderbird.preset is None
-    assert thunderbird.model_sets == (
-        "deeplog_default",
-        "template_frequency_default",
-        "naive_bayes_default",
-        "markov_default",
-    )
+    assert thunderbird.models == ("deeplog_default",)
+    assert thunderbird.model_sets == ("baselines_with_nb",)
 
 
-@pytest.mark.allow_no_new_coverage
 def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
     """Thunderbird entity-grouped runs should resolve through the registry."""
     repo_root = Path(__file__).resolve().parents[2]
@@ -163,41 +159,35 @@ def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
 
     thunderbird_entity = registry.require("thunderbird_entity_chronological")
     assert thunderbird_entity.dataset == "thunderbird/entity_chronological"
-    assert thunderbird_entity.preset is None
-    assert thunderbird_entity.model_sets == (
-        "template_frequency_default",
-        "naive_bayes_default",
-        "markov_default",
-        "deepcase",
-    )
+    assert thunderbird_entity.models == ("deepcase", "deeplog_default")
+    assert thunderbird_entity.model_sets == ("baselines_with_nb",)
 
 
 def test_registry_select_combines_names_and_groups() -> None:
     """Explicit names and group filters should both contribute to selection."""
     registry = ExperimentRegistry(
         model_sets=(),
-        experiment_presets=(),
         experiments=(
             RegisteredExperiment(
                 name="alpha",
                 dataset="demo",
+                models=("deeplog_default",),
                 model_sets=("deeplog",),
                 groups=("paper", "deeplog"),
-                preset="paper_deeplog",
             ),
             RegisteredExperiment(
                 name="beta",
                 dataset="demo",
+                models=(),
                 model_sets=("baselines",),
                 groups=("entity_with_deepcase", "baselines"),
-                preset="entity_with_deepcase",
             ),
             RegisteredExperiment(
                 name="gamma",
                 dataset="other",
-                model_sets=("deepcase",),
+                models=("deepcase",),
+                model_sets=(),
                 groups=("entity_with_deepcase", "deepcase"),
-                preset="entity_with_deepcase",
             ),
         ),
     )
@@ -210,10 +200,10 @@ def test_registry_select_combines_names_and_groups() -> None:
     ]
 
 
-def test_experiment_set_without_preset_uses_set_name_as_group(
+def test_experiment_set_uses_set_name_as_group(
     tmp_path: Path,
 ) -> None:
-    """Experiment sets should stay selectable even without a preset wrapper."""
+    """Experiment sets should stay selectable even without a wrapper layer."""
     experiments_root = tmp_path / "experiments"
     datasets_dir = experiments_root / "configs" / "datasets"
     models_dir = experiments_root / "configs" / "models"
@@ -232,9 +222,13 @@ def test_experiment_set_without_preset_uses_set_name_as_group(
     registry_path = experiments_root / "configs" / "registry.toml"
     registry_path.write_text(
         (
+            "[model_sets.baselines]\n"
+            'models = ["template_frequency_default"]\n'
+            "\n"
             "[experiment_sets.paper_group]\n"
-            'models = ["template_frequency_default", "deepcase"]\n'
-            'datasets = ["demo", "alt"]\n'
+            'model_sets = ["baselines"]\n'
+            'models = ["deepcase"]\n'
+            'datasets = ["paper_demo", "paper_alt"]\n'
         ),
         encoding="utf-8",
     )
@@ -242,34 +236,37 @@ def test_experiment_set_without_preset_uses_set_name_as_group(
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
     selected = registry.select(groups=("paper_group",))
 
-    assert [experiment.name for experiment in selected] == ["demo", "alt"]
+    assert [experiment.name for experiment in selected] == [
+        "paper_demo",
+        "paper_alt",
+    ]
     assert all("paper_group" in experiment.groups for experiment in selected)
 
 
 def test_load_experiment_registry_rejects_missing_model_config(
     tmp_path: Path,
 ) -> None:
-    """Registry loading should fail when a referenced model config is absent.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Registry loading should fail when a referenced model config is absent."""
     experiments_root = tmp_path / "experiments"
     datasets_dir = experiments_root / "configs" / "datasets"
+    models_dir = experiments_root / "configs" / "models"
     datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
     _write_dataset_manifest(datasets_dir, "demo")
+    (models_dir / "deepcase.toml").write_text(
+        'name = "deepcase"\ndetector = "deepcase"\n',
+        encoding="utf-8",
+    )
     registry_path = experiments_root / "configs" / "registry.toml"
     registry_path.write_text(
         (
             "[model_sets.missing]\n"
             'models = ["missing_model"]\n'
             "\n"
-            "[experiment_presets.single]\n"
-            'models = ["missing"]\n'
-            "\n"
             "[experiments.demo]\n"
             'dataset = "demo"\n'
-            'preset = "single"\n'
+            'model_sets = ["missing"]\n'
+            'models = ["deepcase"]\n'
         ),
         encoding="utf-8",
     )
@@ -281,11 +278,7 @@ def test_load_experiment_registry_rejects_missing_model_config(
 def test_load_experiment_registry_rejects_missing_dataset_config(
     tmp_path: Path,
 ) -> None:
-    """Registry loading should fail when a referenced dataset config is absent.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Registry loading should fail when a referenced dataset config is absent."""
     experiments_root = tmp_path / "experiments"
     models_dir = experiments_root / "configs" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -299,12 +292,10 @@ def test_load_experiment_registry_rejects_missing_dataset_config(
             "[model_sets.baselines]\n"
             'models = ["template_frequency_default"]\n'
             "\n"
-            "[experiment_presets.entity_with_deepcase]\n"
-            'models = ["baselines"]\n'
-            "\n"
             "[experiments.demo]\n"
             'dataset = "missing_dataset"\n'
-            'preset = "entity_with_deepcase"\n'
+            'model_sets = ["baselines"]\n'
+            'models = ["deepcase"]\n'
         ),
         encoding="utf-8",
     )
@@ -313,14 +304,39 @@ def test_load_experiment_registry_rejects_missing_dataset_config(
         load_experiment_registry(registry_path, repo_root=tmp_path)
 
 
+def test_load_experiment_registry_rejects_unknown_model_set(
+    tmp_path: Path,
+) -> None:
+    """Registry loading should fail when a referenced model set is absent."""
+    experiments_root = tmp_path / "experiments"
+    datasets_dir = experiments_root / "configs" / "datasets"
+    models_dir = experiments_root / "configs" / "models"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    _write_dataset_manifest(datasets_dir, "demo")
+    (models_dir / "deepcase.toml").write_text(
+        'name = "deepcase"\ndetector = "deepcase"\n',
+        encoding="utf-8",
+    )
+    registry_path = experiments_root / "configs" / "registry.toml"
+    registry_path.write_text(
+        (
+            "[experiments.demo]\n"
+            'dataset = "demo"\n'
+            'model_sets = ["missing"]\n'
+            'models = ["deepcase"]\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="Unknown model set"):
+        load_experiment_registry(registry_path, repo_root=tmp_path)
+
+
 def test_load_experiment_registry_rejects_malformed_entries(
     tmp_path: Path,
 ) -> None:
-    """Malformed registry fields should fail during decoding.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Malformed registry fields should fail during decoding."""
     experiments_root = tmp_path / "experiments"
     models_dir = experiments_root / "configs" / "models"
     datasets_dir = experiments_root / "configs" / "datasets"
@@ -337,28 +353,21 @@ def test_load_experiment_registry_rejects_malformed_entries(
             "[model_sets.baselines]\n"
             'models = ["template_frequency_default"]\n'
             "\n"
-            "[experiment_presets.entity_with_deepcase]\n"
-            'models = ["baselines"]\n'
-            "\n"
             "[experiments.demo]\n"
             'dataset = "demo"\n'
-            'models = "baselines"\n'
+            'model_sets = "baselines"\n'
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="models"):
+    with pytest.raises(ConfigError, match="model_sets"):
         load_experiment_registry(registry_path, repo_root=tmp_path)
 
 
 def test_resolve_registry_experiment_attaches_metadata(
     tmp_path: Path,
 ) -> None:
-    """Named experiments should resolve to metadata-annotated bundles.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Named experiments should resolve to metadata-annotated bundles."""
     registry_path = _write_registry_tree(tmp_path)
     resolved = resolve_registry_experiment(
         "demo",
@@ -369,30 +378,28 @@ def test_resolve_registry_experiment_attaches_metadata(
     assert resolved.experiment.name == "demo"
     assert [bundle.concrete_name for bundle in resolved.bundles] == [
         "demo_template_frequency",
+        "demo_naive_bayes",
         "demo_markov",
         "demo_deepcase",
+        "demo_deeplog",
     ]
     assert resolved.bundles[0].experiment_name == "demo"
     assert resolved.bundles[0].experiment_groups == (
-        "entity_with_deepcase",
-        "baselines",
-        "deepcase",
+        "demo",
+        "baselines_with_nb",
     )
     assert resolved.bundles[0].normalized_config()["experiment"] == {
         "name": "demo",
-        "groups": ["entity_with_deepcase", "baselines", "deepcase"],
+        "groups": ["demo", "baselines_with_nb"],
     }
-    assert resolved.bundles[2].run_group == "deepcase"
+    assert resolved.bundles[3].run_group == "deepcase"
+    assert resolved.bundles[4].run_group == "deeplog_default"
 
 
-def test_resolve_registry_experiment_applies_preset_overrides(
+def test_resolve_registry_experiment_applies_model_overrides(
     tmp_path: Path,
 ) -> None:
-    """Preset overrides should flow into the resolved DeepLog bundle.
-
-    Args:
-        tmp_path (Path): Temporary directory used to build the registry tree.
-    """
+    """Model overrides should flow into the resolved DeepLog bundle."""
     registry_path = _write_registry_tree(tmp_path)
     resolved = resolve_registry_experiment(
         "demo_deeplog",

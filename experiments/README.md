@@ -126,11 +126,13 @@ The central registry is intentionally small. It has two concepts:
   on it.
 - `experiment_sets` name a dataset family, act as selectable groups, and expand
   one dataset list line into the concrete experiment names for that family.
+- `model_sets` capture repeated detector bundles such as the shared baseline
+  stacks, so the registry can keep singleton detectors inline with the dataset.
 
-The runner derives reporting groups from the dataset-family or experiment name
-and the model names, so the TOML does not need `groups` or `run_group` in the
-normal case. If you need a small or CI-friendly check, select the explicit
-experiment name instead of inventing another registry tag.
+The runner derives reporting groups from the experiment or experiment-set name
+and the shared model-set names, so the TOML does not need `groups` or
+`run_group` in the normal case. If you need a small or CI-friendly check,
+select the explicit experiment name instead of inventing another registry tag.
 
 The DeepLog reproduction manifests also carry simple sanity baselines on the
 same mask-aware split, so the paper target is always compared against a
@@ -443,20 +445,20 @@ file can hold the shared boilerplate while each scenario keeps only its
 specific overrides.
 
 To add a named experiment to the canonical registry, add a table to
-`configs/registry.toml` that points at one dataset manifest and the model
-configs that should run on it. You do not need to spell out `groups` or
-`run_group` for the normal case.
+`configs/registry.toml` that points at one dataset manifest, the inline model
+configs that should stay visible next to the dataset, and any shared
+`model_sets` that recur across experiments. You do not need to spell out
+`groups` or `run_group` for the normal case.
 
 Example:
 
 ```toml
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
+model_sets = ["baselines_with_nb"]
 models = [
-  "template_frequency_default",
-  "naive_bayes_default",
-  "markov_default",
   "deepcase",
+  "deeplog_default",
 ]
 ```
 
@@ -465,11 +467,8 @@ experiment set when you want the paper-compatible chronology:
 
 ```toml
 [experiment_sets.ait_ads]
-models = [
-  "template_frequency_default",
-  "naive_bayes_default",
-  "deepcase",
-]
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
 datasets = ["ait_ads/base"]
 ```
 

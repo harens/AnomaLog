@@ -1,38 +1,47 @@
-[experiments.bgl_entity_chronological]
-dataset = "bgl/entity_chronological"
-# Entity-chronological runs compare DeepCASE against the shared sanity baselines.
+[model_sets.baselines_with_nb]
 models = [
   "template_frequency_default",
   "naive_bayes_default",
   "markov_default",
+]
+
+[model_sets.baselines_no_nb]
+models = [
+  "template_frequency_default",
+  "markov_default",
+]
+
+[experiments.bgl_entity_chronological]
+dataset = "bgl/entity_chronological"
+# Entity-chronological runs compare DeepCASE against the shared sanity
+# baselines and keep the non-paper DeepLog extension inline.
+model_sets = ["baselines_with_nb"]
+models = [
   "deepcase",
+  "deeplog_default",
 ]
 
 [experiments.hdfs_v1_entity_chronological]
 dataset = "hdfs/v1_entity_chronological"
-# Entity-chronological runs compare DeepCASE against the shared sanity baselines.
+# Entity-chronological runs compare DeepCASE against the shared sanity
+# baselines and keep the non-paper DeepLog extension inline.
+model_sets = ["baselines_with_nb"]
 models = [
-  "template_frequency_default",
-  "naive_bayes_default",
-  "markov_default",
   "deepcase",
+  "deeplog_default",
 ]
 
 [experiments.openstack_deeplog_preprocessed]
 dataset = "openstack/deeplog_preprocessed"
-# OpenStack stays key-only because the current structured parser and spell
+# OpenStack stays key-only because the current structured parser and Spell
 # normalisation make paper-style parameter comparison unreliable. The run is
 # still useful as a DeepLog-style comparison against the same file-boundary
 # split, but it should not be read as a full parameter-anomaly reproduction.
-# Naive Bayes is omitted because the train split is single-class.
+model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",
-  "template_frequency_default",
-  "markov_default",
   "deepcase",
 ]
-
-[experiments.openstack_deeplog_preprocessed.overrides.deeplog_default]
 
 [experiments.thunderbird]
 dataset = "thunderbird"
@@ -40,56 +49,44 @@ dataset = "thunderbird"
 # family: the canonical Thunderbird.log file, a 10-million-line range starting
 # at line 160,000,000, and 100-log chronological windows. The DeepLog-style
 # reproduction stays stream-shaped and keeps the simple baselines together.
-models = [
-  "deeplog_default",
-  "template_frequency_default",
-  "naive_bayes_default",
-  "markov_default",
-]
+model_sets = ["baselines_with_nb"]
+models = ["deeplog_default"]
 
 [experiments.thunderbird_entity_chronological]
 dataset = "thunderbird/entity_chronological"
 # DeepCASE needs entity-local sequences, so the Thunderbird extension is split
 # out into its own entity-grouped experiment rather than sharing the
 # chronological reproduction contract.
+model_sets = ["baselines_with_nb"]
 models = [
-  "template_frequency_default",
-  "naive_bayes_default",
-  "markov_default",
   "deepcase",
+  "deeplog_default",
 ]
 
 [experiments.ait_ads]
 dataset = "ait_ads/base"
 # AIT-ADS is a single continuous alert chronology, so it keeps the
 # stream-oriented baselines.
-models = [
-  "template_frequency_default",
-  "markov_default",
-]
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
 
 [experiments.ait_ads_entity]
 dataset = "ait_ads/entity_chronological"
-# DeepLog and DeepCASE both need entity-local sequences, so they run against
-# the same AIT-ADS source but with entity grouping instead of the global
-# stream view.
+# DeepCASE needs entity-local sequences; DeepLog is included here as an
+# entity-local diagnostic alongside the global stream view.
+model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",
   "deepcase",
 ]
 
 [experiment_sets.bgl_deeplog_paper]
-# DeepLog paper reproduction: the LSTM next-event target plus the three simple
-# floors that tell us whether the dataset is separable before the neural model
-# does anything interesting. The simple baselines now foreground
-# event-level detection on BGL because the dataset labels individual log lines.
-# Naive Bayes is omitted because the paper's BGL training prefix is
-# single-class.
-models = [
-  "deeplog_default",
-  "template_frequency_default",
-  "markov_default",
-]
+# DeepLog paper reproduction: the LSTM next-event target plus the shared
+# baselines that tell us whether the dataset is separable before the neural
+# model does anything interesting. The baselines foreground event-level
+# detection on BGL because the dataset labels individual log lines.
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
 datasets = [
   "bgl/deeplog_paper_1pct_normal_entry_stream_no_online",
   "bgl/deeplog_paper_10pct_entry_stream_no_online",
@@ -105,13 +102,12 @@ datasets = [
 
 [experiment_sets.hdfs_deeplog_paper]
 # DeepLog paper reproduction: the HDFS runs that preserve the original
-# normal-only training contract, plus the lightweight baselines that probe
-# how much of the signal comes from template statistics or local ordering.
+# normal-only training contract, plus the lightweight baselines that probe how
+# much of the signal comes from template statistics or local ordering.
+model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",
   "deepcase",
-  "template_frequency_default",
-  "markov_default",
 ]
 datasets = [
   "hdfs/v1_deeplog_paper_entry100k_split_partial",
