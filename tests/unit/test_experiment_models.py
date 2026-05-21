@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import math
@@ -17,6 +18,7 @@ import pytest
 from rich.progress import Progress, TextColumn
 from typing_extensions import override
 
+import experiments.models.markov as markov_module
 from anomalog.representations import (
     SequenceRepresentationView,
     SequentialRepresentation,
@@ -962,6 +964,38 @@ def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
     assert detector.context_counts == Counter({("B",): 1})
     assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
     assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
+
+
+def test_markov_detector_fit_builds_eligible_indexes_once_per_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Markov fit should reuse eligible target indexes instead of rescanning them.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to count Markov module
+            set construction calls.
+    """
+    detector = _markov_config(name="markov").build_detector()
+    train_sequence = _sequence(
+        44,
+        templates=[f"template-{index % 5}" for index in range(200)],
+        label=0,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=tuple(True for _ in range(200)),
+    )
+    call_count = 0
+
+    def counting_set(values: Iterable[object] = ()) -> set[object]:
+        nonlocal call_count
+        call_count += 1
+        return builtins.set(values)
+
+    monkeypatch.setattr(markov_module, "set", counting_set, raising=False)
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert call_count == 1
 
 
 def test_markov_detector_reports_event_level_metrics() -> None:

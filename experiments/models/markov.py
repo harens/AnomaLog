@@ -179,7 +179,7 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         """
         del logger
         self._ensure_unfit(detector_name=self.detector_name)
-        calibration_sequences: list[tuple[TemplateSequence, list[str] | None]] = []
+        calibration_sequences: list[_PreparedMarkovCalibrationSequence] = []
         stream_context_templates: list[str] = []
         self._event_level_state.reset()
         self._stream_context_templates = []
@@ -187,42 +187,22 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             train_sequences,
             description=fit_stage_description(self.detector_name),
         ):
-            eligible_target_indexes = training_event_index_mask(sequence)
-            prefix_templates = (
-                stream_context_templates if sequence.continuous_context else []
+            prepared_sequence, stream_context_templates = (
+                self._prepare_training_sequence(
+                    sequence=sequence,
+                    stream_context_templates=stream_context_templates,
+                )
             )
-            if is_anomalous_label(sequence.label):
-                if sequence.continuous_context:
-                    stream_context_templates = []
-                continue
-            if not eligible_target_indexes:
-                if sequence.continuous_context and not is_anomalous_label(
-                    sequence.label,
-                ):
-                    stream_context_templates = _sequence_tail(
-                        sequence.templates,
-                        self.order,
-                        prefix_templates=prefix_templates,
-                    )
-                else:
-                    stream_context_templates = []
+            if prepared_sequence is None:
                 continue
             self.normal_sequence_count += 1
             self.normal_template_vocabulary.update(sequence.templates)
             self.normal_transition_count += self._learn_sequence(
                 sequence,
-                eligible_target_indexes=eligible_target_indexes,
-                prefix_templates=prefix_templates,
+                eligible_target_indexes=prepared_sequence.eligible_target_indexes,
+                prefix_templates=prepared_sequence.prefix_templates,
             )
-            calibration_sequences.append((sequence, list(prefix_templates)))
-            if sequence.continuous_context:
-                stream_context_templates = _sequence_tail(
-                    sequence.templates,
-                    self.order,
-                    prefix_templates=prefix_templates,
-                )
-            else:
-                stream_context_templates = []
+            calibration_sequences.append(prepared_sequence)
 
         if not calibration_sequences:
             msg = "markov detector requires at least one normal training sequence."
@@ -237,24 +217,26 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             self._mark_fit_complete()
             return
 
-        calibration_scores = [
-            self._score_sequence(
-                sequence,
-                eligible_target_indexes=training_event_index_mask(sequence),
-                prefix_templates=prefix_templates,
+        calibration_scores = []
+        calibration_event_scores = []
+        for prepared_sequence in calibration_sequences:
+            calibration_scores.append(
+                self._score_sequence(
+                    prepared_sequence.sequence,
+                    eligible_target_indexes=prepared_sequence.eligible_target_indexes,
+                    prefix_templates=prepared_sequence.prefix_templates,
+                ),
             )
-            for sequence, prefix_templates in calibration_sequences
-        ]
-        calibration_event_scores = [
-            self._transition_score(context, next_template)
-            for sequence, prefix_templates in calibration_sequences
             for event_index, context, next_template in _sequence_transitions(
-                sequence.templates,
+                prepared_sequence.sequence.templates,
                 self.order,
-                prefix_templates=prefix_templates,
-            )
-            if event_index in set(training_event_index_mask(sequence))
-        ]
+                prefix_templates=prepared_sequence.prefix_templates,
+            ):
+                if event_index not in prepared_sequence.eligible_target_indexes:
+                    continue
+                calibration_event_scores.append(
+                    self._transition_score(context, next_template),
+                )
         self.score_threshold = _quantile(
             sorted(calibration_scores),
             self.calibration_quantile,
@@ -282,7 +264,7 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         )
         score = self._score_sequence(
             sequence,
-            eligible_target_indexes=evaluation_event_index_mask(sequence),
+            eligible_target_indexes=set(evaluation_event_index_mask(sequence)),
             prefix_templates=prefix_templates,
         )
         self._record_event_level_predictions(
@@ -334,7 +316,7 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         """
         return self._score_sequence(
             sequence,
-            eligible_target_indexes=evaluation_event_index_mask(sequence),
+            eligible_target_indexes=set(evaluation_event_index_mask(sequence)),
             prefix_templates=(
                 self._stream_context_templates if sequence.continuous_context else []
             ),
@@ -344,15 +326,22 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         self,
         sequence: TemplateSequence,
         *,
-        eligible_target_indexes: list[int] | None,
+        eligible_target_indexes: set[int] | None,
         prefix_templates: list[str] | None,
     ) -> float:
-        """Return the masked mean negative log transition probability."""
-        eligible_indexes = (
-            set(eligible_target_indexes)
-            if eligible_target_indexes is not None
-            else None
-        )
+        """Return the masked mean negative log transition probability.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+            eligible_target_indexes (set[int] | None): Optional target indexes
+                allowed to contribute to the score.
+            prefix_templates (list[str] | None): Optional trailing context from
+                the previous chronological chunk.
+
+        Returns:
+            float: Mean negative log transition probability over the eligible
+            transitions in the sequence.
+        """
         transitions = [
             (context, next_template)
             for target_index, context, next_template in _sequence_transitions(
@@ -360,7 +349,8 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
                 self.order,
                 prefix_templates=prefix_templates,
             )
-            if eligible_indexes is None or target_index in eligible_indexes
+            if eligible_target_indexes is None
+            or target_index in eligible_target_indexes
         ]
         if not transitions:
             return 0.0
@@ -384,14 +374,14 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         self,
         sequence: TemplateSequence,
         *,
-        eligible_target_indexes: list[int],
+        eligible_target_indexes: set[int],
         prefix_templates: list[str] | None,
     ) -> int:
         """Update transition counts from one normal training sequence.
 
         Args:
             sequence (TemplateSequence): Training sequence to learn from.
-            eligible_target_indexes (list[int]): Target indexes allowed to
+            eligible_target_indexes (set[int]): Target indexes allowed to
                 contribute transition counts.
             prefix_templates (list[str] | None): Trailing template history from
                 the previous chronological chunk, when one is available.
@@ -399,14 +389,13 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             int: Number of learned transitions contributed by the sequence.
         """
-        eligible_indexes = set(eligible_target_indexes)
         transition_count = 0
         for target_index, context, next_template in _sequence_transitions(
             sequence.templates,
             self.order,
             prefix_templates=prefix_templates,
         ):
-            if target_index not in eligible_indexes:
+            if target_index not in eligible_target_indexes:
                 continue
             context_counts = self.transition_counts_by_context.setdefault(
                 context,
@@ -417,13 +406,60 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             transition_count += 1
         return transition_count
 
+    def _prepare_training_sequence(
+        self,
+        *,
+        sequence: TemplateSequence,
+        stream_context_templates: list[str],
+    ) -> tuple[_PreparedMarkovCalibrationSequence | None, list[str]]:
+        """Return the training payload for one sequence and the next stream tail."""
+        eligible_target_indexes = set(training_event_index_mask(sequence))
+        prefix_templates = (
+            stream_context_templates if sequence.continuous_context else []
+        )
+        if is_anomalous_label(sequence.label):
+            return None, []
+        if not eligible_target_indexes:
+            if sequence.continuous_context:
+                return (
+                    None,
+                    _sequence_tail(
+                        sequence.templates,
+                        self.order,
+                        prefix_templates=prefix_templates,
+                    ),
+                )
+            return None, []
+        prepared_sequence = _PreparedMarkovCalibrationSequence(
+            sequence=sequence,
+            prefix_templates=list(prefix_templates),
+            eligible_target_indexes=eligible_target_indexes,
+        )
+        if sequence.continuous_context:
+            return (
+                prepared_sequence,
+                _sequence_tail(
+                    sequence.templates,
+                    self.order,
+                    prefix_templates=prefix_templates,
+                ),
+            )
+        return prepared_sequence, []
+
     def _record_event_level_predictions(
         self,
         sequence: TemplateSequence,
         *,
         prefix_templates: list[str] | None,
     ) -> None:
-        """Accumulate event-level confusion counts for one scored sequence."""
+        """Accumulate event-level confusion counts for one scored sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence whose labelled events should
+                be scored.
+            prefix_templates (list[str] | None): Optional trailing history from
+                the previous chronological chunk.
+        """
         if sequence.event_labels is None:
             return
         eligible_target_indexes = set(evaluation_event_index_mask(sequence))
@@ -451,7 +487,15 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             )
 
     def _transition_score(self, context: tuple[str, ...], next_template: str) -> float:
-        """Return the negative log transition probability for one event."""
+        """Return the negative log transition probability for one event.
+
+        Args:
+            context (tuple[str, ...]): Observed Markov context.
+            next_template (str): Observed next template.
+
+        Returns:
+            float: Negative log transition probability under the fitted model.
+        """
         vocabulary_size = max(len(self.normal_template_vocabulary), 1)
         numerator = (
             self.transition_counts_by_context.get(context, Counter()).get(
@@ -471,7 +515,13 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         sequence: TemplateSequence,
         prefix_templates: list[str] | None,
     ) -> None:
-        """Carry forward the trailing history for chronological chunking."""
+        """Carry forward the trailing history for chronological chunking.
+
+        Args:
+            sequence (TemplateSequence): Sequence that has just been scored.
+            prefix_templates (list[str] | None): Optional trailing history from
+                the previous chronological chunk.
+        """
         if sequence.continuous_context:
             self._stream_context_templates = _sequence_tail(
                 sequence.templates,
@@ -482,7 +532,12 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         self._stream_context_templates = []
 
     def _event_level_state_snapshot(self) -> EventLevelDetectionDiagnostics | None:
-        """Return the latest event-level detection diagnostics."""
+        """Return the latest event-level detection diagnostics.
+
+        Returns:
+            EventLevelDetectionDiagnostics | None: Latest accumulated event
+            metrics, or `None` when no labelled events have been scored yet.
+        """
         return self._event_level_state.snapshot(task="event_level_detection")
 
     def run_metrics(
@@ -490,7 +545,16 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         *,
         run_metrics: dict[str, int | float | dict[int, int]],
     ) -> object | None:
-        """Return event-level diagnostics for the latest scored run."""
+        """Return event-level diagnostics for the latest scored run.
+
+        Args:
+            run_metrics (dict[str, int | float | dict[int, int]]): Shared run
+                metrics payload, ignored by the Markov detector.
+
+        Returns:
+            object | None: Event-level diagnostics payload, or `None` when no
+            labelled events were scored.
+        """
         del run_metrics
         snapshot = self._event_level_state_snapshot()
         return None if snapshot is None else {"event_level_detection": snapshot}
@@ -530,6 +594,15 @@ class MarkovManifest(ModelManifest, frozen=True):
     normal_template_vocabulary: int
 
 
+@dataclass(slots=True)
+class _PreparedMarkovCalibrationSequence:
+    """Cached training payload for one normal Markov calibration sequence."""
+
+    sequence: TemplateSequence
+    prefix_templates: list[str] | None
+    eligible_target_indexes: set[int]
+
+
 def _sequence_transitions(
     templates: list[str],
     order: int,
@@ -545,7 +618,8 @@ def _sequence_transitions(
             across a chronological chunk boundary.
 
     Yields:
-        (tuple[str, ...], str): Context tuple and next template.
+        (int, tuple[str, ...], str): Target index within the current sequence,
+        context tuple, and next template.
     """
     combined_templates = [] if prefix_templates is None else list(prefix_templates)
     combined_templates.extend(templates)
@@ -570,7 +644,17 @@ def _sequence_tail(
     *,
     prefix_templates: list[str] | None = None,
 ) -> list[str]:
-    """Return the trailing context needed for the next chronological chunk."""
+    """Return the trailing context needed for the next chronological chunk.
+
+    Args:
+        templates (list[str]): Sequence templates from the completed chunk.
+        order (int): Markov order used to determine the trailing history.
+        prefix_templates (list[str] | None): Optional prior trailing history
+            that should be preserved when a stream is chunked.
+
+    Returns:
+        list[str]: Trailing templates to carry into the next chunk.
+    """
     combined_templates = [] if prefix_templates is None else list(prefix_templates)
     combined_templates.extend(templates)
     if order <= 0:
