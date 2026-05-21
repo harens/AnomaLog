@@ -812,7 +812,7 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
             if (
                 isinstance(preset_source, PostProcessedSource)
                 and preset_source.split_provenance is not None
-                ):
+            ):
                 summary.update(preset_source.split_provenance.as_dict())
             return summary
         source, _ = self.custom_dataset_components()
