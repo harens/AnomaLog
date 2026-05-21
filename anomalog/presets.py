@@ -37,6 +37,18 @@ from anomalog.sources.raw_prefix import (
 # Originally tried using LogHub-2.0 (https://zenodo.org/record/8275861),
 # but HDFS does not appear to be annotated there.
 
+_HDFS_WUYIFAN18_SPLIT_FILES = (
+    ("hdfs_train", 0),
+    ("hdfs_test_normal", 0),
+    ("hdfs_test_abnormal", 1),
+)
+
+_OPENSTACK_SPLIT_FILES = (
+    ("openstack_normal1.log", "openstack_train", 0),
+    ("openstack_normal2.log", "openstack_test_normal", 0),
+    ("openstack_abnormal.log", "openstack_test_abnormal", 1),
+)
+
 hdfs_v1 = (
     DatasetSpec("HDFS_V1")
     .from_source(
@@ -79,11 +91,7 @@ hdfs_wuyifan18_deeplog_preprocessed = (
             ),
             post_process=partial(
                 materialise_labelled_session_stream,
-                split_files=(
-                    ("hdfs_train", 0),
-                    ("hdfs_test_normal", 0),
-                    ("hdfs_test_abnormal", 1),
-                ),
+                split_files=_HDFS_WUYIFAN18_SPLIT_FILES,
             ),
             raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
         ),
@@ -102,11 +110,7 @@ openstack_deeplog_preprocessed = (
             ),
             post_process=partial(
                 materialise_labelled_raw_stream,
-                split_files=(
-                    ("openstack_normal1.log", "openstack_train", 0),
-                    ("openstack_normal2.log", "openstack_test_normal", 0),
-                    ("openstack_abnormal.log", "openstack_test_abnormal", 1),
-                ),
+                split_files=_OPENSTACK_SPLIT_FILES,
             ),
             raw_logs_relpath=Path("preprocessed/openstack_labelled_raw.log"),
         ),

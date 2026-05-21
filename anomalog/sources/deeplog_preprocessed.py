@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import ClassVar, TextIO
+from typing import ClassVar, Literal, TextIO
 
 from anomalog.sources.contracts import DatasetSource
 
@@ -15,8 +16,96 @@ SplitFileSpecs = tuple[SplitFileSpec, ...]
 LabelledRawSplitFileSpec = tuple[str, str, int]
 LabelledRawSplitFileSpecs = tuple[LabelledRawSplitFileSpec, ...]
 PostProcessFn = Callable[[Path, Path], None]
+PREDEFINED_FILE_BOUNDARY_SPLIT_FILE_COUNT = 3
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class FileBoundarySplitProvenance:
+    """Describe a predefined file-boundary split used during materialisation."""
+
+    split_source: Literal["predefined_file_boundary"]
+    train_source_files: tuple[str, ...]
+    test_normal_source_files: tuple[str, ...]
+    test_anomalous_source_files: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-friendly provenance summary."""
+        return {
+            "split_source": self.split_source,
+            "train_source_files": list(self.train_source_files),
+            "test_normal_source_files": list(self.test_normal_source_files),
+            "test_anomalous_source_files": list(self.test_anomalous_source_files),
+            "source_file_labels": [
+                *(
+                    {"source_file": source_file, "label": 0, "split": "train"}
+                    for source_file in self.train_source_files
+                ),
+                *(
+                    {
+                        "source_file": source_file,
+                        "label": 0,
+                        "split": "test_normal",
+                    }
+                    for source_file in self.test_normal_source_files
+                ),
+                *(
+                    {
+                        "source_file": source_file,
+                        "label": 1,
+                        "split": "test_anomalous",
+                    }
+                    for source_file in self.test_anomalous_source_files
+                ),
+            ],
+        }
+
+
+def build_session_file_boundary_provenance(
+    split_files: SplitFileSpecs,
+) -> FileBoundarySplitProvenance:
+    """Build provenance metadata for a labelled-session file-boundary split.
+
+    Returns:
+        FileBoundarySplitProvenance: Source-file provenance for the split.
+
+    Raises:
+        ValueError: If the split does not define exactly three source files.
+    """
+    if len(split_files) != PREDEFINED_FILE_BOUNDARY_SPLIT_FILE_COUNT:
+        msg = "predefined file-boundary splits must contain three source files."
+        raise ValueError(msg)
+    train_split, test_normal_split, test_anomalous_split = split_files
+    return FileBoundarySplitProvenance(
+        split_source="predefined_file_boundary",
+        train_source_files=(train_split[0],),
+        test_normal_source_files=(test_normal_split[0],),
+        test_anomalous_source_files=(test_anomalous_split[0],),
+    )
+
+
+def build_labelled_raw_file_boundary_provenance(
+    split_files: LabelledRawSplitFileSpecs,
+) -> FileBoundarySplitProvenance:
+    """Build provenance metadata for a labelled-raw file-boundary split.
+
+    Returns:
+        FileBoundarySplitProvenance: Source-file provenance for the split.
+
+    Raises:
+        ValueError: If the split does not define exactly three source files.
+    """
+    if len(split_files) != PREDEFINED_FILE_BOUNDARY_SPLIT_FILE_COUNT:
+        msg = "predefined file-boundary splits must contain three source files."
+        raise ValueError(msg)
+    train_split, test_normal_split, test_anomalous_split = split_files
+    return FileBoundarySplitProvenance(
+        split_source="predefined_file_boundary",
+        train_source_files=(train_split[0],),
+        test_normal_source_files=(test_normal_split[0],),
+        test_anomalous_source_files=(test_anomalous_split[0],),
+    )
 
 
 @dataclass(frozen=True)
@@ -37,6 +126,23 @@ class PostProcessedSource(DatasetSource):
     base_source: DatasetSource
     post_process: PostProcessFn
     raw_logs_relpath: Path | None = None
+
+    @property
+    def split_provenance(self) -> FileBoundarySplitProvenance | None:
+        """Return provenance for recognised file-boundary split materialisers."""
+        if not isinstance(self.post_process, partial):
+            return None
+        keywords = self.post_process.keywords
+        if keywords is None:
+            return None
+        split_files = keywords.get("split_files")
+        if split_files is None:
+            return None
+        if self.post_process.func is materialise_labelled_session_stream:
+            return build_session_file_boundary_provenance(split_files)
+        if self.post_process.func is materialise_labelled_raw_stream:
+            return build_labelled_raw_file_boundary_provenance(split_files)
+        return None
 
     def materialise(
         self,

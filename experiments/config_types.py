@@ -20,6 +20,7 @@ import msgspec
 
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader
+from anomalog.presets import resolve_preset
 from anomalog.sequences import (
     RawEntrySplitMode,
     SplitApplicationOrder,
@@ -29,6 +30,7 @@ from anomalog.sources import (
     DatasetSource,
     LocalDirSource,
     LocalZipSource,
+    PostProcessedSource,
     RemoteZipSource,
 )
 from anomalog.split_validation import validate_split_fractions
@@ -791,19 +793,30 @@ class DatasetVariantConfig(msgspec.Struct, frozen=True):
             raise ConfigError(msg)
         return self.source, self.structured_parser
 
-    def source_summary(self, *, repo_root: Path) -> dict[str, str | None]:
+    def source_summary(self, *, repo_root: Path) -> dict[str, object]:
         """Return a stable source summary for manifests.
 
         Args:
             repo_root (Path): Repository root used to resolve relative source paths.
 
         Returns:
-            dict[str, str | None]: Stable JSON-serialisable source summary.
+            dict[str, object]: Stable JSON-serialisable source summary.
         """
         if self.preset is not None:
-            return {"preset": self.preset, "type": "preset"}
+            summary: dict[str, object] = {
+                "preset": self.preset,
+                "type": "preset",
+            }
+            preset_spec = resolve_preset(self.preset)
+            preset_source = preset_spec.source
+            if (
+                isinstance(preset_source, PostProcessedSource)
+                and preset_source.split_provenance is not None
+                ):
+                summary.update(preset_source.split_provenance.as_dict())
+            return summary
         source, _ = self.custom_dataset_components()
-        return source.manifest_entry(repo_root=repo_root)
+        return dict(source.manifest_entry(repo_root=repo_root))
 
 
 class SweepAxisConfig(msgspec.Struct, frozen=True):

@@ -895,6 +895,66 @@ def test_dataset_source_summary_uses_config_layer_manifest_entries() -> None:
         "raw_logs_relpath": "BGL.log",
         "md5_checksum": "abc123",
     }
+    assert dataset_source_summary(
+        DatasetVariantConfig(
+            name="openstack-preset",
+            dataset_name="demo",
+            preset="openstack_deeplog_preprocessed",
+        ),
+        repo_root=repo_root,
+    ) == {
+        "type": "preset",
+        "preset": "openstack_deeplog_preprocessed",
+        "split_source": "predefined_file_boundary",
+        "train_source_files": ["openstack_normal1.log"],
+        "test_normal_source_files": ["openstack_normal2.log"],
+        "test_anomalous_source_files": ["openstack_abnormal.log"],
+        "source_file_labels": [
+            {
+                "source_file": "openstack_normal1.log",
+                "label": 0,
+                "split": "train",
+            },
+            {
+                "source_file": "openstack_normal2.log",
+                "label": 0,
+                "split": "test_normal",
+            },
+            {
+                "source_file": "openstack_abnormal.log",
+                "label": 1,
+                "split": "test_anomalous",
+            },
+        ],
+    }
+    assert dataset_source_summary(
+        DatasetVariantConfig(
+            name="hdfs-preset",
+            dataset_name="demo",
+            preset="hdfs_wuyifan18_deeplog_preprocessed",
+        ),
+        repo_root=repo_root,
+    ) == {
+        "type": "preset",
+        "preset": "hdfs_wuyifan18_deeplog_preprocessed",
+        "split_source": "predefined_file_boundary",
+        "train_source_files": ["hdfs_train"],
+        "test_normal_source_files": ["hdfs_test_normal"],
+        "test_anomalous_source_files": ["hdfs_test_abnormal"],
+        "source_file_labels": [
+            {"source_file": "hdfs_train", "label": 0, "split": "train"},
+            {
+                "source_file": "hdfs_test_normal",
+                "label": 0,
+                "split": "test_normal",
+            },
+            {
+                "source_file": "hdfs_test_abnormal",
+                "label": 1,
+                "split": "test_anomalous",
+            },
+        ],
+    }
 
 
 @pytest.mark.allow_no_new_coverage
