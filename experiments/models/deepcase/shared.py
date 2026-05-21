@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 import msgspec
 import numpy as np
-import torch
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import ModelManifest, require_entity_local_sequences
@@ -24,7 +23,7 @@ from experiments.models.base import ModelManifest, require_entity_local_sequence
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-    from rich.progress import Progress
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
 DEEPCASE_NO_EVENT = -1337
@@ -166,6 +165,12 @@ class DeepCaseWorkloadAlertSampling:
     alerts_per_cluster: int = 10
 
 
+@dataclass(slots=True, frozen=True)
+class _TrainingBatchProgressState:
+    progress: Progress | None
+    task_id: TaskID | None
+
+
 class DeepCaseWorkloadReductionMetrics(msgspec.Struct, frozen=True):
     """Paper-style DeepCASE workload-reduction metrics.
 
@@ -217,12 +222,12 @@ class DeepCaseSampleBatch:
     AnomaLog ``TemplateSequence``.
 
     Attributes:
-        contexts (torch.Tensor): Integer context windows of shape
+        contexts (np.ndarray): Integer context windows of shape
             ``(sample_count, context_length)``.
         context_original_event_ids (list[list[int | None]]): Original
             train-vocabulary ids for each context slot, with ``None`` used for
             padding slots and unknown prediction-time templates.
-        events (torch.Tensor): Integer target event ids of shape
+        events (np.ndarray): Integer target event ids of shape
             ``(sample_count,)``.
         scores (np.ndarray): Per-sample labels or scores aligned with
             ``contexts`` and ``events``.
@@ -238,9 +243,9 @@ class DeepCaseSampleBatch:
             to fall back to the parent sequence label.
     """
 
-    contexts: torch.Tensor
+    contexts: np.ndarray
     context_original_event_ids: list[list[int | None]]
-    events: torch.Tensor
+    events: np.ndarray
     scores: np.ndarray
     event_indexes: list[int]
     templates: list[str]
@@ -755,15 +760,39 @@ def build_training_batch(
         tuple[DeepCaseEventIdMap, DeepCaseSampleBatch]: Train event-id map and
         aligned tensor batch.
     """
-    template_to_event_id: dict[str, int] = {}
+    sequences_list = list(sequences)
+    event_id_map = DeepCaseEventIdMap.from_sequences(sequences_list)
+    batch = build_training_batch_from_map(
+        sequences_list,
+        event_id_map=event_id_map,
+        context_length=context_length,
+        timeout_seconds=timeout_seconds,
+        progress=progress,
+    )
+    return event_id_map, batch
+
+
+def build_training_batch_from_map(
+    sequences: Iterable[TemplateSequence],
+    *,
+    event_id_map: DeepCaseEventIdMap,
+    context_length: int,
+    timeout_seconds: float,
+    progress: Progress | None = None,
+) -> DeepCaseSampleBatch:
+    """Build a training batch using a precomputed DeepCASE event map.
+
+    Returns:
+        DeepCaseSampleBatch: Immutable batch aligned to the provided event map.
+    """
     timeout_ms = int(timeout_seconds * 1000)
     context_policy = ContextWindowPolicy(
         context_length=context_length,
         timeout_ms=timeout_ms,
-        no_event_id=DEEPCASE_NO_EVENT,
+        no_event_id=event_id_map.no_event_id,
     )
     batch_columns = _EmptyBatchColumns.create()
-    prepare_task: int | None = None
+    prepare_task: TaskID | None = None
     if progress is not None:
         total = len(sequences) if isinstance(sequences, Sized) else None
         prepare_task = progress.add_task(
@@ -772,52 +801,59 @@ def build_training_batch(
         )
 
     try:
-        for sequence in sequences:
-            require_entity_local_sequences((sequence,), detector_name="DeepCase")
-            templates = sequence.templates
-            sequence_event_ids = [
-                template_to_event_id.setdefault(template, len(template_to_event_id))
-                for template in templates
-            ]
-            sample_indexes = _deepcase_training_sample_indexes(sequence)
-            sequence_batch = _SequenceBatchData(
-                sequence=sequence,
-                templates=templates,
-                sequence_event_ids=sequence_event_ids,
-                original_event_ids=[
-                    template_to_event_id.get(template) for template in templates
-                ],
-                sample_indexes=sample_indexes,
-            )
-            _append_sequence_samples(
-                sequence_batch=sequence_batch,
-                context_policy=context_policy,
-                batch_columns=batch_columns,
-            )
-            if progress is not None and prepare_task is not None:
-                progress.advance(prepare_task)
+        _append_training_sequences_to_batch_columns(
+            sequences=sequences,
+            event_id_map=event_id_map,
+            context_policy=context_policy,
+            batch_columns=batch_columns,
+            progress_state=_TrainingBatchProgressState(
+                progress=progress,
+                task_id=prepare_task,
+            ),
+        )
     finally:
         if progress is not None and prepare_task is not None:
             progress.remove_task(prepare_task)
 
-    no_event_id = len(template_to_event_id)
-    event_id_to_template = {
-        event_id: template for template, event_id in template_to_event_id.items()
-    }
-    event_id_to_template[no_event_id] = str(DEEPCASE_NO_EVENT)
-    batch = batch_columns.to_batch(
+    return batch_columns.to_batch(
         context_length=context_length,
         no_event_placeholder=DEEPCASE_NO_EVENT,
-        no_event_id=no_event_id,
+        no_event_id=event_id_map.no_event_id,
     )
-    return (
-        DeepCaseEventIdMap(
-            template_to_event_id=template_to_event_id,
-            event_id_to_template=event_id_to_template,
-            no_event_id=no_event_id,
-        ),
-        batch,
-    )
+
+
+def _append_training_sequences_to_batch_columns(
+    *,
+    sequences: Iterable[TemplateSequence],
+    event_id_map: DeepCaseEventIdMap,
+    context_policy: ContextWindowPolicy,
+    batch_columns: _EmptyBatchColumns,
+    progress_state: _TrainingBatchProgressState,
+) -> None:
+    for sequence in sequences:
+        require_entity_local_sequences((sequence,), detector_name="DeepCase")
+        templates = sequence.templates
+        sequence_event_ids = [
+            event_id_map.template_to_event_id[template] for template in templates
+        ]
+        sample_indexes = _deepcase_training_sample_indexes(sequence)
+        sequence_batch = _SequenceBatchData(
+            sequence=sequence,
+            templates=templates,
+            sequence_event_ids=sequence_event_ids,
+            original_event_ids=[
+                event_id_map.template_to_event_id.get(template)
+                for template in templates
+            ],
+            sample_indexes=sample_indexes,
+        )
+        _append_sequence_samples(
+            sequence_batch=sequence_batch,
+            context_policy=context_policy,
+            batch_columns=batch_columns,
+        )
+        if progress_state.progress is not None and progress_state.task_id is not None:
+            progress_state.progress.advance(progress_state.task_id)
 
 
 def finding_reason_for_score(raw_score: float) -> ScoreReason:
@@ -1302,9 +1338,9 @@ class _EmptyBatchColumns:
             contexts_array[contexts_array == no_event_placeholder] = no_event_id
 
         return DeepCaseSampleBatch(
-            contexts=torch.tensor(contexts_array, dtype=torch.long),
+            contexts=contexts_array,
             context_original_event_ids=self.context_original_event_ids,
-            events=torch.tensor(self.events, dtype=torch.long),
+            events=np.asarray(self.events, dtype=int),
             scores=np.asarray(self.scores, dtype=float),
             event_indexes=self.event_indexes,
             templates=self.templates,

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import msgspec
 import numpy as np
+import scipy.sparse as sp
 import torch
 from deepcase import DeepCASE
 from typing_extensions import override
@@ -36,7 +37,7 @@ from experiments.models.deepcase.shared import (
     _DeepCasePredictionSummary,
     aggregate_sequence_score,
     build_sample_batch,
-    build_training_batch,
+    build_training_batch_from_map,
     build_workload_reduction_metrics,
     cluster_scores_for_labels,
     decision_label_for_score,
@@ -52,6 +53,9 @@ from experiments.models.torch_runtime import (
     resolve_torch_device,
     set_torch_seed,
 )
+
+DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE = 32_768
+DEEPCASE_PREDICTION_SAMPLE_CHUNK_SIZE = 32_768
 
 if TYPE_CHECKING:
     import logging
@@ -402,7 +406,6 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         default_factory=_DeepCasePredictionDiagnosticsState,
         repr=False,
     )
-    _prediction_sample_chunk_size: ClassVar[int] = 32_768
 
     def fit(
         self,
@@ -422,13 +425,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             ValueError: If the train split has no event samples.
         """
         self._ensure_unfit(detector_name=self.detector_name)
-        event_id_map, batch = build_training_batch(
-            train_sequences,
-            context_length=self.config.context_length,
-            timeout_seconds=self.config.timeout_seconds,
-            progress=progress,
-        )
-        if batch.sample_count == 0:
+        train_sequences_list = list(train_sequences)
+        event_id_map = DeepCaseEventIdMap.from_sequences(train_sequences_list)
+        if _training_sample_count_total(train_sequences_list) == 0:
             msg = "DeepCase requires at least one training event sample."
             raise ValueError(msg)
 
@@ -445,43 +444,40 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             min_samples=self.config.min_samples,
             threshold=self.config.confidence_threshold,
         ).to(str(device))
-        contexts = batch.contexts.to(device)
-        events = batch.events.reshape(-1, 1).to(device)
         fit_task = progress.add_task(
             "DeepCase: training context builder",
             total=self.config.epochs + 1,
         )
         if logger is not None:
             logger.info("Training DeepCase context builder")
+        _fit_context_builder_in_chunks(
+            model=model,
+            train_sequences=train_sequences_list,
+            event_id_map=event_id_map,
+            config=self.config,
+        )
         for _ in range(self.config.epochs):
-            model.context_builder.fit(
-                X=contexts,
-                y=events,
-                epochs=1,
-                batch_size=self.config.batch_size,
-                learning_rate=self.config.learning_rate,
-                teach_ratio=self.config.teach_ratio,
-                delta=self.config.label_smoothing_delta,
-                verbose=False,
-            )
             progress.advance(fit_task)
         progress.update(fit_task, description="DeepCase: clustering interpreter")
         if logger is not None:
             logger.info("Clustering DeepCase interpreter")
-        model.interpreter.cluster(
-            X=contexts,
-            y=events,
-            iterations=self.config.iterations,
-            batch_size=self.config.query_batch_size,
-            verbose=False,
+        clustered_samples = _cluster_training_samples(
+            model=model,
+            train_sequences=train_sequences_list,
+            event_id_map=event_id_map,
+            config=self.config,
+            device=device,
         )
         cluster_scores = cluster_scores_for_labels(
-            model.interpreter.clusters,
-            batch.scores,
+            clustered_samples.clusters,
+            clustered_samples.labels,
             strategy=self.config.cluster_score_strategy,
             anomaly_fraction_threshold=self.config.cluster_anomaly_fraction_threshold,
             no_score=self.config.no_score,
         )
+        model.interpreter.clusters = clustered_samples.clusters
+        model.interpreter.vectors = clustered_samples.vectors
+        model.interpreter.events = clustered_samples.events
         model.interpreter.score(scores=cluster_scores, verbose=False)
         progress.advance(fit_task)
         progress.update(fit_task, description="DeepCase: fit complete")
@@ -489,22 +485,22 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.model = model
         self.event_id_map = event_id_map
         self.device = device
-        self.train_sample_count = batch.sample_count
+        self.train_sample_count = int(clustered_samples.labels.shape[0])
         self.clustered_sample_count = int(
-            np.count_nonzero(model.interpreter.clusters != -1),
+            np.count_nonzero(clustered_samples.clusters != -1),
         )
         self.known_cluster_count = len(
-            {cluster for cluster in model.interpreter.clusters if cluster != -1},
+            {cluster for cluster in clustered_samples.clusters if cluster != -1},
         )
         scored_clusters = cluster_scores
         self.known_benign_cluster_count = int(
             np.count_nonzero(
-                (model.interpreter.clusters != -1) & np.isclose(scored_clusters, 0.0),
+                (clustered_samples.clusters != -1) & np.isclose(scored_clusters, 0.0),
             ),
         )
         self.known_malicious_cluster_count = int(
             np.count_nonzero(
-                (model.interpreter.clusters != -1) & np.isclose(scored_clusters, 1.0),
+                (clustered_samples.clusters != -1) & np.isclose(scored_clusters, 1.0),
             ),
         )
         self.unknown_cluster_score_count = int(
@@ -600,18 +596,11 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         """
         self._reset_prediction_diagnostics()
         self._reset_next_event_prediction_state()
-        buffered_sequences: list[TemplateSequence] = []
-        buffered_sample_count = 0
-        for sequence in sequences:
-            buffered_sequences.append(sequence)
-            buffered_sample_count += _prediction_sample_count(sequence)
-            if buffered_sample_count < self._prediction_chunk_sample_limit():
-                continue
-            yield from self._predict_sequence_chunk(buffered_sequences)
-            buffered_sequences = []
-            buffered_sample_count = 0
-        if buffered_sequences:
-            yield from self._predict_sequence_chunk(buffered_sequences)
+        for chunk in _chunk_prediction_sequences_by_sample_count(
+            sequences,
+            max_sample_count=self._prediction_chunk_sample_limit(),
+        ):
+            yield from self._predict_sequence_chunk(chunk)
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> DeepCaseManifest:
         """Return manifest metadata for the fitted DeepCase workflow.
@@ -761,14 +750,13 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         if model is None:
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
-        raw_predictions = model.predict(
-            X=batch.contexts.to(self.device),
-            y=batch.events.reshape(-1, 1).to(self.device),
-            iterations=self.config.iterations,
-            batch_size=self.config.query_batch_size,
-            verbose=False,
+        return _predict_batch_in_chunks(
+            model=model,
+            batch=batch,
+            device=self.device,
+            chunk_size=DEEPCASE_PREDICTION_SAMPLE_CHUNK_SIZE,
+            config=self.config,
         )
-        return [float(score) for score in raw_predictions]
 
     def _predict_sequence_chunk(
         self,
@@ -865,7 +853,10 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             int: Maximum number of event-centred samples to score together.
         """
-        return max(self.config.query_batch_size, self._prediction_sample_chunk_size)
+        return max(
+            self.config.query_batch_size,
+            DEEPCASE_PREDICTION_SAMPLE_CHUNK_SIZE,
+        )
 
     def _reset_prediction_diagnostics(self) -> None:
         """Reset accumulated prediction diagnostics before a new scoring run."""
@@ -965,11 +956,12 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         if model is None:
             msg = "deepcase must be fit before prediction."
             raise ValueError(msg)
-        confidence, _ = model.context_builder.predict(
-            X=batch.contexts.to(self.device),
-            steps=1,
+        return _predict_next_event_batch_in_chunks(
+            model=model,
+            batch=batch,
+            device=self.device,
+            chunk_size=DEEPCASE_PREDICTION_SAMPLE_CHUNK_SIZE,
         )
-        return confidence
 
     def _ensure_next_event_prediction_state(self) -> NextEventPredictionState:
         state = self._next_event_prediction_state
@@ -980,6 +972,353 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             )
             self._next_event_prediction_state = state
         return state
+
+
+@dataclass(frozen=True, slots=True)
+class _ClusteredTrainingSamples:
+    clusters: np.ndarray
+    vectors: sp.csc_matrix
+    events: np.ndarray
+    labels: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class _AttendedTrainingChunk:
+    vectors: sp.csc_matrix
+    events: np.ndarray
+    sample_indexes: np.ndarray
+
+
+def _training_sample_count(sequence: TemplateSequence) -> int:
+    if sequence.training_event_mask is not None:
+        return sum(1 for is_eligible in sequence.training_event_mask if is_eligible)
+    return len(sequence.events)
+
+
+def _training_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    if sequence.training_event_mask is None:
+        return list(range(len(sequence.events)))
+    return [
+        event_index
+        for event_index, is_eligible in enumerate(sequence.training_event_mask)
+        if is_eligible
+    ]
+
+
+def _training_sample_count_total(sequences: Sequence[TemplateSequence]) -> int:
+    return sum(_training_sample_count(sequence) for sequence in sequences)
+
+
+def _sample_mask(
+    *,
+    sequence_length: int,
+    sample_indexes: Sequence[int],
+) -> tuple[bool, ...]:
+    mask = [False] * sequence_length
+    for sample_index in sample_indexes:
+        mask[sample_index] = True
+    return tuple(mask)
+
+
+def _chunk_training_sequences_by_sample_count(
+    sequences: Iterable[TemplateSequence],
+    *,
+    max_sample_count: int,
+) -> Iterator[list[TemplateSequence]]:
+    chunk: list[TemplateSequence] = []
+    chunk_sample_count = 0
+    for sequence in sequences:
+        sample_indexes = _training_sample_indexes(sequence)
+        if not sample_indexes:
+            continue
+        start = 0
+        while start < len(sample_indexes):
+            if chunk_sample_count == max_sample_count:
+                yield chunk
+                chunk = []
+                chunk_sample_count = 0
+            remaining_capacity = max_sample_count - chunk_sample_count
+            remaining_sample_count = len(sample_indexes) - start
+            if start == 0 and remaining_sample_count <= remaining_capacity:
+                chunk.append(sequence)
+                chunk_sample_count += remaining_sample_count
+                break
+            take = min(remaining_capacity, remaining_sample_count)
+            chunk.append(
+                replace(
+                    sequence,
+                    training_event_mask=_sample_mask(
+                        sequence_length=len(sequence.events),
+                        sample_indexes=sample_indexes[start : start + take],
+                    ),
+                ),
+            )
+            chunk_sample_count += take
+            start += take
+            if chunk_sample_count == max_sample_count:
+                yield chunk
+                chunk = []
+                chunk_sample_count = 0
+    if chunk:
+        yield chunk
+
+
+def _chunk_prediction_sequences_by_sample_count(
+    sequences: Iterable[TemplateSequence],
+    *,
+    max_sample_count: int,
+) -> Iterator[list[TemplateSequence]]:
+    chunk: list[TemplateSequence] = []
+    chunk_sample_count = 0
+    for sequence in sequences:
+        sample_indexes = _prediction_sample_indexes(sequence)
+        if not sample_indexes:
+            continue
+        start = 0
+        while start < len(sample_indexes):
+            if chunk_sample_count == max_sample_count:
+                yield chunk
+                chunk = []
+                chunk_sample_count = 0
+            remaining_capacity = max_sample_count - chunk_sample_count
+            remaining_sample_count = len(sample_indexes) - start
+            if start == 0 and remaining_sample_count <= remaining_capacity:
+                chunk.append(sequence)
+                chunk_sample_count += remaining_sample_count
+                break
+            take = min(remaining_capacity, remaining_sample_count)
+            chunk.append(
+                replace(
+                    sequence,
+                    evaluation_event_mask=_sample_mask(
+                        sequence_length=len(sequence.events),
+                        sample_indexes=sample_indexes[start : start + take],
+                    ),
+                ),
+            )
+            chunk_sample_count += take
+            start += take
+            if chunk_sample_count == max_sample_count:
+                yield chunk
+                chunk = []
+                chunk_sample_count = 0
+    if chunk:
+        yield chunk
+
+
+def _fit_context_builder_in_chunks(
+    *,
+    model: DeepCASE,
+    train_sequences: Sequence[TemplateSequence],
+    event_id_map: DeepCaseEventIdMap,
+    config: DeepCaseModelConfig,
+) -> None:
+    for _ in range(config.epochs):
+        for chunk in _chunk_training_sequences_by_sample_count(
+            train_sequences,
+            max_sample_count=DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE,
+        ):
+            batch = build_training_batch_from_map(
+                chunk,
+                event_id_map=event_id_map,
+                context_length=config.context_length,
+                timeout_seconds=config.timeout_seconds,
+            )
+            if batch.sample_count == 0:
+                continue
+            model.context_builder.fit(
+                X=batch.contexts,
+                y=batch.events.reshape(-1, 1),
+                epochs=1,
+                batch_size=config.batch_size,
+                learning_rate=config.learning_rate,
+                teach_ratio=config.teach_ratio,
+                delta=config.label_smoothing_delta,
+                verbose=False,
+            )
+
+
+def _cluster_training_samples(
+    *,
+    model: DeepCASE,
+    train_sequences: Sequence[TemplateSequence],
+    event_id_map: DeepCaseEventIdMap,
+    config: DeepCaseModelConfig,
+    device: torch.device,
+) -> _ClusteredTrainingSamples:
+    total_sample_count = _training_sample_count_total(train_sequences)
+    clusters = np.full(total_sample_count, -1, dtype=int)
+    labels = np.empty(total_sample_count, dtype=float)
+    attended_chunks: list[_AttendedTrainingChunk] = []
+    sample_offset = 0
+    for chunk in _chunk_training_sequences_by_sample_count(
+        train_sequences,
+        max_sample_count=DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE,
+    ):
+        batch = build_training_batch_from_map(
+            chunk,
+            event_id_map=event_id_map,
+            context_length=config.context_length,
+            timeout_seconds=config.timeout_seconds,
+        )
+        if batch.sample_count == 0:
+            continue
+        labels[sample_offset : sample_offset + batch.sample_count] = batch.scores
+        attended_chunk = _attend_training_chunk(
+            model=model,
+            batch=batch,
+            config=config,
+            device=device,
+            sample_offset=sample_offset,
+        )
+        if attended_chunk is not None:
+            attended_chunks.append(attended_chunk)
+        sample_offset += batch.sample_count
+
+    if not attended_chunks:
+        return _ClusteredTrainingSamples(
+            clusters=clusters,
+            vectors=sp.csc_matrix((0, model.interpreter.features)),
+            events=np.empty(0, dtype=int),
+            labels=labels,
+        )
+
+    vectors = sp.vstack([chunk.vectors for chunk in attended_chunks], format="csc")
+    events = np.concatenate([chunk.events for chunk in attended_chunks])
+    sample_indexes = np.concatenate([chunk.sample_indexes for chunk in attended_chunks])
+    clustered_sample_clusters = _cluster_sample_vectors_by_event(
+        model=model,
+        vectors=vectors,
+        events=events,
+        config=config,
+    )
+    clusters[sample_indexes] = clustered_sample_clusters
+    return _ClusteredTrainingSamples(
+        clusters=clusters,
+        vectors=vectors,
+        events=events,
+        labels=labels,
+    )
+
+
+def _attend_training_chunk(
+    *,
+    model: DeepCASE,
+    batch: DeepCaseSampleBatch,
+    config: DeepCaseModelConfig,
+    device: torch.device,
+    sample_offset: int,
+) -> _AttendedTrainingChunk | None:
+    chunk_contexts = torch.as_tensor(
+        batch.contexts,
+        dtype=torch.int64,
+        device=device,
+    )
+    chunk_events = torch.as_tensor(
+        batch.events.reshape(-1, 1),
+        dtype=torch.int64,
+        device=device,
+    )
+    vectors, mask = model.interpreter.attended_context(
+        X=chunk_contexts,
+        y=chunk_events,
+        threshold=config.confidence_threshold,
+        iterations=config.iterations,
+        batch_size=config.query_batch_size,
+        verbose=False,
+    )
+    mask_array = mask.detach().cpu().numpy()
+    if not np.any(mask_array):
+        return None
+    return _AttendedTrainingChunk(
+        vectors=vectors,
+        events=batch.events[mask_array].reshape(-1),
+        sample_indexes=np.arange(
+            sample_offset,
+            sample_offset + batch.sample_count,
+            dtype=int,
+        )[mask_array],
+    )
+
+
+def _cluster_sample_vectors_by_event(
+    *,
+    model: DeepCASE,
+    vectors: sp.csc_matrix,
+    events: np.ndarray,
+    config: DeepCaseModelConfig,
+) -> np.ndarray:
+    clustered_sample_clusters = np.full(events.shape[0], -1, dtype=int)
+    cluster_offset = 0
+    for event in np.unique(events):
+        event_indexes = np.flatnonzero(events == event)
+        event_clusters = model.interpreter.dbscan.dbscan(
+            X=vectors[event_indexes],
+            eps=config.eps,
+            min_samples=config.min_samples,
+            verbose=False,
+        )
+        non_noise = event_clusters != -1
+        if np.any(non_noise):
+            event_clusters[non_noise] += cluster_offset
+            cluster_offset = int(event_clusters[non_noise].max()) + 1
+        clustered_sample_clusters[event_indexes] = event_clusters
+    return clustered_sample_clusters
+
+
+def _predict_batch_in_chunks(
+    *,
+    model: DeepCASE,
+    batch: DeepCaseSampleBatch,
+    device: torch.device,
+    chunk_size: int,
+    config: DeepCaseModelConfig,
+) -> list[float]:
+    raw_scores: list[float] = []
+    for start in range(0, batch.sample_count, chunk_size):
+        end = min(start + chunk_size, batch.sample_count)
+        chunk_predictions = model.predict(
+            X=torch.as_tensor(
+                batch.contexts[start:end],
+                dtype=torch.int64,
+                device=device,
+            ),
+            y=torch.as_tensor(
+                batch.events[start:end].reshape(-1, 1),
+                dtype=torch.int64,
+                device=device,
+            ),
+            iterations=config.iterations,
+            batch_size=config.query_batch_size,
+            verbose=False,
+        )
+        raw_scores.extend(float(score) for score in chunk_predictions)
+    return raw_scores
+
+
+def _predict_next_event_batch_in_chunks(
+    *,
+    model: DeepCASE,
+    batch: DeepCaseSampleBatch,
+    device: torch.device,
+    chunk_size: int,
+) -> torch.Tensor:
+    confidence_chunks: list[torch.Tensor] = []
+    for start in range(0, batch.sample_count, chunk_size):
+        end = min(start + chunk_size, batch.sample_count)
+        confidence, _ = model.context_builder.predict(
+            X=torch.as_tensor(
+                batch.contexts[start:end],
+                dtype=torch.int64,
+                device=device,
+            ),
+            steps=1,
+        )
+        confidence_chunks.append(confidence)
+    if not confidence_chunks:
+        output_size = model.context_builder.decoder_event.out.out_features
+        return torch.empty((0, 1, output_size), device=device)
+    return torch.cat(confidence_chunks, dim=0)
 
 
 def _findings_from_scores(

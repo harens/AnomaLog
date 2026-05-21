@@ -7,9 +7,11 @@ from types import SimpleNamespace
 import msgspec
 import numpy as np
 import pytest
+import scipy.sparse as sp
 import torch
 from deepcase import DeepCASE
 from deepcase.context_builder.context_builder import ContextBuilder
+from deepcase.interpreter.cluster import Cluster
 from deepcase.interpreter.interpreter import Interpreter
 from rich.progress import Progress
 
@@ -18,6 +20,7 @@ from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deepcase import DeepCaseModelConfig
+from experiments.models.deepcase import detector as deepcase_detector
 from experiments.models.deepcase import shared as deepcase_shared
 from experiments.models.deepcase.detector import DeepCaseDetector, DeepCaseRunMetrics
 from experiments.models.deepcase.shared import (
@@ -602,6 +605,137 @@ def test_deepcase_detector_rejects_repeated_fit() -> None:
         detector.fit((sequence,), progress=progress)
 
 
+def test_deepcase_fit_chunks_training_and_clustering_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase fit should process bounded training chunks on the configured device."""
+    detector = _deep_case_config(
+        name="deepcase",
+        epochs=1,
+        batch_size=2,
+        query_batch_size=2,
+        iterations=1,
+        device="cpu",
+    ).build_detector()
+    sequence = _sequence(
+        templates=["A", "B", "C", "D", "E"],
+        label=0,
+    )
+    monkeypatch.setattr(
+        deepcase_detector,
+        "DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE",
+        2,
+    )
+
+    fit_batch_sizes: list[int] = []
+    tensor_devices: list[str] = []
+    original_as_tensor = torch.as_tensor
+
+    def _record_as_tensor(
+        data: object,
+        dtype: object = None,
+        device: object = None,
+    ) -> torch.Tensor:
+        if device is not None:
+            tensor_devices.append(str(device))
+        return original_as_tensor(data, dtype=dtype, device=device)
+
+    def _fake_context_fit(
+        self: ContextBuilder,
+        **kwargs: object,
+    ) -> ContextBuilder:
+        x = kwargs["X"]
+        assert isinstance(x, np.ndarray)
+        fit_batch_sizes.append(np.asarray(x).shape[0])
+        torch.as_tensor(x, dtype=torch.int64, device="cpu")
+        return self
+
+    def _fake_attended_context(
+        self: Interpreter,
+        **kwargs: object,
+    ) -> tuple[sp.csc_matrix, torch.Tensor]:
+        x = kwargs["X"]
+        assert isinstance(x, torch.Tensor)
+        return sp.csc_matrix((0, self.features)), torch.zeros(
+            x.shape[0],
+            dtype=torch.bool,
+            device=x.device,
+        )
+
+    def _fake_score(
+        self: Interpreter,
+        *,
+        scores: np.ndarray,
+        verbose: bool,
+    ) -> Interpreter:
+        del scores, verbose
+        return self
+
+    monkeypatch.setattr(torch, "as_tensor", _record_as_tensor)
+    monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
+    monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
+    monkeypatch.setattr(Interpreter, "score", _fake_score)
+
+    with Progress(disable=True) as progress:
+        detector.fit((sequence,), progress=progress)
+
+    assert fit_batch_sizes == [2, 2, 1]
+    assert tensor_devices
+    assert all(device == str(detector.device) for device in tensor_devices)
+    assert detector.train_sample_count == len(sequence.events)
+
+
+def test_deepcase_predict_chunks_batches_on_configured_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase prediction should move only bounded chunks to the target device."""
+    detector = _deep_case_config(name="deepcase").build_detector()
+    detector.device = torch.device("cpu")
+    train_sequence = _sequence(templates=["A", "B", "C", "D", "E"])
+    detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
+    detector.model = DeepCASE(
+        features=len(detector.event_id_map.event_id_to_template),
+    )
+    monkeypatch.setattr(
+        deepcase_detector,
+        "DEEPCASE_PREDICTION_SAMPLE_CHUNK_SIZE",
+        2,
+    )
+
+    predict_batch_sizes: list[int] = []
+    tensor_devices: list[str] = []
+    original_as_tensor = torch.as_tensor
+
+    def _record_as_tensor(
+        data: object,
+        dtype: object = None,
+        device: object = None,
+    ) -> torch.Tensor:
+        if device is not None:
+            tensor_devices.append(str(device))
+        return original_as_tensor(data, dtype=dtype, device=device)
+
+    def _fake_predict(
+        _self: DeepCASE,
+        **kwargs: object,
+    ) -> np.ndarray:
+        x = kwargs["X"]
+        assert isinstance(x, torch.Tensor)
+        predict_batch_sizes.append(int(x.shape[0]))
+        assert x.device.type == "cpu"
+        return np.zeros(x.shape[0], dtype=float)
+
+    monkeypatch.setattr(torch, "as_tensor", _record_as_tensor)
+    monkeypatch.setattr(DeepCASE, "predict", _fake_predict)
+
+    outcomes = list(detector.predict_all((train_sequence,)))
+
+    assert len(outcomes) == 1
+    assert predict_batch_sizes == [2, 2, 1]
+    assert tensor_devices
+    assert all(device == "cpu" for device in tensor_devices)
+
+
 def test_model_registry_resolves_deepcase() -> None:
     """DeepCase should be registered as a built-in experiment detector."""
     assert resolve_model_config_type("deepcase") is DeepCaseModelConfig
@@ -846,7 +980,8 @@ def test_build_training_batch_materialises_sequence_templates_once(
         timeout_seconds=2.5,
     )
 
-    assert templates_access_count == 1
+    expected_template_access_count = 2
+    assert templates_access_count == expected_template_access_count
     assert label_resolution_count == len(sequence.events) + 1
     assert batch.sample_count == len(sequence.events)
     assert batch.parent_sequence_fallback_count == 0
@@ -1479,12 +1614,26 @@ def test_deepcase_manifest_reports_cluster_score_diagnostics(
         del kwargs
         return self
 
-    def _cluster_interpreter(self: Interpreter, **kwargs: object) -> np.ndarray:
-        del kwargs
-        self.clusters = np.array([0, -1, 1, 2])
-        self.events = np.array([0, 1, 2, 3])
-        self.vectors = torch.zeros((4, 1), dtype=torch.float32)
-        return self.clusters
+    def _fake_attended_context(
+        self: Interpreter,
+        **kwargs: object,
+    ) -> tuple[sp.csc_matrix, torch.Tensor]:
+        x = kwargs["X"]
+        assert isinstance(x, torch.Tensor)
+        return sp.csc_matrix((x.shape[0], self.features)), torch.ones(
+            x.shape[0],
+            dtype=torch.bool,
+            device=x.device,
+        )
+
+    dbscan_returns = iter([0, -1, 0, 0])
+
+    def _fake_dbscan(
+        self: Cluster,
+        **kwargs: object,
+    ) -> np.ndarray:
+        del self, kwargs
+        return np.array([next(dbscan_returns)], dtype=int)
 
     def _score_interpreter(
         self: Interpreter,
@@ -1496,7 +1645,8 @@ def test_deepcase_manifest_reports_cluster_score_diagnostics(
         return self
 
     monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
-    monkeypatch.setattr(Interpreter, "cluster", _cluster_interpreter)
+    monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
+    monkeypatch.setattr(Cluster, "dbscan", _fake_dbscan)
     monkeypatch.setattr(Interpreter, "score", _score_interpreter)
 
     with Progress(disable=True) as progress:
@@ -1530,8 +1680,8 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
             hooks so the test can isolate the cluster-labelling policy.
     """
     train_sequences = (
-        _sequence(templates=["A"], label=0),
-        _sequence(templates=["B"], label=1),
+        _sequence(templates=["A", "A"], label=0),
+        _sequence(templates=["A", "A"], label=1),
     )
     detector = DeepCaseDetector(
         config=_deep_case_config(
@@ -1541,36 +1691,30 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
             cluster_score_strategy="abstain_mixed",
         ),
     )
-    batch = DeepCaseSampleBatch(
-        contexts=torch.zeros((4, 1), dtype=torch.long),
-        context_original_event_ids=[[0], [0], [1], [1]],
-        events=torch.tensor([0, 0, 1, 1], dtype=torch.long),
-        scores=np.array([0, 1, 1, 1], dtype=float),
-        event_indexes=[0, 1, 2, 3],
-        templates=["A", "A", "B", "B"],
-        original_event_ids=[0, 0, 1, 1],
-        parent_sequence_fallback_count=0,
-    )
-    event_id_map = DeepCaseEventIdMap.from_sequences(train_sequences)
-    expected_cluster_scores = [-1.0, -1.0, 1.0, 1.0]
-
-    def _fake_build_training_batch(
-        *args: object,
-        **kwargs: object,
-    ) -> tuple[DeepCaseEventIdMap, DeepCaseSampleBatch]:
-        del args, kwargs
-        return event_id_map, batch
+    expected_cluster_scores = [-1.0, -1.0, -1.0, -1.0]
 
     def _fake_context_fit(self: ContextBuilder, **kwargs: object) -> ContextBuilder:
         del kwargs
         return self
 
-    def _fake_cluster(self: Interpreter, **kwargs: object) -> np.ndarray:
-        del kwargs
-        self.clusters = np.array([0, 0, 1, 1])
-        self.events = batch.events.cpu().numpy()
-        self.vectors = torch.zeros((4, 1), dtype=torch.float32)
-        return self.clusters
+    def _fake_attended_context(
+        self: Interpreter,
+        **kwargs: object,
+    ) -> tuple[sp.csc_matrix, torch.Tensor]:
+        x = kwargs["X"]
+        assert isinstance(x, torch.Tensor)
+        return sp.csc_matrix((x.shape[0], self.features)), torch.ones(
+            x.shape[0],
+            dtype=torch.bool,
+            device=x.device,
+        )
+
+    def _fake_dbscan(
+        self: Cluster,
+        **kwargs: object,
+    ) -> np.ndarray:
+        del self, kwargs
+        return np.array([0, 0, 0, 0], dtype=int)
 
     captured_scores: list[float] = []
 
@@ -1584,12 +1728,9 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
         captured_scores.extend(scores.tolist())
         return self
 
-    monkeypatch.setattr(
-        "experiments.models.deepcase.detector.build_training_batch",
-        _fake_build_training_batch,
-    )
     monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
-    monkeypatch.setattr(Interpreter, "cluster", _fake_cluster)
+    monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
+    monkeypatch.setattr(Cluster, "dbscan", _fake_dbscan)
     monkeypatch.setattr(Interpreter, "score", _fake_score)
 
     with Progress(disable=True) as progress:
@@ -1597,8 +1738,10 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
 
     assert captured_scores == expected_cluster_scores
     assert detector.known_benign_cluster_count == 0
-    expected_known_malicious_cluster_count = len(train_sequences)
-    expected_unknown_cluster_score_count = len(train_sequences)
+    expected_known_malicious_cluster_count = 0
+    expected_unknown_cluster_score_count = sum(
+        len(sequence.events) for sequence in train_sequences
+    )
     assert detector.known_malicious_cluster_count == (
         expected_known_malicious_cluster_count
     )
