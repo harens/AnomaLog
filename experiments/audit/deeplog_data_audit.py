@@ -814,7 +814,7 @@ def _validate_bgl_deeplog_paper_config(
             "BGL DeepLog paper configs must use history_size = 3.",
         )
         _require_equal(
-            _model_config_value(model_config, "top_g"),
+            max(_model_config_value(model_config, "top_g_values")),
             _BGL_PAPER_TOP_G,
             "BGL DeepLog paper configs must use top_g = 6.",
         )
@@ -885,7 +885,7 @@ def _validate_hdfs_deeplog_paper_config(
             "HDFS DeepLog paper configs must use history_size = 10.",
         )
         _require_equal(
-            _model_config_value(model_config, "top_g"),
+            max(_model_config_value(model_config, "top_g_values")),
             _HDFS_PAPER_TOP_G,
             "HDFS DeepLog paper configs must use top_g = 9.",
         )

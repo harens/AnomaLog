@@ -50,8 +50,8 @@ outcomes:
     derived recommendation at runtime, so it is not holding the paper threshold
     fixed during evaluation.
 - One concrete AnomaLog protocol bug was found: the HDFS paper-facing bundles
-  described `g = 9` in comments, but inherited `deeplog_default.top_g_values =
-  [1, 3, 5, 7, 9, 11]`, so runtime scoring was actually using `g = 11`.
+  now use `deeplog_default.top_g_values = [1, 3, 5, 7, 9]`, matching the
+  paper-facing HDFS runtime cut-off.
 
 This report therefore treats the remaining BGL and HDFS gaps as data/protocol
 issues first. The checked-in fixes from this audit pin HDFS paper runs back to
@@ -154,6 +154,16 @@ keeps the paper-faithful `instance_id` grouping while removing the accidental
 session-token leakage into Spell. The next faithful step would be to recover
 the exact paper corpus or a reconstruction that yields the target counts
 before tuning any detector behaviour.
+
+OpenStack research note:
+
+- keep the checked-in OpenStack experiment key-only for now;
+- do not present it as a full parameter-difference reproduction, because the
+  current parser and canonicalisation steps change the observable parameter
+  surface too aggressively for a faithful paper-style comparison;
+- treat the registry entry as an internal DeepLog-style comparison against the
+  same file-boundary split, not as a claim about OpenStack anomaly-detection
+  parity with the original paper.
 
 Naive Bayes is likewise omitted from the HDFS paper manifests. The HDFS
 prefix split keeps the training side normal-only, so the classifier cannot be

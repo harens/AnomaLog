@@ -163,8 +163,7 @@ This section keeps the short version in the main DeepLog note:
 - the reproduction configs now use generic split modes, not a DeepLog-only
   pipeline;
 - the experiment-layer `deeplog_default` model now defaults to key-only scoring,
-  and the HDFS paper-facing bundles pin `top_g_values = [1, 3, 5, 7, 9]` so the
-  runtime scorer no longer drifts to `g = 11`;
+  and the HDFS paper-facing bundles pin `top_g_values = [1, 3, 5, 7, 9]`;
 - for the official preprocessed HDFS regime, split-file prefixes are now used
   directly to assign train/test membership for entity sequences, avoiding an
   extra raw-entry split indirection while keeping the same preset surface;

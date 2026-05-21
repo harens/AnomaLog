@@ -247,7 +247,7 @@ def _assert_deeplog_manifest(
     model_manifest = {str(key): value for key, value in model_manifest_raw.items()}
     assert model_manifest["detector"] == deeplog_model.detector
     assert model_manifest["history_size"] == deeplog_model.history_size
-    assert model_manifest["top_g"] == deeplog_model.top_g
+    assert model_manifest["top_g"] == max(deeplog_model.top_g_values)
     assert model_manifest["top_g_values"] == list(deeplog_model.top_g_values)
     assert model_manifest["num_layers"] == deeplog_model.num_layers
     assert model_manifest["hidden_size"] == deeplog_model.hidden_size

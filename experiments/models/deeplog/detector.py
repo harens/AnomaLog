@@ -556,9 +556,10 @@ class DeepLogModelConfig(
         msgspec.Meta(
             min_length=1,
             description="DeepLog replay cut-offs for evaluating the top-g rule. "
-            "The paper reports the sequence-level rule across 1, 3, 5, 7, 9, and 11.",
+            "The paper-facing reproduction keeps the replay cut-offs at 1, 3, "
+            "5, 7, and 9.",
         ),
-    ] = (1, 3, 5, 7, 9, 11)
+    ] = (1, 3, 5, 7, 9)
     num_layers: Annotated[
         PositiveInt,
         msgspec.Meta(
@@ -663,11 +664,6 @@ class DeepLogModelConfig(
             DeepLogDetector: Configured detector instance.
         """
         return DeepLogDetector(config=self)
-
-    @property
-    def top_g(self) -> int:
-        """Return the maximum configured top-g cut-off."""
-        return max(self.top_g_values)
 
 
 @dataclass(slots=True)
@@ -884,7 +880,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 template_to_index=self.template_to_index,
                 index_to_template=self.index_to_template,
                 history_size=self.config.history_size,
-                top_g=self.config.top_g,
+                top_g=max(self.config.top_g_values),
             ),
             prefix_templates=self._prediction_prefix_templates(sequence),
         )
@@ -1023,7 +1019,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 )
             ),
             history_size=self.config.history_size,
-            top_g=self.config.top_g,
+            top_g=max(self.config.top_g_values),
             top_g_values=list(self.config.top_g_values),
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,
@@ -1152,7 +1148,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         state = self._next_event_prediction_state
         if state is None:
             state = NextEventPredictionState.create(
-                k_values=_next_event_k_values(self.config.top_g_values),
+                k_values=self.config.top_g_values,
                 vocabulary_policy=self.config.vocabulary_policy,
             )
             self._next_event_prediction_state = state
@@ -1161,7 +1157,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     def _reset_next_event_prediction_state(self) -> None:
         """Reset next-event diagnostics before a fresh scoring run."""
         self._next_event_prediction_state = NextEventPredictionState.create(
-            k_values=_next_event_k_values(self.config.top_g_values),
+            k_values=self.config.top_g_values,
             vocabulary_policy=self.config.vocabulary_policy,
         )
 
@@ -1498,19 +1494,6 @@ def _fraction(numerator: int, denominator: int) -> float:
     if denominator == 0:
         return 0.0
     return numerator / denominator
-
-
-def _next_event_k_values(top_g_values: tuple[int, ...]) -> tuple[int, ...]:
-    """Return the DeepLog next-event reporting cut-offs.
-
-    Args:
-        top_g_values (tuple[int, ...]): DeepLog top-g reporting thresholds from
-            the config.
-
-    Returns:
-        tuple[int, ...]: Ordered top-k cut-offs configured for the run.
-    """
-    return top_g_values
 
 
 def _rank_hit_count(*, rank_counts: Counter[int | None], top_g: int) -> int:

@@ -81,8 +81,8 @@ def test_deeplog_model_config_defaults_top_g_values() -> None:
     """DeepLog should default to the paper's replay cut-offs."""
     config = _deep_log_config(name="deeplog")
 
-    assert config.top_g_values == (1, 3, 5, 7, 9, 11)
-    assert config.top_g == 11
+    assert config.top_g_values == (1, 3, 5, 7, 9)
+    assert max(config.top_g_values) == 9
 
 
 def test_deeplog_model_config_accepts_full_dataset_next_event_policy() -> None:
@@ -2196,7 +2196,7 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
     assert manifest.parameter_validation_policy.startswith("per-template temporal")
     assert manifest.parameter_detection_enabled is True
     assert manifest.history_size == detector.config.history_size
-    assert manifest.top_g == detector.config.top_g
+    assert manifest.top_g == max(detector.config.top_g_values)
     assert manifest.top_g_values == list(detector.config.top_g_values)
     assert manifest.trained_parameter_model_count == 1
     assert manifest.skipped_parameter_model_count == 1
@@ -2232,4 +2232,4 @@ def test_hdfs_paper_configs_pin_runtime_top_g_to_nine() -> None:
         )
         assert isinstance(deeplog_bundle.model, DeepLogModelConfig)
         assert deeplog_bundle.model.top_g_values == (1, 3, 5, 7, 9)
-        assert deeplog_bundle.model.top_g == 9
+        assert max(deeplog_bundle.model.top_g_values) == 9

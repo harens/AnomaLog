@@ -29,7 +29,7 @@ from experiments.models.sequence_masks import training_event_index_mask
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from rich.progress import Progress
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
 
@@ -458,20 +458,13 @@ def build_normal_training_corpus(
         total=total,
     )
     normal_sequences: list[TemplateSequence] = []
-    template_set: set[str] = set()
-    event_count = 0
     try:
-        for sequence in train_sequences:
-            if observe_sequence is not None:
-                observe_sequence(sequence)
-            eligible_indexes = training_event_index_mask(sequence)
-            if not eligible_indexes:
-                progress.advance(prepare_task)
-                continue
-            normal_sequences.append(sequence)
-            event_count += len(eligible_indexes)
-            template_set.update(sequence.templates)
-            progress.advance(prepare_task)
+        normal_sequences, template_set, event_count = _collect_normal_training_corpus(
+            train_sequences=train_sequences,
+            observe_sequence=observe_sequence,
+            progress=progress,
+            prepare_task=prepare_task,
+        )
     finally:
         progress.remove_task(prepare_task)
     if not normal_sequences:
@@ -482,3 +475,42 @@ def build_normal_training_corpus(
         templates=tuple(sorted(template_set)),
         event_count=event_count,
     )
+
+
+def _collect_normal_training_corpus(
+    *,
+    train_sequences: Iterable[TemplateSequence],
+    observe_sequence: Callable[[TemplateSequence], None] | None,
+    progress: Progress,
+    prepare_task: TaskID,
+) -> tuple[list[TemplateSequence], set[str], int]:
+    """Collect normal DeepLog training sequences and their vocabulary.
+
+    Args:
+        train_sequences (Iterable[TemplateSequence]): Candidate training
+            sequences.
+        observe_sequence (Callable[[TemplateSequence], None] | None): Optional
+            callback invoked for every observed training sequence before target
+            filtering is applied.
+        progress (Progress): Active progress reporter.
+        prepare_task (TaskID): Progress task being advanced while scanning.
+
+    Returns:
+        tuple[list[TemplateSequence], set[str], int]: Filtered normal
+        sequences, their vocabulary, and the total eligible event count.
+    """
+    normal_sequences: list[TemplateSequence] = []
+    template_set: set[str] = set()
+    event_count = 0
+    for sequence in train_sequences:
+        if observe_sequence is not None:
+            observe_sequence(sequence)
+        eligible_indexes = training_event_index_mask(sequence)
+        if not eligible_indexes:
+            progress.advance(prepare_task)
+            continue
+        normal_sequences.append(sequence)
+        event_count += len(eligible_indexes)
+        template_set.update(sequence.templates)
+        progress.advance(prepare_task)
+    return normal_sequences, template_set, event_count
