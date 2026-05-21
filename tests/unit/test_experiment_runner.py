@@ -360,6 +360,106 @@ def test_run_experiment_batches_groups_sequentially(
     assert serial_runs == [2]
 
 
+def test_run_experiment_parallelises_baselines_with_nb_before_deepcase(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The registry baseline group should submit together before DeepCASE.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading, the worker
+            pool, and the serial runner so the test can inspect scheduling.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+
+    class _IndexedBundle(Protocol):
+        index: int
+
+    expected_max_workers = 2
+    bundles = [
+        SimpleNamespace(
+            index=0,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=1,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=2,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=3,
+            run_group="deepcase",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+    ]
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
+    serial_runs: list[int] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        @staticmethod
+        def submit(
+            func: object,
+            payload: tuple[Path, int, bool, bool, bool],
+        ) -> Future[Path]:
+            del func
+            submitted_payloads.append(payload)
+            future: Future[Path] = Future()
+            index = payload[1]
+            future.set_result(tmp_path / f"parallel-{index}")
+            return future
+
+    def _run_bundle(
+        bundle: _IndexedBundle,
+        *,
+        force: bool = False,
+        write_predictions: bool = False,
+        debug_reporting: bool = False,
+    ) -> Path:
+        del force, write_predictions, debug_reporting
+        serial_runs.append(bundle.index)
+        return tmp_path / f"serial-{bundle.index}"
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner, "_run_bundle", _run_bundle)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [
+        tmp_path / "parallel-0",
+        tmp_path / "parallel-1",
+        tmp_path / "parallel-2",
+        tmp_path / "serial-3",
+    ]
+    assert submitted_payloads == [
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
+        (tmp_path / "sweep.toml", 2, True, False, False),
+    ]
+    assert serial_runs == [3]
+
+
 def test_run_experiment_logs_bundle_failures_and_keeps_running(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -51,6 +51,10 @@ def _write_suite_registry_tree(tmp_path: Path) -> Path:
         'name = "markov_default"\ndetector = "markov"\n',
         encoding="utf-8",
     )
+    (models_dir / "deepcase.toml").write_text(
+        'name = "deepcase"\ndetector = "deepcase"\n',
+        encoding="utf-8",
+    )
     registry_path = experiments_root / "configs" / "registry.toml"
     registry_path.write_text(
         (
