@@ -636,9 +636,18 @@ def test_deepcase_fit_chunks_training_and_clustering_batches(
         dtype: object = None,
         device: object = None,
     ) -> torch.Tensor:
-        if device is not None:
+        if isinstance(dtype, torch.dtype) and isinstance(
+            device,
+            (str, int, torch.device),
+        ):
             tensor_devices.append(str(device))
-        return original_as_tensor(data, dtype=dtype, device=device)
+            return original_as_tensor(data, dtype=dtype, device=device)
+        if isinstance(dtype, torch.dtype):
+            return original_as_tensor(data, dtype=dtype)
+        if isinstance(device, (str, int, torch.device)):
+            tensor_devices.append(str(device))
+            return original_as_tensor(data, device=device)
+        return original_as_tensor(data)
 
     def _fake_context_fit(
         self: ContextBuilder,
@@ -711,9 +720,18 @@ def test_deepcase_predict_chunks_batches_on_configured_device(
         dtype: object = None,
         device: object = None,
     ) -> torch.Tensor:
-        if device is not None:
+        if isinstance(dtype, torch.dtype) and isinstance(
+            device,
+            (str, int, torch.device),
+        ):
             tensor_devices.append(str(device))
-        return original_as_tensor(data, dtype=dtype, device=device)
+            return original_as_tensor(data, dtype=dtype, device=device)
+        if isinstance(dtype, torch.dtype):
+            return original_as_tensor(data, dtype=dtype)
+        if isinstance(device, (str, int, torch.device)):
+            tensor_devices.append(str(device))
+            return original_as_tensor(data, device=device)
+        return original_as_tensor(data)
 
     def _fake_predict(
         _self: DeepCASE,

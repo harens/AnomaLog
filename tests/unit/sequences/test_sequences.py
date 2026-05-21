@@ -1096,6 +1096,43 @@ def test_chronological_stream_chunk_count_matches_chunk_size() -> None:
     ]
 
 
+def test_chronological_stream_default_iteration_uses_parent_chunking() -> None:
+    """Direct chronological-stream iteration should fall back to positional chunking."""
+    sink = _sink(
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="second",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="first",
+            anomalous=0,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=1,
+        train_frac=1.0,
+        test_frac=0.0,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.templates for sequence in sequences] == [["FIRST"], ["SECOND"]]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+    ]
+
+
 def test_chronological_stream_grouping_preserves_source_order_and_event_labels() -> (
     None
 ):

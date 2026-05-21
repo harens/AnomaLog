@@ -178,12 +178,6 @@ class RemoteZipSource(DatasetSource):
                         state=state,
                     ),
                 )
-            try:
-                temp_zip_path.replace(zip_path)
-            except OSError:
-                _remove_partial(temp_zip_path)
-                raise
-
         except HTTPError as exc:
             if exc.code == HTTPStatus.SERVICE_UNAVAILABLE:
                 logger.warning(
@@ -207,6 +201,12 @@ class RemoteZipSource(DatasetSource):
             logger.warning("Download cancelled by user")
             _remove_partial(temp_zip_path)
             _remove_partial(zip_path)
+            raise
+
+        try:
+            temp_zip_path.replace(zip_path)
+        except OSError:
+            _remove_partial(temp_zip_path)
             raise
 
     @staticmethod
@@ -262,18 +262,13 @@ class RemoteZipSource(DatasetSource):
             OSError: If the archive cannot be cleaned up.
             ValueError: If checksum verification fails.
             zipfile.BadZipFile: If the archive is not a valid zip file and the
-                remote URL does not identify a tarball.
+            remote URL does not identify a tarball.
             tarfile.TarError: If tarball extraction fails.
         """
         try:
             if self.md5_checksum is not None:
                 verify_md5(zip_path, self.md5_checksum)
-            try:
-                extract_zip(zip_path, zip_path.with_suffix(""))
-            except zipfile.BadZipFile:
-                if not self._archive_is_tarball():
-                    raise
-                self._extract_tarball(zip_path)
+            self._extract_archive(zip_path)
         except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError):
             if zip_path.exists():
                 zip_path.unlink()
@@ -282,6 +277,19 @@ class RemoteZipSource(DatasetSource):
         logger = get_run_logger()
         logger.info("Removing zip file %s", zip_path)
         zip_path.unlink()
+
+    def _extract_archive(self, zip_path: Path) -> None:
+        """Extract a downloaded archive, falling back to tarball handling.
+
+        Raises:
+            zipfile.BadZipFile: If the archive is neither a zip nor a tarball.
+        """
+        try:
+            extract_zip(zip_path, zip_path.with_suffix(""))
+        except zipfile.BadZipFile:
+            if not self._archive_is_tarball():
+                raise
+            self._extract_tarball(zip_path)
 
     @staticmethod
     def _extract_tarball(archive_path: Path) -> None:

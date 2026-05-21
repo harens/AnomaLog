@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from math import ceil, floor, isclose
 from statistics import mean
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from anomalog.parsers.structured.contracts import ANOMALOUS_FIELD, is_anomalous_label
 from anomalog.sequences import SplitApplicationOrder, SplitLabel, StraddlingGroupPolicy
@@ -697,6 +697,17 @@ def _model_config_value(model_config: object, attribute: str) -> object:
     return getattr(model_config, attribute)
 
 
+@runtime_checkable
+class _TopGValuesModelConfig(Protocol):
+    top_g_values: Iterable[int]
+
+
+def _model_config_top_g_values(
+    model_config: _TopGValuesModelConfig,
+) -> tuple[int, ...]:
+    return tuple(int(value) for value in model_config.top_g_values)
+
+
 def _structured_line_order(row: object) -> int:
     return int(getattr(row, "line_order", 0))
 
@@ -808,13 +819,16 @@ def _validate_bgl_deeplog_paper_config(
         msg = "BGL DeepLog paper configs must use raw-entry prefix split modes."
         raise TypeError(msg)
     if model_config is not None:
+        if not isinstance(model_config, _TopGValuesModelConfig):
+            msg = "BGL DeepLog paper configs must define top_g_values."
+            raise TypeError(msg)
         _require_equal(
             _model_config_value(model_config, "history_size"),
             _BGL_PAPER_HISTORY_SIZE,
             "BGL DeepLog paper configs must use history_size = 3.",
         )
         _require_equal(
-            max(_model_config_value(model_config, "top_g_values")),
+            max(_model_config_top_g_values(model_config)),
             _BGL_PAPER_TOP_G,
             "BGL DeepLog paper configs must use top_g = 6.",
         )
@@ -879,13 +893,16 @@ def _validate_hdfs_deeplog_paper_config(
             "HDFS assign_first configs must use assign_by_first_event.",
         )
     if model_config is not None:
+        if not isinstance(model_config, _TopGValuesModelConfig):
+            msg = "HDFS DeepLog paper configs must define top_g_values."
+            raise TypeError(msg)
         _require_equal(
             _model_config_value(model_config, "history_size"),
             _HDFS_PAPER_HISTORY_SIZE,
             "HDFS DeepLog paper configs must use history_size = 10.",
         )
         _require_equal(
-            max(_model_config_value(model_config, "top_g_values")),
+            max(_model_config_top_g_values(model_config)),
             _HDFS_PAPER_TOP_G,
             "HDFS DeepLog paper configs must use top_g = 9.",
         )

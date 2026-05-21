@@ -1821,7 +1821,7 @@ class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
             fragmenting the chunk.
         """
         if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
-            yield from super().__iter__()
+            yield from NonEntitySequenceBuilder.__iter__(self)
             return
 
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
