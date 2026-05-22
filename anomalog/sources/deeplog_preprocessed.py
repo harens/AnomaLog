@@ -62,6 +62,37 @@ class FileBoundarySplitProvenance:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class NormalOnlySessionPrefixProvenance:
+    """Describe a normal-only event prefix with excluded archive files."""
+
+    split_source: Literal["normal_only_event_prefix"]
+    included_source_files: tuple[str, ...]
+    excluded_source_files: tuple[str, ...]
+    excluded_anomalous_source_files: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-friendly provenance summary."""
+        return {
+            "split_source": self.split_source,
+            "included_source_files": list(self.included_source_files),
+            "excluded_source_files": list(self.excluded_source_files),
+            "excluded_anomalous_source_files": list(
+                self.excluded_anomalous_source_files,
+            ),
+            "source_file_labels": [
+                *(
+                    {
+                        "source_file": source_file,
+                        "label": 0,
+                        "split": "normal_only",
+                    }
+                    for source_file in self.included_source_files
+                ),
+            ],
+        }
+
+
 def build_session_file_boundary_provenance(
     split_files: SplitFileSpecs,
 ) -> FileBoundarySplitProvenance:
@@ -82,6 +113,33 @@ def build_session_file_boundary_provenance(
         train_source_files=(train_split[0],),
         test_normal_source_files=(test_normal_split[0],),
         test_anomalous_source_files=(test_anomalous_split[0],),
+    )
+
+
+def build_normal_only_session_prefix_provenance(
+    split_files: SplitFileSpecs,
+    *,
+    excluded_source_files: tuple[str, ...],
+    excluded_anomalous_source_files: tuple[str, ...],
+) -> NormalOnlySessionPrefixProvenance:
+    """Build provenance metadata for a normal-only session prefix split.
+
+    Returns:
+        NormalOnlySessionPrefixProvenance: Source-file provenance for the
+            normal-only compatibility split.
+
+    Raises:
+        ValueError: If the split does not define at least one source file.
+    """
+    if not split_files:
+        msg = "normal-only prefix splits must include at least one source file."
+        raise ValueError(msg)
+    included_source_files = tuple(split_file[0] for split_file in split_files)
+    return NormalOnlySessionPrefixProvenance(
+        split_source="normal_only_event_prefix",
+        included_source_files=included_source_files,
+        excluded_source_files=excluded_source_files,
+        excluded_anomalous_source_files=excluded_anomalous_source_files,
     )
 
 
@@ -128,21 +186,47 @@ class PostProcessedSource(DatasetSource):
     raw_logs_relpath: Path | None = None
 
     @property
-    def split_provenance(self) -> FileBoundarySplitProvenance | None:
+    def split_provenance(
+        self,
+    ) -> FileBoundarySplitProvenance | NormalOnlySessionPrefixProvenance | None:
         """Return provenance for recognised file-boundary split materialisers."""
-        if not isinstance(self.post_process, partial):
-            return None
-        keywords = self.post_process.keywords
-        if keywords is None:
-            return None
-        split_files = keywords.get("split_files")
-        if split_files is None:
-            return None
-        if self.post_process.func is materialise_labelled_session_stream:
-            return build_session_file_boundary_provenance(split_files)
-        if self.post_process.func is materialise_labelled_raw_stream:
-            return build_labelled_raw_file_boundary_provenance(split_files)
-        return None
+        provenance = None
+        if isinstance(self.post_process, partial):
+            keywords = self.post_process.keywords
+            if keywords is not None:
+                split_files = keywords.get("split_files")
+                if split_files is not None:
+                    if self.post_process.func is materialise_labelled_session_stream:
+                        excluded_source_files = keywords.get("excluded_source_files")
+                        excluded_anomalous_source_files = keywords.get(
+                            "excluded_anomalous_source_files",
+                        )
+                        if (
+                            excluded_source_files is not None
+                            or excluded_anomalous_source_files is not None
+                        ):
+                            provenance = build_normal_only_session_prefix_provenance(
+                                split_files,
+                                excluded_source_files=(
+                                    ()
+                                    if excluded_source_files is None
+                                    else excluded_source_files
+                                ),
+                                excluded_anomalous_source_files=(
+                                    ()
+                                    if excluded_anomalous_source_files is None
+                                    else excluded_anomalous_source_files
+                                ),
+                            )
+                        else:
+                            provenance = build_session_file_boundary_provenance(
+                                split_files,
+                            )
+                    elif self.post_process.func is materialise_labelled_raw_stream:
+                        provenance = build_labelled_raw_file_boundary_provenance(
+                            split_files,
+                        )
+        return provenance
 
     def materialise(
         self,
@@ -252,6 +336,8 @@ def materialise_labelled_session_stream(
     source_root: Path,
     raw_logs_path: Path,
     split_files: SplitFileSpecs,
+    excluded_source_files: tuple[str, ...] = (),
+    excluded_anomalous_source_files: tuple[str, ...] = (),
 ) -> None:
     """Expand labelled session files into one event per line.
 
@@ -260,11 +346,16 @@ def materialise_labelled_session_stream(
         raw_logs_path (Path): Destination path for the synthetic event stream.
         split_files (SplitFileSpecs): Session-file names plus their anomaly
             labels in the order they should be written.
+        excluded_source_files (tuple[str, ...]): Source files omitted from the
+            materialised stream.
+        excluded_anomalous_source_files (tuple[str, ...]): Anomalous source
+            files omitted from the materialised stream.
 
     Raises:
         FileNotFoundError: If any expected split file is missing from the
             source root.
     """
+    del excluded_source_files, excluded_anomalous_source_files
     event_count = 0
     session_count = 0
 

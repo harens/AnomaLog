@@ -1,0 +1,25 @@
+name = "hdfs_wuyifan18_deepcase_table_iv_compat"
+description = "DeepCASE Table-IV compatibility view over the normal-only HDFS event stream, using the first 20% for training and the remaining 80% for prediction-only evaluation."
+
+[dataset]
+name = "hdfs_wuyifan18_deepcase_table_iv_compat"
+dataset_name = "HDFS_WUYIFAN18_DEEPCASE_TABLE_IV_COMPAT"
+preset = "hdfs_wuyifan18_deepcase_table_iv_compat"
+template_parser = "identity"
+evaluation_unit = "continuous_event_stream"
+description = "Prediction-only HDFS compatibility config built from hdfs_test_normal only, with the first 20% of the event stream used as train and the remaining 80% used for next-event prediction."
+
+[dataset.sequence]
+grouping = "chronological_stream"
+chunk_size = 100000
+train_fraction = 0.2
+test_fraction = 0.8
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_fraction"
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+train_entry_fraction = 0.2
+
+[dataset.cache_paths]
+namespace = "hdfs_wuyifan18_deepcase_table_iv_compat"

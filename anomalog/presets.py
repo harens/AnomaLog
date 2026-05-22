@@ -43,6 +43,13 @@ _HDFS_WUYIFAN18_SPLIT_FILES = (
     ("hdfs_test_abnormal", 1),
 )
 
+_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_SPLIT_FILES = (("hdfs_test_normal", 0),)
+
+_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_EXCLUDED_FILES = (
+    "hdfs_train",
+    "hdfs_test_abnormal",
+)
+
 _OPENSTACK_SPLIT_FILES = (
     ("openstack_normal1.log", "openstack_train", 0),
     ("openstack_normal2.log", "openstack_test_normal", 0),
@@ -94,6 +101,26 @@ hdfs_wuyifan18_deeplog_preprocessed = (
                 split_files=_HDFS_WUYIFAN18_SPLIT_FILES,
             ),
             raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
+        ),
+    )
+    .parse_with(DelimitedLabelledEventParser())
+    .template_with(IdentityTemplateParser)
+)
+
+hdfs_wuyifan18_deepcase_table_iv_compat = (
+    DatasetSpec("HDFS_WUYIFAN18_DEEPCASE_TABLE_IV_COMPAT")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+            ),
+            post_process=partial(
+                materialise_labelled_session_stream,
+                split_files=_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_SPLIT_FILES,
+                excluded_source_files=_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_EXCLUDED_FILES,
+                excluded_anomalous_source_files=("hdfs_test_abnormal",),
+            ),
+            raw_logs_relpath=Path("preprocessed/hdfs_test_normal_compat.log"),
         ),
     )
     .parse_with(DelimitedLabelledEventParser())
@@ -174,6 +201,7 @@ _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
     "hdfs_v1": hdfs_v1,
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
+    "hdfs_wuyifan18_deepcase_table_iv_compat": hdfs_wuyifan18_deepcase_table_iv_compat,
     "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
     "thunderbird": thunderbird,
     "thunderbird_smoke": thunderbird_smoke,

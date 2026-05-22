@@ -30,6 +30,36 @@ has the expected archive shape for the common `wuyifan18` reproduction:
 This means `train_key_vocabulary_size = 14` is expected for this split. It is
 not evidence that preprocessing lost event keys.
 
+## Denominator Map
+
+The different HDFS reports in this repository are not directly comparable
+unless their evaluation population is stated explicitly.
+
+| Implementation view | Source files | Next-event population | Anomalous files in next-event evaluation? | Notes |
+| --- | --- | --- | --- | --- |
+| AnomaLog DeepLog | `hdfs_train`, `hdfs_test_normal`, `hdfs_test_abnormal` | all test events from `hdfs_test_normal` + `hdfs_test_abnormal`, with strict `h=10` eligibility | yes | This is the all-test population used by the current experiment layer. |
+| `deeplog/` example | `hdfs_train`, `hdfs_test_normal`, `hdfs_test_abnormal` | the 80% held-out tail of `hdfs_test_normal` | no | The public example keeps anomaly detection separate from the next-event classification report. |
+| `deepcase/` example | `hdfs_test_normal` | the 80% held-out tail of `hdfs_test_normal` | no | The example script only loads the normal file, so it cannot be compared to a full archive denominator. |
+
+Observed denominators from the scratch audit:
+
+- AnomaLog test population: `11,077,032` events
+- AnomaLog strict `h=10` next-event eligibility: `5,421,251` events
+- `deeplog/` normal-only next-event population: `8,633,772` events
+- `deepcase/` normal-only next-event population: `8,633,772` events
+
+The important consequence is that the normal-only next-event reports and the
+all-test anomaly-detection reports must not be compared as if they were the
+same denominator.
+
+For DeepCASE Table-IV-style comparisons, the repository now has a separate
+compatibility dataset manifest,
+`hdfs_wuyifan18_deepcase_table_iv_compat`, which uses only
+`hdfs_test_normal`, trains on the first 20% of that event stream, and treats
+the remaining 80% as prediction-only evaluation. The existing
+`hdfs_wuyifan18_preprocessed_exact_boundary` DeepLog result remains the
+benchmark-archive anomaly-detection view.
+
 ## Vocabulary Coverage
 
 Against the train vocabulary learned from `hdfs_train`:
@@ -76,4 +106,3 @@ For the current artefact, the defensible conclusion is:
   strict session-level `any miss` rule, not by lost event keys.
 - a faithful report should separate this `wuyifan18` archive result from the
   raw LogHub reconstruction discussions in the other HDFS notes.
-

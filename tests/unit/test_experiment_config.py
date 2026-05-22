@@ -955,6 +955,28 @@ def test_dataset_source_summary_uses_config_layer_manifest_entries() -> None:
             },
         ],
     }
+    assert dataset_source_summary(
+        DatasetVariantConfig(
+            name="hdfs-compat-preset",
+            dataset_name="demo",
+            preset="hdfs_wuyifan18_deepcase_table_iv_compat",
+        ),
+        repo_root=repo_root,
+    ) == {
+        "type": "preset",
+        "preset": "hdfs_wuyifan18_deepcase_table_iv_compat",
+        "split_source": "normal_only_event_prefix",
+        "included_source_files": ["hdfs_test_normal"],
+        "excluded_source_files": ["hdfs_train", "hdfs_test_abnormal"],
+        "excluded_anomalous_source_files": ["hdfs_test_abnormal"],
+        "source_file_labels": [
+            {
+                "source_file": "hdfs_test_normal",
+                "label": 0,
+                "split": "normal_only",
+            },
+        ],
+    }
 
 
 @pytest.mark.allow_no_new_coverage
@@ -1247,6 +1269,46 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
     assert isinstance(bundle.model, DeepLogModelConfig)
     assert bundle.model.detector == "deeplog"
     assert bundle.run_group == "deeplog_default"
+
+    spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
+    assert spec.template_parser is IdentityTemplateParser
+
+
+def test_deepcase_table_iv_compat_manifest_prediction_only() -> None:
+    """The DeepCASE compatibility manifest should stay prediction-only."""
+    repo_root = Path(__file__).resolve().parents[2]
+    sweep_path = (
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs/wuyifan18_deepcase_table_iv_compat.toml"
+    )
+
+    bundles = load_experiment_bundles(sweep_path)
+
+    assert {bundle.model.detector for bundle in bundles} == {
+        "deepcase",
+        "deeplog",
+        "markov",
+        "template_frequency",
+    }
+    bundle = next(bundle for bundle in bundles if bundle.model.detector == "deepcase")
+    assert bundle.dataset.preset == "hdfs_wuyifan18_deepcase_table_iv_compat"
+    assert bundle.dataset.name == "hdfs_wuyifan18_deepcase_table_iv_compat"
+    assert bundle.dataset.evaluation_unit is EvaluationUnit.CONTINUOUS_EVENT_STREAM
+    assert isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
+    assert bundle.dataset.sequence.chunk_size == 100000
+    assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
+    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
+    assert bundle.dataset.sequence.split is not None
+    assert bundle.dataset.sequence.split.application_order.value == "before_grouping"
+    assert bundle.dataset.sequence.split.straddling_group_policy.value == (
+        "split_partial_sequences"
+    )
+    assert bundle.model.primary_metric_scope is not None
+    assert bundle.model.primary_metric_scope.value == "next_event_prediction"
+    assert bundle.run_group == "deepcase"
 
     spec = build_dataset_spec(bundle.dataset, repo_root=repo_root)
     assert spec.template_parser is IdentityTemplateParser
