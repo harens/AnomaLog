@@ -1007,7 +1007,7 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
     )
 
     with disable_run_logger():
-        has_anomaly = extract_structured_components(
+        has_inline_labels = extract_structured_components(
             raw_input_path=raw_input_path,
             parser=_Parser(),
             parquet_out_dir=parquet_out_dir,
@@ -1022,7 +1022,7 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
             ),
         )
 
-    assert has_anomaly is False
+    assert has_inline_labels is True
     assert parquet_out_dir.exists()
 
 

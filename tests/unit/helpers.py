@@ -146,11 +146,11 @@ class InMemoryStructuredSink(StructuredSink):
         """Report whether the sink should be treated as having inline labels.
 
         Returns:
-            bool: Whether the sink should be treated as having inline labels.
+            bool: Whether any stored row carries an inline anomaly label field.
         """
         if self.anomalies_inline is not None:
             return self.anomalies_inline
-        return any(is_anomalous_label(row.anomalous) for row in self.rows)
+        return any(row.anomalous is not None for row in self.rows)
 
     def iter_structured_lines(
         self,

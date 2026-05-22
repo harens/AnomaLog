@@ -161,13 +161,13 @@ class StructuredSink(Protocol):
     raw_dataset_path: Path
     parser: StructuredParser
 
-    # Returns whether any line has a non-zero anomalous label.
+    # Returns whether any line carries an inline anomaly label.
     def write_structured_lines(self) -> bool:
-        """Persist structured lines and report whether inline anomalies exist.
+        """Persist structured lines and report whether inline labels exist.
 
         Returns:
-            bool: `True` when at least one persisted row carries a non-zero
-                inline anomaly label.
+            bool: `True` when at least one persisted row carries an inline
+            anomaly label, even if every label is normal (`0`).
         """
 
     # Batched access to structured rows, returned as StructuredLine instances.

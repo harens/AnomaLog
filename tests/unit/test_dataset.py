@@ -17,6 +17,7 @@ from anomalog.labels import CSVReader
 from anomalog.parsers import BGLParser, Drain3Parser, ParquetStructuredSink
 from anomalog.parsers.structured import (
     BaseStructuredLine,
+    DelimitedLabelledEventParser,
     StructuredParser,
     StructuredSink,
 )
@@ -217,6 +218,49 @@ def test_dataset_spec_build_requires_source_and_structured_parser() -> None:
         DatasetSpec("demo").from_source(
             LocalZipSource(Path("demo.zip")),
         ).build()
+
+
+def test_dataset_spec_builds_inline_labelled_streams_with_only_normal_rows(
+    tmp_path: Path,
+) -> None:
+    """Inline-labelled datasets should not require a separate label reader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the raw dataset and
+            cache roots.
+    """
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    raw_logs_file = dataset_root / "hdfs_events.log"
+    expected_row_count = 2
+    raw_logs_file.write_text("session-a\t0\tE1\nsession-b\t0\tE2\n", encoding="utf-8")
+
+    dataset = (
+        DatasetSpec("demo-inline-labelled")
+        .from_source(
+            _StubSource(
+                dataset_root=dataset_root,
+                raw_logs_file=raw_logs_file,
+            ),
+        )
+        .parse_with(DelimitedLabelledEventParser())
+        .template_with(IdentityTemplateParser)
+        .with_cache_paths(
+            CachePathsConfig(
+                data_root=tmp_path / "data",
+                cache_root=tmp_path / "cache",
+            ),
+        )
+    )
+
+    with disable_run_logger():
+        built = dataset.build()
+
+    rows = list(built.sink.iter_structured_lines_in_source_order()())
+
+    assert [row.anomalous for row in rows] == [0, 0]
+    assert built.sink.count_rows() == expected_row_count
+    assert built.anomaly_labels.label_for_group("session-a") is None
 
 
 # Protects the default-Drain3 contract.

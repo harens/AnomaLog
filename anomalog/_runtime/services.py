@@ -114,7 +114,7 @@ def _build_structured_dataset(
         started_at=sink_started_at,
     )
     extraction_started_at = perf_counter()
-    anomalies_inline = sink.write_structured_lines()
+    inline_labels_present = sink.write_structured_lines()
     _log_stage_timing(
         logger,
         stage=f"structured component extraction for {request.dataset_name}",
@@ -122,7 +122,7 @@ def _build_structured_dataset(
     )
     _log_example_line(request.dataset_name, sink)
 
-    if anomalies_inline:
+    if inline_labels_present:
         label_reader = InlineReader(sink=sink)
     else:
         if request.anomaly_label_reader is None:

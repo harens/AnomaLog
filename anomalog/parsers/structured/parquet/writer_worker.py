@@ -12,7 +12,6 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from prefect.logging import get_run_logger
 
@@ -227,7 +226,9 @@ def extract_structured_components(
         config (WriterConfig | None): Optional writer configuration override.
 
     Returns:
-        bool: `True` if at least one anomalous row is observed; otherwise `False`.
+        bool: `True` when the structured rows carry an inline anomaly label
+            field, even if every label is normal (`0`). `False` means the parser
+            did not populate inline anomaly labels at all.
 
     Raises:
         FileNotFoundError: If `raw_input_path` does not exist.
@@ -273,19 +274,16 @@ def extract_structured_components(
         msg = "No structured lines produced; nothing to write"
         raise ValueError(msg) from None
 
-    has_anomaly = False
+    has_inline_labels = False
     batches_emitted = 0
 
-    pc_any = getattr(pc, "any")  # noqa: B009 - stubs miss these functions
-    pc_equal = getattr(pc, "equal")  # noqa: B009 - stubs miss these functions
-
     def _tracking_batches() -> Generator[pa.RecordBatch, None, None]:
-        nonlocal has_anomaly, batches_emitted
+        nonlocal has_inline_labels, batches_emitted
         for batch in itertools.chain((first_batch,), batch_iter):
             if ANOMALOUS_FIELD in batch.schema.names:
                 col = batch.column(ANOMALOUS_FIELD)
-                if pc_any(pc_equal(col, pa.scalar(1, col.type))).as_py():
-                    has_anomaly = True
+                if col.null_count < len(col):
+                    has_inline_labels = True
 
             batches_emitted += 1
             yield batch
@@ -347,7 +345,7 @@ def extract_structured_components(
         perf_counter() - started_at,
     )
 
-    return has_anomaly
+    return has_inline_labels
 
 
 def _write_entity_chronology_index(
