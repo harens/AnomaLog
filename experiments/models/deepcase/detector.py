@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
@@ -9,9 +10,11 @@ import msgspec
 import numpy as np
 import scipy.sparse as sp
 import torch
-from deepcase import DeepCASE
+from deepcase.interpreter.utils import group_by, sp_unique
+from sklearn.neighbors import KDTree
 from typing_extensions import override
 
+from deepcase import DeepCASE
 from experiments.models.base import (
     AbstainAwarePredictionOutcome,
     ExperimentDetector,
@@ -61,6 +64,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterable, Iterator, Sequence
 
+    from deepcase.interpreter.interpreter import Interpreter
     from rich.progress import Progress
 
     from anomalog.sequences import TemplateSequence
@@ -468,17 +472,9 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             config=self.config,
             device=device,
         )
-        cluster_scores = cluster_scores_for_labels(
-            clustered_samples.clusters,
-            clustered_samples.labels,
-            strategy=self.config.cluster_score_strategy,
-            anomaly_fraction_threshold=self.config.cluster_anomaly_fraction_threshold,
-            no_score=self.config.no_score,
-        )
         model.interpreter.clusters = clustered_samples.clusters
-        model.interpreter.vectors = clustered_samples.vectors
-        model.interpreter.events = clustered_samples.events
-        model.interpreter.score(scores=cluster_scores, verbose=False)
+        model.interpreter.vectors = sp.csc_matrix((0, model.interpreter.features))
+        model.interpreter.events = np.zeros(0, dtype=int)
         progress.advance(fit_task)
         progress.update(fit_task, description="DeepCase: fit complete")
 
@@ -492,19 +488,22 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         self.known_cluster_count = len(
             {cluster for cluster in clustered_samples.clusters if cluster != -1},
         )
-        scored_clusters = cluster_scores
         self.known_benign_cluster_count = int(
             np.count_nonzero(
-                (clustered_samples.clusters != -1) & np.isclose(scored_clusters, 0.0),
+                (clustered_samples.clusters != -1)
+                & np.isclose(clustered_samples.scores, 0.0),
             ),
         )
         self.known_malicious_cluster_count = int(
             np.count_nonzero(
-                (clustered_samples.clusters != -1) & np.isclose(scored_clusters, 1.0),
+                (clustered_samples.clusters != -1)
+                & np.isclose(clustered_samples.scores, 1.0),
             ),
         )
         self.unknown_cluster_score_count = int(
-            np.count_nonzero(np.isclose(scored_clusters, float(self.config.no_score))),
+            np.count_nonzero(
+                np.isclose(clustered_samples.scores, float(self.config.no_score)),
+            ),
         )
         self._reset_next_event_prediction_state()
         self._reset_prediction_diagnostics()
@@ -977,15 +976,13 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
 @dataclass(frozen=True, slots=True)
 class _ClusteredTrainingSamples:
     clusters: np.ndarray
-    vectors: sp.csc_matrix
-    events: np.ndarray
     labels: np.ndarray
+    scores: np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
 class _AttendedTrainingChunk:
     vectors: sp.csc_matrix
-    events: np.ndarray
     sample_indexes: np.ndarray
 
 
@@ -1149,7 +1146,16 @@ def _cluster_training_samples(
     total_sample_count = _training_sample_count_total(train_sequences)
     clusters = np.full(total_sample_count, -1, dtype=int)
     labels = np.empty(total_sample_count, dtype=float)
-    attended_chunks: list[_AttendedTrainingChunk] = []
+    cluster_scores = np.full(total_sample_count, float(config.no_score), dtype=float)
+    state = _TrainingClusterState(
+        interpreter=model.interpreter,
+        labels=labels,
+        clusters=clusters,
+        cluster_scores=cluster_scores,
+        config=config,
+    )
+    event_vectors: dict[int, list[sp.csc_matrix]] = defaultdict(list)
+    event_sample_indexes: dict[int, list[np.ndarray]] = defaultdict(list)
     sample_offset = 0
     for chunk in _chunk_training_sequences_by_sample_count(
         train_sequences,
@@ -1172,32 +1178,38 @@ def _cluster_training_samples(
             sample_offset=sample_offset,
         )
         if attended_chunk is not None:
-            attended_chunks.append(attended_chunk)
+            event_ids = batch.events[attended_chunk.sample_indexes - sample_offset]
+            for event in np.unique(event_ids):
+                event_mask = event_ids == event
+                event_vectors[event].append(attended_chunk.vectors[event_mask])
+                event_sample_indexes[event].append(
+                    attended_chunk.sample_indexes[event_mask],
+                )
         sample_offset += batch.sample_count
 
-    if not attended_chunks:
+    if not event_vectors:
         return _ClusteredTrainingSamples(
             clusters=clusters,
-            vectors=sp.csc_matrix((0, model.interpreter.features)),
-            events=np.empty(0, dtype=int),
             labels=labels,
+            scores=cluster_scores,
         )
 
-    vectors = sp.vstack([chunk.vectors for chunk in attended_chunks], format="csc")
-    events = np.concatenate([chunk.events for chunk in attended_chunks])
-    sample_indexes = np.concatenate([chunk.sample_indexes for chunk in attended_chunks])
-    clustered_sample_clusters = _cluster_sample_vectors_by_event(
-        model=model,
-        vectors=vectors,
-        events=events,
-        config=config,
-    )
-    clusters[sample_indexes] = clustered_sample_clusters
+    cluster_offset = 0
+    for event in sorted(event_vectors):
+        cluster_offset = _cluster_and_score_training_event(
+            state=state,
+            event=event,
+            vectors=sp.vstack(event_vectors[event], format="csc"),
+            sample_indexes=np.concatenate(event_sample_indexes[event]),
+            cluster_offset=cluster_offset,
+        )
+        del event_vectors[event]
+        del event_sample_indexes[event]
+
     return _ClusteredTrainingSamples(
         clusters=clusters,
-        vectors=vectors,
-        events=events,
         labels=labels,
+        scores=cluster_scores,
     )
 
 
@@ -1232,7 +1244,6 @@ def _attend_training_chunk(
         return None
     return _AttendedTrainingChunk(
         vectors=vectors,
-        events=batch.events[mask_array].reshape(-1),
         sample_indexes=np.arange(
             sample_offset,
             sample_offset + batch.sample_count,
@@ -1241,29 +1252,100 @@ def _attend_training_chunk(
     )
 
 
-def _cluster_sample_vectors_by_event(
+def _score_interpreter_event(
     *,
-    model: DeepCASE,
+    interpreter: Interpreter,
+    event: int,
     vectors: sp.csc_matrix,
-    events: np.ndarray,
-    config: DeepCaseModelConfig,
-) -> np.ndarray:
-    clustered_sample_clusters = np.full(events.shape[0], -1, dtype=int)
-    cluster_offset = 0
-    for event in np.unique(events):
-        event_indexes = np.flatnonzero(events == event)
-        event_clusters = model.interpreter.dbscan.dbscan(
-            X=vectors[event_indexes],
-            eps=config.eps,
-            min_samples=config.min_samples,
-            verbose=False,
-        )
-        non_noise = event_clusters != -1
-        if np.any(non_noise):
-            event_clusters[non_noise] += cluster_offset
-            cluster_offset = int(event_clusters[non_noise].max()) + 1
-        clustered_sample_clusters[event_indexes] = event_clusters
-    return clustered_sample_clusters
+    scores: np.ndarray,
+) -> None:
+    """Build DeepCASE lookup state for one clustered event.
+
+    This mirrors ``Interpreter.score`` but only for a single event so fit does
+    not need to materialise the entire attended-vector matrix at once.
+
+    Args:
+        interpreter (Interpreter): Upstream DeepCASE interpreter to populate.
+        event (int): Event identifier for the clustered vectors.
+        vectors (sp.csc_matrix): Sparse attended vectors for the event.
+        scores (np.ndarray): Per-sample scores aligned with ``vectors``.
+
+    Raises:
+        RuntimeError: If the KDTree contents do not match the unique sparse
+            vectors used to build it.
+    """
+    if vectors.shape[0] == 0:
+        return
+
+    vectors, inverse, _ = sp_unique(vectors)
+    interpreter.tree[event] = KDTree(vectors.toarray(), p=1)
+    interpreter.labels[event] = {}
+    data, index_tree, _, _ = interpreter.tree[event].get_arrays()
+    _, index_vector = zip(*group_by(inverse), strict=True)
+    if not np.all(data == vectors.toarray()):
+        msg = "DeepCase interpreter tree vectors did not round-trip as expected."
+        raise RuntimeError(msg)
+
+    for index, mapping in zip(index_tree, index_vector, strict=True):
+        interpreter.labels[event][index] = scores[mapping].max()
+
+
+@dataclass(slots=True)
+class _TrainingClusterState:
+    interpreter: Interpreter
+    labels: np.ndarray
+    clusters: np.ndarray
+    cluster_scores: np.ndarray
+    config: DeepCaseModelConfig
+
+
+def _cluster_and_score_training_event(
+    *,
+    state: _TrainingClusterState,
+    event: int,
+    vectors: sp.csc_matrix,
+    sample_indexes: np.ndarray,
+    cluster_offset: int,
+) -> int:
+    """Cluster one event's attended training vectors and build lookup state.
+
+    Args:
+        state (_TrainingClusterState): Mutable shared fit state.
+        event (int): Event identifier for the current sparse vector batch.
+        vectors (sp.csc_matrix): Sparse attended vectors for this event.
+        sample_indexes (np.ndarray): Global sample indexes for ``vectors``.
+        cluster_offset (int): Running offset for non-noise cluster ids.
+
+    Returns:
+        int: Updated global cluster offset after the event's non-noise clusters
+        have been assigned.
+    """
+    event_clusters = state.interpreter.dbscan.dbscan(
+        X=vectors,
+        eps=state.config.eps,
+        min_samples=state.config.min_samples,
+        verbose=False,
+    )
+    non_noise = event_clusters != -1
+    if np.any(non_noise):
+        event_clusters[non_noise] += cluster_offset
+        cluster_offset = int(event_clusters[non_noise].max()) + 1
+    state.clusters[sample_indexes] = event_clusters
+    event_scores = cluster_scores_for_labels(
+        event_clusters,
+        state.labels[sample_indexes],
+        strategy=state.config.cluster_score_strategy,
+        anomaly_fraction_threshold=state.config.cluster_anomaly_fraction_threshold,
+        no_score=state.config.no_score,
+    )
+    state.cluster_scores[sample_indexes] = event_scores
+    _score_interpreter_event(
+        interpreter=state.interpreter,
+        event=event,
+        vectors=vectors[event_clusters != -1],
+        scores=event_scores[event_clusters != -1],
+    )
+    return cluster_offset
 
 
 def _predict_batch_in_chunks(

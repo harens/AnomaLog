@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 import torch
-from deepcase import DeepCASE
 from deepcase.context_builder.context_builder import ContextBuilder
 from deepcase.interpreter.cluster import Cluster
 from deepcase.interpreter.interpreter import Interpreter
 from rich.progress import Progress
 
 from anomalog.sequences import SplitLabel, TemplateSequence
+from deepcase import DeepCASE
 from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
@@ -608,7 +608,12 @@ def test_deepcase_detector_rejects_repeated_fit() -> None:
 def test_deepcase_fit_chunks_training_and_clustering_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepCase fit should process bounded training chunks on the configured device."""
+    """DeepCase fit should process bounded training chunks on the configured device.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the chunk size constant and
+            the upstream fit hooks so the test can observe bounded batching.
+    """
     detector = _deep_case_config(
         name="deepcase",
         epochs=1,
@@ -694,10 +699,87 @@ def test_deepcase_fit_chunks_training_and_clustering_batches(
     assert detector.train_sample_count == len(sequence.events)
 
 
+def test_deepcase_fit_builds_interpreter_state_without_full_score_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase fit should avoid the upstream full-matrix score replay.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream DeepCase fit
+            stages so the test can assert that the detector now builds the
+            interpreter lookup state per event instead of delegating to the
+            library's whole-dataset score helper.
+    """
+    detector = _deep_case_config(
+        name="deepcase",
+        epochs=1,
+        batch_size=2,
+        query_batch_size=2,
+        iterations=1,
+        min_samples=1,
+        eps=1.0,
+        device="cpu",
+    ).build_detector()
+    sequence = _sequence(
+        templates=["A", "B", "C", "D"],
+        label=0,
+    )
+    monkeypatch.setattr(
+        deepcase_detector,
+        "DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE",
+        2,
+    )
+
+    def _fake_context_fit(
+        self: ContextBuilder,
+        **kwargs: object,
+    ) -> ContextBuilder:
+        del kwargs
+        return self
+
+    def _fake_attended_context(
+        self: Interpreter,
+        **kwargs: object,
+    ) -> tuple[sp.csc_matrix, torch.Tensor]:
+        x = kwargs["X"]
+        assert isinstance(x, torch.Tensor)
+        rows = x.shape[0]
+        vectors = sp.csc_matrix(
+            np.ones((rows, self.features), dtype=float),
+        )
+        mask = torch.ones(rows, dtype=torch.bool, device=x.device)
+        return vectors, mask
+
+    def _fail_score(*args: object, **kwargs: object) -> Interpreter:
+        del args, kwargs
+        msg = "Interpreter.score should not be called during fit."
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
+    monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
+    monkeypatch.setattr(Interpreter, "score", _fail_score)
+
+    with Progress(disable=True) as progress:
+        detector.fit((sequence,), progress=progress)
+
+    assert detector.train_sample_count == len(sequence.events)
+    assert detector.clustered_sample_count == len(sequence.events)
+    assert detector.known_benign_cluster_count == len(sequence.events)
+    assert detector.unknown_cluster_score_count == 0
+    assert detector.model is not None
+    assert detector.model.interpreter.tree
+    assert detector.model.interpreter.labels
+
+
 def test_deepcase_predict_chunks_batches_on_configured_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepCase prediction should move only bounded chunks to the target device."""
+    """DeepCase prediction should move only bounded chunks to the target device.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the prediction chunk size
+            constant so the test can observe device movement per batch.
+    """
     detector = _deep_case_config(name="deepcase").build_detector()
     detector.device = torch.device("cpu")
     train_sequence = _sequence(templates=["A", "B", "C", "D", "E"])
@@ -1659,8 +1741,9 @@ def test_deepcase_manifest_reports_cluster_score_diagnostics(
         scores: np.ndarray,
         verbose: bool,
     ) -> Interpreter:
-        del scores, verbose
-        return self
+        del self, scores, verbose
+        msg = "DeepCase fit should not call Interpreter.score()."
+        raise AssertionError(msg)
 
     monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
     monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
@@ -1709,7 +1792,6 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
             cluster_score_strategy="abstain_mixed",
         ),
     )
-    expected_cluster_scores = [-1.0, -1.0, -1.0, -1.0]
 
     def _fake_context_fit(self: ContextBuilder, **kwargs: object) -> ContextBuilder:
         del kwargs
@@ -1734,17 +1816,15 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
         del self, kwargs
         return np.array([0, 0, 0, 0], dtype=int)
 
-    captured_scores: list[float] = []
-
     def _fake_score(
         self: Interpreter,
         *,
         scores: np.ndarray,
         verbose: bool,
     ) -> Interpreter:
-        del verbose
-        captured_scores.extend(scores.tolist())
-        return self
+        del self, scores, verbose
+        msg = "DeepCase fit should not call Interpreter.score()."
+        raise AssertionError(msg)
 
     monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
     monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
@@ -1754,7 +1834,6 @@ def test_deepcase_fit_uses_cluster_label_abstention_policy(
     with Progress(disable=True) as progress:
         detector.fit(train_sequences, progress=progress)
 
-    assert captured_scores == expected_cluster_scores
     assert detector.known_benign_cluster_count == 0
     expected_known_malicious_cluster_count = 0
     expected_unknown_cluster_score_count = sum(
