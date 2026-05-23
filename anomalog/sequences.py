@@ -956,6 +956,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         label_for_group: Callable[[str], int | None],
         split_label: SplitLabel,
         *,
+        allow_group_label_fallback: bool = True,
         training_event_mask: tuple[bool, ...] | None = None,
         evaluation_event_mask: tuple[bool, ...] | None = None,
         continuous_context: bool = False,
@@ -972,6 +973,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             label_for_group (Callable[[str], int | None]): Group-level anomaly
                 label lookup by entity id.
             split_label (SplitLabel): Assigned dataset split for the sequence.
+            allow_group_label_fallback (bool): Whether entity-level anomaly
+                labels may promote an otherwise normal window to anomalous.
             training_event_mask (tuple[bool, ...] | None): Optional per-event
                 training-target eligibility mask for preserved chronological
                 chunks.
@@ -1009,6 +1012,9 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             line_lab = getattr(r, "anomalous", None)
             if is_anomalous_label(line_lab):
                 seq_label = 1
+                continue
+
+            if not allow_group_label_fallback:
                 continue
 
             ent = r.entity_id
@@ -1081,6 +1087,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 infer_template,
                 label_for_group,
                 split_label,
+                allow_group_label_fallback=False,
             )
             if seq is not None:
                 yield seq
@@ -1253,9 +1260,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         if n <= 0:
             return 0
 
-        if n <= window_size:
+        if n < window_size:
+            return 0
+        if n == window_size:
             return 1
-        return 1 + math.ceil((n - window_size) / step)
+        return 1 + ((n - window_size) // step)
 
     @staticmethod
     def _count_time_windows(
@@ -1651,6 +1660,7 @@ class NonEntitySequenceBuilder(SequenceBuilder):
                 infer_template,
                 label_for_group,
                 split_label,
+                allow_group_label_fallback=False,
             )
             if seq is not None:
                 yield seq

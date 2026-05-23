@@ -1403,6 +1403,13 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
             timestamp_unix_ms=170,
             entity_id="c",
             untemplated_message_text="three",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=200,
+            entity_id="c",
+            untemplated_message_text="four",
             anomalous=1,
         ),
     )
@@ -1424,13 +1431,60 @@ def test_fixed_window_sequences_use_inline_line_labels_and_positional_split() ->
         SplitLabel.TEST,
     ]
     assert train_window.event_labels == (0, 0)
-    assert test_window.event_labels == (1,)
+    assert test_window.event_labels == (0, 1)
     assert train_window.entity_ids == ["a"]
     assert train_window.events == [("ONE", ["one"], None), ("TWO", ["two"], 30)]
     assert train_window.label == 0
     assert test_window.entity_ids == ["c"]
-    assert test_window.events == [("THREE", ["three"], None)]
+    assert test_window.events == [("THREE", ["three"], None), ("FOUR", ["four"], 30)]
     assert test_window.label == 1
+
+
+def test_fixed_sequence_builder_uses_only_full_windows_and_row_labels() -> None:
+    """Fixed windows should ignore entity-level fallback labels.
+
+    Thunderbird fixed-window counts depend on window labels being driven by the
+    rows inside each 100-log block, not by whether a host or user has ever seen
+    an anomaly elsewhere in the slice. This regression keeps the split and
+    label contract aligned with that paper-style rule.
+    """
+    expected_sequence_count = 2
+    rows = [
+        structured_line(
+            line_order=index,
+            timestamp_unix_ms=100 + (index * 10),
+            entity_id="dn228/dn228",
+            untemplated_message_text=f"event-{index}",
+            anomalous=1 if index == 0 else 0,
+        )
+        for index in range(201)
+    ]
+    sink = _sink(*rows)
+    builder = FixedSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 1,
+        window_size=100,
+        step=100,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert len(sequences) == expected_sequence_count
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=expected_sequence_count,
+        train_count=1,
+        ignored_count=0,
+        test_count=1,
+    )
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.label for sequence in sequences] == [1, 0]
+    assert [len(sequence.events) for sequence in sequences] == [100, 100]
 
 
 def test_represent_with_yields_model_ready_records() -> None:
@@ -1845,10 +1899,8 @@ def test_time_sequence_builder_uses_public_windowing_and_preserves_null_deltas()
     assert sequences[0].label == 1
 
 
-def test_fixed_sequence_builder_uses_single_train_window_when_dataset_is_short() -> (
-    None
-):
-    """Fixed grouping should still emit one train window when rows fit in one window."""
+def test_fixed_sequence_builder_drops_incomplete_trailing_windows() -> None:
+    """Fixed grouping should only emit full windows and ignore group labels."""
     sink = _sink(
         structured_line(
             line_order=0,
@@ -1866,18 +1918,20 @@ def test_fixed_sequence_builder_uses_single_train_window_when_dataset_is_short()
         ),
     )
 
-    sequences = list(
-        FixedSequenceBuilder(
-            sink=sink,
-            infer_template=_upper_template,
-            label_for_group=lambda _: 0,
-            window_size=5,
-            train_frac=0.5,
-            test_frac=0.0,
-        ),
+    builder = FixedSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "a" else 0,
+        window_size=5,
+        train_frac=0.5,
+        test_frac=0.0,
     )
+    sequences = list(builder)
 
-    assert len(sequences) == 1
-    assert sequences[0].split_label is SplitLabel.TRAIN
-    assert sequences[0].events == [("ONE", [], None), ("TWO", [], 30)]
-    assert sequences[0].label == 1
+    assert len(sequences) == 0
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=0,
+        train_count=0,
+        ignored_count=0,
+        test_count=0,
+    )

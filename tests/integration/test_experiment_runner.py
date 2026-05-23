@@ -16,10 +16,10 @@ from experiments.runners.run_experiment import run_experiment
 
 FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "template_frequency"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "tiny_bgl_happy_path.log"
-EXPECTED_SEQUENCE_COUNT = 4
+EXPECTED_SEQUENCE_COUNT = 3
 EXPECTED_TRAIN_SEQUENCE_COUNT = 2
 EXPECTED_TEST_SEQUENCE_COUNT = 1
-EXPECTED_IGNORED_SEQUENCE_COUNT = 1
+EXPECTED_IGNORED_SEQUENCE_COUNT = 0
 EXPECTED_STRUCTURED_ROWS = 8
 FINGERPRINT_HEX_LENGTH = 64
 TEMPLATE_FREQUENCY_SCORE_THRESHOLD = 1.2
@@ -79,7 +79,7 @@ def _assert_template_frequency_predictions(
     ]
 
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction.window_id for prediction in predictions] == [3]
+    assert [prediction.window_id for prediction in predictions] == [2]
     assert [prediction.split_label for prediction in predictions] == [
         "test",
     ]
@@ -121,14 +121,14 @@ def _assert_reproducible_smoke_outputs(
     assert artifacts.manifest["sequence_split_summary"] == {
         "requested_train_fraction": 0.34,
         "requested_test_fraction": 0.25,
-        "train_pool_sequence_count": 3,
+        "train_pool_sequence_count": 2,
         "ineligible_train_pool_count": 0,
         "realised_train_sequence_count": 2,
-        "excluded_from_train_count": 1,
-        "eligible_train_sequence_count": 3,
+        "excluded_from_train_count": 0,
+        "eligible_train_sequence_count": 2,
         "ignored_sequence_count": EXPECTED_IGNORED_SEQUENCE_COUNT,
-        "effective_train_fraction_of_eligible": pytest.approx(2 / 3),
-        "effective_train_fraction_overall": pytest.approx(0.5),
+        "effective_train_fraction_of_eligible": pytest.approx(1.0),
+        "effective_train_fraction_overall": pytest.approx(2 / 3),
     }
     assert (
         artifacts.manifest["model_manifest"]["score_threshold"]

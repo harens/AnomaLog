@@ -22,9 +22,11 @@ The later public benchmark implementations of the same Thunderbird setting use
 a contiguous line slice from the canonical `Thunderbird.log` archive member.
 LogLLM, for example, documents a Thunderbird slice from lines
 `160,000,000` to `170,000,000` and reports `99,997` sequences with
-`837 / 29` anomalous train/test windows. That is the closest public code path
-we have found to the ICSE 2022 Thunderbird protocol, and it is the slice the
-current preset now targets.
+`837 / 29` anomalous train/test windows. The AnomaLog fixed-window contract
+keeps only complete 100-log windows, so the same slice now yields `99,996`
+sequences and the same `837 / 29` anomalous-window totals. That is the closest
+public code path we have found to the ICSE 2022 Thunderbird protocol, and it
+is the slice the current preset now targets.
 
 ## Temporary Count Check
 
@@ -34,8 +36,10 @@ I ran the current parser against the Thunderbird benchmark slice
 The parser now emits `9,999,616` structured rows from that slice and skips
 `384` malformed or empty-message lines. Those rows produce `99,996`
 non-overlapping 100-log windows with an `79,996 / 20,000` train/test split and
-`837 / 29` anomalous windows in train/test. The raw slice itself contains
-`4,937` anomalous log messages.
+`837 / 29` anomalous windows in train/test. The fixed-window builder labels
+each full window from the rows it contains and drops the incomplete tail, so
+entity-level anomaly caches do not bleed into unrelated windows. The raw slice
+itself contains `4,937` anomalous log messages.
 
 Compared with the ICSE 2022 table, the current slice is still `403` windows
 high overall and `21 / 2` anomalous windows high in train/test. Compared with

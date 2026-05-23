@@ -807,9 +807,6 @@ class ParquetStructuredSink(StructuredSink):
                             break
                         buffer.popleft()
 
-            if buffer:
-                yield tuple(buffer)
-
         return _iter
 
     def _iter_structured_lines_by_timestamp(

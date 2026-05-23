@@ -819,10 +819,10 @@ def test_sink_fixed_window_iteration_uses_global_order_across_partitions(
     ]
 
 
-def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buffer(
+def test_sink_fixed_window_iteration_drops_partial_tail_when_step_exhausts_buffer(
     tmp_path: Path,
 ) -> None:
-    """Fixed-size windows should emit a trailing partial window when rows remain.
+    """Fixed-size windows should drop a trailing partial window when rows remain.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
@@ -839,7 +839,6 @@ def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buff
 
     assert [[row.line_order for row in rows] for rows in fixed_windows] == [
         [0, 1],
-        [2],
     ]
 
 

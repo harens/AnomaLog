@@ -11,9 +11,9 @@ from experiments.runners.run_experiment import run_experiment
 
 FIXTURE_ROOT = Path(__file__).parent / "experiment_fixtures" / "naive_bayes"
 FIXTURE_LOG = Path(__file__).parent / "logs" / "tiny_bgl_happy_path.log"
-EXPECTED_SEQUENCE_COUNT = 4
+EXPECTED_SEQUENCE_COUNT = 3
 EXPECTED_TRAIN_SEQUENCE_COUNT = 2
-EXPECTED_TEST_SEQUENCE_COUNT = 2
+EXPECTED_TEST_SEQUENCE_COUNT = 1
 POSTERIOR_THRESHOLD = 0.4
 
 
@@ -138,11 +138,8 @@ def test_run_experiment_with_naive_bayes_emits_key_phrases(tmp_path: Path) -> No
         for phrase in manifest["model_manifest"]["key_phrases_by_class"]["anomalous"]
     )
     assert len(predictions) == EXPECTED_TEST_SEQUENCE_COUNT
-    assert [prediction["window_id"] for prediction in predictions] == [2, 3]
-    assert [prediction["split_label"] for prediction in predictions] == [
-        "test",
-        "test",
-    ]
+    assert [prediction["window_id"] for prediction in predictions] == [2]
+    assert [prediction["split_label"] for prediction in predictions] == ["test"]
     assert held_out_prediction["label"] == 0
     assert held_out_prediction["predicted_label"] == 0
     assert held_out_prediction["score"] < POSTERIOR_THRESHOLD

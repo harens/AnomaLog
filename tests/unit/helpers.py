@@ -302,9 +302,13 @@ class InMemoryStructuredSink(StructuredSink):
         step = window_size if step_size is None else step_size
 
         def _iter() -> Iterator[Sequence[StructuredLine]]:
-            for start in range(0, len(self.rows), step):
+            if window_size <= 0 or step <= 0:
+                return
+            if len(self.rows) < window_size:
+                return
+            for start in range(0, len(self.rows) - window_size + 1, step):
                 window = self.rows[start : start + window_size]
-                if window:
+                if len(window) == window_size:
                     yield window
 
         return _iter

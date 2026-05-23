@@ -84,16 +84,19 @@ The checked-in dataset-manifest set is split by dataset family:
   raw-line slice used by later public Thunderbird benchmark code, and builds
   100-log chronological windows over that contiguous slice. The current
   parser-backed measurement is `99,996` total windows with a `79,996 / 20,000`
-  train/test split and `837 / 29` anomalous windows in train/test. That is
-  closer to the ICSE 2022 "How Far Are We?" table (`99,593` total windows and
-  `79,674 / 19,919` train/test) than the full archive prefix, but the paper's
-  table still reports a slightly shorter derived stream. The smoke preset keeps
-  only a shorter raw prefix of the same file so the parser and template
-  pipeline stay testable without pulling the benchmark slice in normal
-  development. The Thunderbird parser also preserves the message tail for
-  template mining, strips an optional `component[pid]: ` prefix when one is
-  present, and trims a trailing colon from bare command-like tails so the
-  template vocabulary is driven by the normalised message body rather than
+  train/test split and `837 / 29` anomalous windows in train/test. The fixed
+  window builder drops any incomplete tail window and labels each 100-log block
+  from the rows it contains, rather than promoting the whole window from an
+  entity-level anomaly cache. That is closer to the ICSE 2022 "How Far Are We?"
+  table (`99,593` total windows and `79,674 / 19,919` train/test) than the full
+  archive prefix, but the paper's table still reports a slightly shorter
+  derived stream. The smoke preset keeps only a shorter raw prefix of the same
+  file so the parser and template pipeline stay testable without pulling the
+  benchmark slice in normal development. The Thunderbird parser also preserves
+  the message tail for template mining, strips an optional `component[pid]: `
+  prefix when one is present, and trims a trailing colon from bare
+  command-like tails so the template vocabulary is driven by the normalised
+  message body rather than
   Thunderbird header noise.
   Template training is cached against the materialised raw slice asset as well
   as the Drain3 config, so a Thunderbird slice change invalidates stale mined
