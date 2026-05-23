@@ -1296,9 +1296,8 @@ def test_deepcase_table_iv_compat_manifest_prediction_only() -> None:
     bundle = next(bundle for bundle in bundles if bundle.model.detector == "deepcase")
     assert bundle.dataset.preset == "hdfs_wuyifan18_deepcase_table_iv_compat"
     assert bundle.dataset.name == "hdfs_wuyifan18_deepcase_table_iv_compat"
-    assert bundle.dataset.evaluation_unit is EvaluationUnit.CONTINUOUS_EVENT_STREAM
-    assert isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
-    assert bundle.dataset.sequence.chunk_size == 100000
+    assert bundle.dataset.evaluation_unit is EvaluationUnit.SEQUENCE
+    assert isinstance(bundle.dataset.sequence, EntitySequenceConfig)
     assert bundle.dataset.sequence.train_fraction == pytest.approx(0.2)
     assert bundle.dataset.sequence.test_fraction == pytest.approx(0.8)
     assert bundle.dataset.sequence.split is not None
@@ -1306,6 +1305,7 @@ def test_deepcase_table_iv_compat_manifest_prediction_only() -> None:
     assert bundle.dataset.sequence.split.straddling_group_policy.value == (
         "split_partial_sequences"
     )
+    assert bundle.dataset.sequence.train_on_normal_entities_only is False
     assert bundle.model.primary_metric_scope is not None
     assert bundle.model.primary_metric_scope.value == "next_event_prediction"
     assert bundle.run_group == "deepcase"

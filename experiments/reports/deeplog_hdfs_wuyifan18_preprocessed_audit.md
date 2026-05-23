@@ -55,8 +55,9 @@ same denominator.
 For DeepCASE Table-IV-style comparisons, the repository now has a separate
 compatibility dataset manifest,
 `hdfs_wuyifan18_deepcase_table_iv_compat`, which uses only
-`hdfs_test_normal`, trains on the first 20% of that event stream, and treats
-the remaining 80% as prediction-only evaluation. The existing
+`hdfs_test_normal`, groups by entity, and applies the first 20% of the
+chronological raw-entry stream as train before treating the remaining 80% as
+prediction-only evaluation. The existing
 `hdfs_wuyifan18_preprocessed_exact_boundary` DeepLog result remains the
 benchmark-archive anomaly-detection view.
 

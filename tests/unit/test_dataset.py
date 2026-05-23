@@ -39,6 +39,13 @@ from anomalog.presets import (
     thunderbird,
     thunderbird_smoke,
 )
+from anomalog.sequences import (
+    EntitySequenceBuilder,
+    RawEntrySplitMode,
+    SplitApplicationOrder,
+    SplitLabel,
+    StraddlingGroupPolicy,
+)
 from anomalog.sources import DatasetSource, PostProcessedSource, RemoteZipSource
 from anomalog.sources.local import LocalZipSource
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
@@ -261,6 +268,75 @@ def test_dataset_spec_builds_inline_labelled_streams_with_only_normal_rows(
     assert [row.anomalous for row in rows] == [0, 0]
     assert built.sink.count_rows() == expected_row_count
     assert built.anomaly_labels.label_for_group("session-a") is None
+
+
+def test_entity_sequence_builder_splits_partial_entities() -> None:
+    """Raw-entry splits should still yield entity-local train and test sequences."""
+    expected_sequence_count = 4
+    expected_train_sequence_count = 2
+    expected_test_sequence_count = 2
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=_NullParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="entity-a",
+                untemplated_message_text="a-0",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=130,
+                entity_id="entity-a",
+                untemplated_message_text="a-1",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=110,
+                entity_id="entity-b",
+                untemplated_message_text="b-0",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=120,
+                entity_id="entity-b",
+                untemplated_message_text="b-1",
+                anomalous=0,
+            ),
+        ],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=lambda text: (text, ()),
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_fraction=0.5,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert len(sequences) == expected_sequence_count
+    assert sum(sequence.split_label is SplitLabel.TRAIN for sequence in sequences) == (
+        expected_train_sequence_count
+    )
+    assert sum(sequence.split_label is SplitLabel.TEST for sequence in sequences) == (
+        expected_test_sequence_count
+    )
 
 
 # Protects the default-Drain3 contract.

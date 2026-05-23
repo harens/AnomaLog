@@ -154,9 +154,10 @@ datasets = [
 "model.top_g_values" = [1, 3, 5, 7, 9]
 
 [experiment_sets.hdfs_deepcase_table_iv_compat]
-# DeepCASE Table-IV compatibility: the normal-only HDFS event stream sliced
-# 20/80 by chronological order, with next-event prediction as the headline
-# metric. This is a compatibility view, not the DeepLog anomaly benchmark.
+# DeepCASE Table-IV compatibility: the normal-only HDFS entity-local view
+# sliced 20/80 by chronological raw-entry order, with next-event prediction
+# as the headline metric. This is a compatibility view, not the DeepLog
+# anomaly benchmark.
 model_sets = ["baselines_no_nb"]
 models = ["deepcase", "deeplog_default"]
 datasets = ["hdfs/wuyifan18_deepcase_table_iv_compat"]
