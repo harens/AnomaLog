@@ -7,6 +7,7 @@ import pytest
 
 import experiments.results as experiment_results
 from anomalog.sequences import EntitySequenceBuilder
+from experiments.config import load_experiment_bundles
 from experiments.models.base import SequenceSummary
 from tests.unit.helpers import InMemoryStructuredSink, NullStructuredParser
 
@@ -178,3 +179,39 @@ def test_compact_model_manifest_trims_debug_only_fields() -> None:
     assert "abstained_anomalous_label_count" not in prediction_diagnostics
     assert "abstained_normal_label_count" not in prediction_diagnostics
     assert "event_decision_metrics" in prediction_diagnostics
+
+
+def test_build_environment_metadata_records_deepcase_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run provenance should record the pinned DeepCASE dependency version."""
+    captured_dist_names: list[str] = []
+
+    def _fake_package_version(dist_name: str) -> str:
+        captured_dist_names.append(dist_name)
+        if dist_name == "anomalog":
+            return "0.3.0"
+        if dist_name == "deepcase":
+            return "1.0.3"
+        msg = f"Unexpected package request: {dist_name}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(experiment_results, "_package_version", _fake_package_version)
+
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deepcase"
+    )
+    metadata = experiment_results.build_environment_metadata(
+        bundle=bundle,
+        result_paths=experiment_results.prepare_result_paths(bundle),
+    )
+
+    assert metadata["packages"] == {
+        "anomalog": "0.3.0",
+        "deepcase": "1.0.3",
+    }
+    assert captured_dist_names == ["anomalog", "deepcase"]

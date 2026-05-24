@@ -1292,6 +1292,7 @@ def build_environment_metadata(
         },
         "packages": {
             "anomalog": _package_version("anomalog"),
+            "deepcase": _package_version("deepcase"),
         },
     }
 
