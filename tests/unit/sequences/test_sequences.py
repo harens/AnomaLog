@@ -621,6 +621,75 @@ def test_entity_sequences_raw_entry_prefix_count_split_partial_sequences() -> No
     )
 
 
+def test_entity_sequences_raw_entry_prefix_fraction_before_grouping_keeps_context() -> (
+    None
+):
+    """Chronological splits should still preserve entity-local grouped context."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="host-a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="host-a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="host-a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="host-b",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_fraction=0.5,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.sole_entity_id for sequence in sequences] == [
+        "host-a",
+        "host-a",
+        "host-b",
+    ]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.templates for sequence in sequences] == [
+        ["ONE", "TWO"],
+        ["THREE"],
+        ["FOUR"],
+    ]
+    assert all(
+        sequence.entity_ids == [sequence.sole_entity_id] for sequence in sequences
+    )
+
+
 def test_entity_sequences_raw_entry_prefix_fraction_uses_ceiling_cutoff() -> None:
     """Raw-entry fraction splits should round the train cutoff up."""
     sink = _sink(

@@ -176,8 +176,9 @@ The detector validates the observable invariant by rejecting sequences that span
 multiple entity ids.
 
 For AIT-ADS, the stream benchmark stays in `ait_ads/base`, while the
-entity-local sequence models use `ait_ads/entity_chronological` so the alert
-context remains entity-local for both DeepLog and DeepCASE.
+entity-local sequence view uses `ait_ads/entity_chronological` with the raw
+alert chronology split before entity grouping. That keeps host-local context
+for DeepCASE without turning the protocol into an entity-heldout benchmark.
 
 For the BGL extension, the same DeepCASE runtime is still used, but the run is
 treated as an extension rather than a paper reproduction target.

@@ -107,8 +107,9 @@ models = ["deeplog_default"]
 
 [experiments.ait_ads_entity]
 dataset = "ait_ads/entity_chronological"
-# DeepCASE needs entity-local sequences; DeepLog is included here as an
-# entity-local diagnostic alongside the global stream view.
+# DeepCASE needs entity-local sequences, but the split still follows the
+# global alert chronology before entity grouping so host context and
+# time-ordering stay paper-faithful.
 model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",

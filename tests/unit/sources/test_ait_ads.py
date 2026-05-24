@@ -178,6 +178,139 @@ def _write_multi_scenario_fixture_source_tree(tmp_path: Path) -> Path:
     return source_root
 
 
+def _write_boundary_fixture_source_tree(tmp_path: Path) -> Path:
+    source_root = tmp_path / "ait_ads_boundary_source"
+    source_root.mkdir()
+    (source_root / "labels.csv").write_text(
+        ("scenario,attack,start,end\nfox,service_stop,0.1,0.2\n"),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        source_root / "fox_aminer.json",
+        [
+            {
+                "AnalysisComponent": {
+                    "AnalysisComponentIdentifier": 3,
+                    "AnalysisComponentType": "NewMatchPathDetector",
+                    "AnalysisComponentName": "AMiner: Boundary event.",
+                    "Message": "New path(es) detected",
+                    "PersistenceFileName": "nmpd",
+                },
+                "LogData": {
+                    "RawLogData": ["boundary"],
+                    "Timestamps": [0.2],
+                    "DetectionTimestamp": [0.2],
+                    "LogLinesCount": 1,
+                    "LogResources": ["/var/log/audit/audit.log"],
+                },
+                "AMiner": {"ID": "172.17.129.140"},
+            },
+        ],
+    )
+    _write_jsonl(
+        source_root / "fox_wazuh.json",
+        [
+            {
+                "agent": {"ip": "10.35.32.1", "name": "wazuh-client", "id": "29"},
+                "manager": {"name": "wazuh.manager"},
+                "data": {
+                    "tx_id": "0",
+                    "event_type": "alert",
+                    "alert": {
+                        "severity": "3",
+                        "signature_id": "2013504",
+                        "rev": "6",
+                        "gid": "1",
+                        "signature": (
+                            "ET POLICY GNU/Linux APT User-Agent Outbound "
+                            "likely related to package management"
+                        ),
+                        "action": "allowed",
+                        "category": "Not Suspicious Traffic",
+                    },
+                    "timestamp": "1970-01-01T00:00:00.000000+0000",
+                },
+                "rule": {
+                    "id": "86601",
+                    "level": 3,
+                    "description": (
+                        "Suricata: Alert - ET POLICY GNU/Linux APT "
+                        "User-Agent Outbound likely related to package management"
+                    ),
+                    "groups": ["ids", "suricata"],
+                },
+                "decoder": {"name": "json"},
+                "input": {"type": "log"},
+                "@timestamp": "1970-01-01T00:00:00.150000Z",
+                "location": "/var/log/suricata/eve.json",
+                "id": "9999999999.999999",
+            },
+        ],
+    )
+    return source_root
+
+
+def _write_equal_timestamp_fixture_source_tree(tmp_path: Path) -> Path:
+    source_root = tmp_path / "ait_ads_equal_timestamp_source"
+    source_root.mkdir()
+    (source_root / "labels.csv").write_text(
+        (
+            "scenario,attack,start,end\n"
+            "fox,service_stop,0.0,1000.0\n"
+            "harrison,service_stop,0.0,1000.0\n"
+        ),
+        encoding="utf-8",
+    )
+    for scenario, entity in (("fox", "172.17.129.140"), ("harrison", "172.17.129.141")):
+        _write_jsonl(
+            source_root / f"{scenario}_aminer.json",
+            [
+                {
+                    "AnalysisComponent": {
+                        "AnalysisComponentIdentifier": 3,
+                        "AnalysisComponentType": "NewMatchPathDetector",
+                        "AnalysisComponentName": f"AMiner: {scenario} event.",
+                        "Message": "New path(es) detected",
+                        "PersistenceFileName": "nmpd",
+                    },
+                    "LogData": {
+                        "RawLogData": [scenario],
+                        "Timestamps": [0.1],
+                        "DetectionTimestamp": [0.1],
+                        "LogLinesCount": 1,
+                        "LogResources": ["/var/log/audit/audit.log"],
+                    },
+                    "AMiner": {"ID": entity},
+                },
+            ],
+        )
+        _write_jsonl(
+            source_root / f"{scenario}_wazuh.json",
+            [
+                {
+                    "agent": {
+                        "ip": "10.35.32.1",
+                        "name": "wazuh-client",
+                        "id": "29",
+                    },
+                    "manager": {"name": "wazuh.manager"},
+                    "rule": {
+                        "id": "86601",
+                        "level": 3,
+                        "description": f"{scenario} Wazuh alert",
+                        "groups": ["ids", "suricata"],
+                    },
+                    "decoder": {"name": "json"},
+                    "input": {"type": "log"},
+                    "@timestamp": "1970-01-01T00:00:00.100000Z",
+                    "location": "/var/log/suricata/eve.json",
+                    "id": "1000000000.000001",
+                },
+            ],
+        )
+    return source_root
+
+
 def test_load_ait_ads_label_windows_sorts_non_overlapping_intervals(
     tmp_path: Path,
 ) -> None:
@@ -236,6 +369,77 @@ def test_materialise_ait_ads_alert_stream_assigns_labels_and_sorts(
     assert records[1]["template_key"].startswith("suricata|signature_id=")
     assert records[2]["template_key"].startswith("wazuh|rule_id=")
     assert records[3]["template_key"].startswith("aminer|type=")
+
+
+def test_materialise_ait_ads_alert_stream_uses_half_open_end_boundaries(
+    tmp_path: Path,
+) -> None:
+    """AIT-ADS label windows should stay half-open at the end boundary."""
+    source_root = _write_boundary_fixture_source_tree(tmp_path)
+    raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    materialise_ait_ads_alert_stream(
+        source_root=source_root,
+        labels_path=source_root / "labels.csv",
+        raw_logs_path=raw_logs_path,
+        scenarios=("fox",),
+    )
+
+    records = [
+        json.loads(line)
+        for line in raw_logs_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [record["timestamp_unix_ms"] for record in records] == [
+        150,
+        200,
+    ]
+    assert [record["anomalous"] for record in records] == [1, 0]
+    assert records[0]["original_timestamp"] == "1970-01-01T00:00:00.150000Z"
+    assert records[1]["original_timestamp"] == "0.2"
+    assert records[0]["attack_phase"] == "service_stop"
+    assert records[1]["attack_phase"] is None
+
+
+def test_materialise_ait_ads_alert_stream_orders_equal_timestamps_stably(
+    tmp_path: Path,
+) -> None:
+    """AIT-ADS sorting should stay deterministic when timestamps tie."""
+    source_root = _write_equal_timestamp_fixture_source_tree(tmp_path)
+    raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    materialise_ait_ads_alert_stream(
+        source_root=source_root,
+        labels_path=source_root / "labels.csv",
+        raw_logs_path=raw_logs_path,
+        scenarios=("fox", "harrison"),
+    )
+
+    records = [
+        json.loads(line)
+        for line in raw_logs_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert [record["scenario"] for record in records] == [
+        "fox",
+        "fox",
+        "harrison",
+        "harrison",
+    ]
+    assert [record["ids_source"] for record in records] == [
+        "aminer",
+        "suricata",
+        "aminer",
+        "suricata",
+    ]
+    assert [record["timestamp_unix_ms"] for record in records] == [
+        100,
+        100,
+        100,
+        100,
+    ]
 
 
 def test_materialise_ait_ads_alert_stream_sorts_across_scenarios(

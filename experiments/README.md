@@ -110,6 +110,9 @@ The checked-in dataset-manifest set is split by dataset family:
   It combines all eight scenarios into one globally chronological alert
   stream, uses the combined `AIT_ADS` preset, and keeps the evaluation unit on
   the continuous event stream so the alert order mirrors the published data.
+  The companion `ait_ads/entity_chronological.toml` keeps entity-local
+  DeepCASE context but applies the split on the global alert chronology before
+  entity grouping, rather than holding out whole entities.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
 `train_on_normal_entities_only` for the training prefix on entity-grouped

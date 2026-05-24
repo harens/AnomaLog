@@ -21,6 +21,9 @@
   evaluation unit.
 - Keep the scenario-specific and short-window presets only as diagnostics for
   local analysis and contamination checks.
+- If an entity-local view is needed for DeepCASE, keep the split on the global
+  alert chronology and apply entity grouping afterwards so the context stays
+  host-aware without becoming an entity-heldout protocol.
 - Avoid a second paper-specific preset or manifest name; the combined path
   should be the default `ait_ads` contract.
 
@@ -60,6 +63,7 @@
   paper compatibility. That would move the configuration further away from the
   paper’s two-fold time-series cross-validation protocol.
 - If we must keep a single holdout approximation, `50% / 50%` is the closer
-  stand-in for the paper than `20% / 80%`.
+  stand-in for the paper than `20% / 80%`, provided the split is still driven
+  by the global alert chronology.
 - If we want the best match, the real fix is to add a CV-aware AIT experiment
   path rather than reinterpreting the paper as a fixed holdout split.

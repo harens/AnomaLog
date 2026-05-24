@@ -26,6 +26,7 @@ from experiments.config import (
     LocalDirSourceConfig,
     LocalZipSourceConfig,
     RawEntryPrefixCountSplitConfig,
+    RawEntryPrefixFractionSplitConfig,
     RawEntryPrefixNormalFractionSplitConfig,
     RemoteZipSourceConfig,
     load_experiment_bundles,
@@ -551,8 +552,10 @@ def test_ait_ads_base_manifest_uses_combined_chronological_stream() -> None:
 
 
 @pytest.mark.allow_no_new_coverage
-def test_ait_ads_entity_manifest_uses_entity_grouping() -> None:
-    """DeepLog and DeepCASE on AIT-ADS should use an entity-local sequence view."""
+def test_ait_ads_entity_manifest_uses_entity_grouping_with_chronological_split() -> (
+    None
+):
+    """AIT-ADS entity-local runs should split chronologically before grouping."""
     paper_bundles = load_experiment_bundles(
         Path("experiments/configs/datasets") / "ait_ads/entity_chronological.toml",
     )
@@ -565,14 +568,14 @@ def test_ait_ads_entity_manifest_uses_entity_grouping() -> None:
         isinstance(bundle.dataset.sequence, EntitySequenceConfig)
         for bundle in paper_bundles
     )
-    assert all(
-        bundle.dataset.sequence.train_fraction == pytest.approx(0.5)
-        for bundle in paper_bundles
-    )
-    assert all(
-        bundle.dataset.sequence.test_fraction == pytest.approx(0.5)
-        for bundle in paper_bundles
-    )
+    for bundle in paper_bundles:
+        split = bundle.dataset.sequence.split
+        assert isinstance(split, RawEntryPrefixFractionSplitConfig)
+        assert bundle.dataset.sequence.train_fraction == pytest.approx(0.5)
+        assert bundle.dataset.sequence.test_fraction == pytest.approx(0.5)
+        assert split.application_order.value == "before_grouping"
+        assert split.straddling_group_policy.value == "split_partial_sequences"
+        assert split.train_entry_fraction == pytest.approx(0.5)
     assert all(
         bundle.dataset.evaluation_unit is EvaluationUnit.SEQUENCE
         for bundle in paper_bundles
