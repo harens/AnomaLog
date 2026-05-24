@@ -201,7 +201,7 @@ def test_run_suite_check_missing_reports_incomplete_runs(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The missing-run check should report only incomplete concrete runs.
+    """The missing-run check should group missing bundles by registry experiment.
 
     Args:
         tmp_path (Path): Temporary directory used to build the registry tree.
@@ -252,11 +252,7 @@ def test_run_suite_check_missing_reports_incomplete_runs(
 
     output = capsys.readouterr().out.strip().splitlines()
     assert output == [
-        f"- missing_dir [{missing_dir_bundle.concrete_name}]",
-        f"  dataset: {missing_dir_bundle.dataset_path.as_posix()}",
-        f"  model: {missing_dir_bundle.model_path.as_posix()}",
-        f"  output: {prepare_result_paths(missing_dir_bundle).run_dir.as_posix()}",
-        "  status: missing output directory",
+        "- missing_dir",
         (
             "  rerun: "
             + shlex.join(
@@ -275,11 +271,12 @@ def test_run_suite_check_missing_reports_incomplete_runs(
                 ],
             )
         ),
-        f"- missing_metrics [{missing_metrics_bundle.concrete_name}]",
-        f"  dataset: {missing_metrics_bundle.dataset_path.as_posix()}",
-        f"  model: {missing_metrics_bundle.model_path.as_posix()}",
-        f"  output: {missing_metrics_paths.run_dir.as_posix()}",
-        "  status: missing metrics.json",
+        f"  - [{missing_dir_bundle.concrete_name}]",
+        f"    dataset: {missing_dir_bundle.dataset_path.as_posix()}",
+        f"    model: {missing_dir_bundle.model_path.as_posix()}",
+        f"    output: {prepare_result_paths(missing_dir_bundle).run_dir.as_posix()}",
+        "    status: missing output directory",
+        "- missing_metrics",
         (
             "  rerun: "
             + shlex.join(
@@ -298,5 +295,10 @@ def test_run_suite_check_missing_reports_incomplete_runs(
                 ],
             )
         ),
+        f"  - [{missing_metrics_bundle.concrete_name}]",
+        f"    dataset: {missing_metrics_bundle.dataset_path.as_posix()}",
+        f"    model: {missing_metrics_bundle.model_path.as_posix()}",
+        f"    output: {missing_metrics_paths.run_dir.as_posix()}",
+        "    status: missing metrics.json",
         "Summary: total=3 completed=1 missing=2",
     ]

@@ -285,9 +285,12 @@ def _report_missing_runs(
     missing_statuses = [
         status for status in statuses if status.missing_reason is not None
     ]
-    for status in missing_statuses:
-        for line in _format_missing_run(
-            status,
+    for experiment, experiment_statuses in _group_missing_run_statuses(
+        missing_statuses,
+    ):
+        for line in _format_missing_run_group(
+            experiment=experiment,
+            statuses=experiment_statuses,
             registry_path=registry_path,
             repo_root=repo_root,
         ):
@@ -298,6 +301,28 @@ def _report_missing_runs(
     _write_line(
         f"Summary: total={total} completed={completed} missing={missing}",
     )
+
+
+def _group_missing_run_statuses(
+    statuses: list[_RunStatus],
+) -> list[tuple[RegisteredExperiment, list[_RunStatus]]]:
+    grouped: list[tuple[RegisteredExperiment, list[_RunStatus]]] = []
+    current_experiment: RegisteredExperiment | None = None
+    current_statuses: list[_RunStatus] = []
+    for status in statuses:
+        if (
+            current_experiment is None
+            or status.experiment.name != current_experiment.name
+        ):
+            if current_experiment is not None:
+                grouped.append((current_experiment, current_statuses))
+            current_experiment = status.experiment
+            current_statuses = [status]
+            continue
+        current_statuses.append(status)
+    if current_experiment is not None:
+        grouped.append((current_experiment, current_statuses))
+    return grouped
 
 
 def _collect_run_statuses(
@@ -335,25 +360,33 @@ def _collect_run_statuses(
     return statuses
 
 
-def _format_missing_run(
-    status: _RunStatus,
+def _format_missing_run_group(
     *,
+    experiment: RegisteredExperiment,
+    statuses: list[_RunStatus],
     registry_path: Path,
     repo_root: Path,
 ) -> list[str]:
     command = _build_rerun_command(
-        status.experiment.name,
+        experiment.name,
         registry_path=registry_path,
         repo_root=repo_root,
     )
-    return [
-        f"- {status.experiment.name} [{status.bundle.concrete_name}]",
-        f"  dataset: {status.bundle.dataset_path.as_posix()}",
-        f"  model: {status.bundle.model_path.as_posix()}",
-        f"  output: {status.run_dir.as_posix()}",
-        f"  status: {status.missing_reason}",
+    lines = [
+        f"- {experiment.name}",
         f"  rerun: {shlex.join(command)}",
     ]
+    for status in statuses:
+        lines.extend(
+            [
+                f"  - [{status.bundle.concrete_name}]",
+                f"    dataset: {status.bundle.dataset_path.as_posix()}",
+                f"    model: {status.bundle.model_path.as_posix()}",
+                f"    output: {status.run_dir.as_posix()}",
+                f"    status: {status.missing_reason}",
+            ],
+        )
+    return lines
 
 
 def _build_rerun_command(
