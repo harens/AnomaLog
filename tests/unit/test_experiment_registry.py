@@ -420,3 +420,69 @@ def test_resolve_registry_experiment_applies_model_overrides(
     assert isinstance(deeplog_bundle.model, DeepLogModelConfig)
     assert deeplog_bundle.model.parameter_detection_enabled is False
     assert deeplog_bundle.model.top_g_values == (1, 3, 5)
+
+
+def test_load_dataset_experiment_config_is_cached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated dataset resolution should not re-read the dataset TOML file."""
+    registry_path = _write_registry_tree(tmp_path)
+    registry = load_experiment_registry(registry_path, repo_root=tmp_path)
+    dataset_path = tmp_path / "experiments" / "configs" / "datasets" / "demo.toml"
+    read_calls = 0
+    original_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        nonlocal read_calls
+        if self == dataset_path:
+            read_calls += 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    registry.resolve_experiment(
+        "demo",
+        registry_path=registry_path,
+        repo_root=tmp_path,
+    )
+    registry.resolve_experiment(
+        "demo",
+        registry_path=registry_path,
+        repo_root=tmp_path,
+    )
+
+    assert read_calls == 1
+
+
+def test_load_model_config_reference_is_cached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated model references should not re-read the model TOML file."""
+    registry_path = _write_registry_tree(tmp_path)
+    registry = load_experiment_registry(registry_path, repo_root=tmp_path)
+    model_path = tmp_path / "experiments" / "configs" / "models" / "deepcase.toml"
+    read_calls = 0
+    original_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        nonlocal read_calls
+        if self == model_path:
+            read_calls += 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    registry.resolve_experiment(
+        "demo",
+        registry_path=registry_path,
+        repo_root=tmp_path,
+    )
+    registry.resolve_experiment(
+        "demo",
+        registry_path=registry_path,
+        repo_root=tmp_path,
+    )
+
+    assert read_calls == 1

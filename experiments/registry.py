@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -538,6 +539,7 @@ def _merge_toml_tables(
     return merged
 
 
+@cache
 def _load_dataset_experiment_config(path: Path) -> _DatasetExperimentConfig:
     resolved_config_path = _resolve_dataset_manifest_path(path)
     raw_config = _load_merged_dataset_experiment_config(
@@ -1269,20 +1271,28 @@ def _resolve_model_config(
         if not isinstance(ref, str):
             msg = "model `ref` must be a string."
             raise TypeError(msg)
-        model_path = repo_root / "experiments" / "configs" / "models" / f"{ref}.toml"
-        if not model_path.exists():
-            msg = f"Missing model config for reference: {model_path}"
-            raise ConfigError(msg)
-        model = _decode_toml_file(model_path, decode=_decode_model_config)
-    else:
-        model = _decode_model_config(
-            {
-                key: value
-                for key, value in model_config.items()
-                if key not in {"overrides", "axes", "run_group"}
-            },
-        )
-        model_path = fallback_path
+        return _load_model_config_reference(ref, repo_root=repo_root)
+    model = _decode_model_config(
+        {
+            key: value
+            for key, value in model_config.items()
+            if key not in {"overrides", "axes", "run_group"}
+        },
+    )
+    return model, fallback_path
+
+
+@cache
+def _load_model_config_reference(
+    ref: str,
+    *,
+    repo_root: Path,
+) -> tuple[ExperimentModelConfig, Path]:
+    model_path = repo_root / "experiments" / "configs" / "models" / f"{ref}.toml"
+    if not model_path.exists():
+        msg = f"Missing model config for reference: {model_path}"
+        raise ConfigError(msg)
+    model = _decode_toml_file(model_path, decode=_decode_model_config)
     return model, model_path
 
 
