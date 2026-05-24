@@ -1,4 +1,4 @@
-"""Normal-only Markov n-gram sanity baseline over template transitions."""
+"""Masked Markov n-gram sanity baseline over template transitions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
-from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -120,15 +119,17 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         transition_counts_by_context (dict[tuple[str, ...], Counter[str]]):
             Learned next-template counts per context.
         context_counts (Counter[tuple[str, ...]]): Learned context counts.
-        normal_sequence_count (int): Number of normal train sequences used for fitting.
-        normal_transition_count (int): Number of scored normal transitions
+        normal_sequence_count (int): Number of training sequences that
+            contributed eligible targets during fit.
+        normal_transition_count (int): Number of eligible training transitions
             seen during fit.
         score_threshold (float): Effective anomaly threshold after fitting.
         threshold_source (str): Whether the threshold was configured or calibrated.
         event_score_threshold (float): Effective event-level anomaly threshold.
         event_threshold_source (str): Whether the event threshold was configured
             or calibrated.
-        normal_template_vocabulary (set[str]): Templates observed in normal training.
+        normal_template_vocabulary (set[str]): Templates observed in the
+            sequences used for fitting.
     """
 
     detector_name: ClassVar[str] = "markov"
@@ -175,7 +176,8 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             logger (logging.Logger | None): Optional logger for fit diagnostics.
 
         Raises:
-            ValueError: If the training split contains no eligible sequences.
+            ValueError: If the training split contains no eligible training
+                targets.
         """
         del logger
         self._ensure_unfit(detector_name=self.detector_name)
@@ -205,7 +207,10 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             calibration_sequences.append(prepared_sequence)
 
         if not calibration_sequences:
-            msg = "markov detector requires at least one normal training sequence."
+            msg = (
+                "markov detector requires at least one training sequence with "
+                "eligible training targets."
+            )
             raise ValueError(msg)
 
         if self.configured_score_threshold is not None:
@@ -377,7 +382,7 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         eligible_target_indexes: set[int],
         prefix_templates: list[str] | None,
     ) -> int:
-        """Update transition counts from one normal training sequence.
+        """Update transition counts from one training sequence.
 
         Args:
             sequence (TemplateSequence): Training sequence to learn from.
@@ -417,8 +422,6 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         prefix_templates = (
             stream_context_templates if sequence.continuous_context else []
         )
-        if is_anomalous_label(sequence.label):
-            return None, []
         if not eligible_target_indexes:
             if sequence.continuous_context:
                 return (
@@ -574,8 +577,8 @@ class MarkovManifest(ModelManifest, frozen=True):
         smoothing (float): Additive smoothing applied to transition counts.
         normal_sequence_count (int): Number of training sequences that
             contributed eligible targets during fit.
-        normal_transition_count (int): Number of eligible transitions seen
-            during fit.
+        normal_transition_count (int): Number of eligible training transitions
+            seen during fit.
         normal_context_vocabulary (int): Number of learned transition contexts.
         normal_template_vocabulary (int): Number of unique templates seen in
             normal training.
@@ -596,7 +599,7 @@ class MarkovManifest(ModelManifest, frozen=True):
 
 @dataclass(slots=True)
 class _PreparedMarkovCalibrationSequence:
-    """Cached training payload for one normal Markov calibration sequence."""
+    """Cached training payload for one Markov calibration sequence."""
 
     sequence: TemplateSequence
     prefix_templates: list[str] | None

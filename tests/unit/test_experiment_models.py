@@ -966,6 +966,26 @@ def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
     assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
 
 
+def test_markov_detector_accepts_mixed_training_chunks_with_eligible_targets() -> None:
+    """Markov should fit BGL-style mixed training chunks via event masks."""
+    detector = _markov_config(name="markov").build_detector()
+    mixed_train_sequence = _sequence(
+        42,
+        templates=["A", "B", "C", "D"],
+        label=1,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True, False),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([mixed_train_sequence], progress=progress)
+
+    assert detector.normal_sequence_count == 1
+    assert detector.normal_transition_count == 1
+    assert detector.context_counts == Counter({("B",): 1})
+    assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
+
+
 def test_markov_detector_fit_builds_eligible_indexes_once_per_sequence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
