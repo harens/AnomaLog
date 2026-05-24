@@ -13,6 +13,8 @@ from experiments.config import (
     load_experiment_registry,
     resolve_registry_experiment,
 )
+from experiments.models.deepcase.detector import DeepCaseModelConfig
+from experiments.models.deepcase.shared import DeepCaseClusterScoreStrategy
 from experiments.models.deeplog import DeepLogModelConfig
 
 
@@ -420,6 +422,46 @@ def test_resolve_registry_experiment_applies_model_overrides(
     assert isinstance(deeplog_bundle.model, DeepLogModelConfig)
     assert deeplog_bundle.model.parameter_detection_enabled is False
     assert deeplog_bundle.model.top_g_values == (1, 3, 5)
+
+
+def test_resolve_registry_experiment_applies_deepcase_model_set_overrides() -> None:
+    """DeepCASE model-set overrides should reach the resolved model config."""
+    repo_root = Path(__file__).resolve().parents[2]
+    resolved = resolve_registry_experiment(
+        "bgl_entity_chronological",
+        registry_path=repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    deepcase_bundles = {
+        bundle.run_group: bundle
+        for bundle in resolved.bundles
+        if bundle.model.detector == "deepcase"
+    }
+
+    deepcase_majority_vote = deepcase_bundles["deepcase_majority_vote"]
+    deepcase_threshold_fraction = deepcase_bundles["deepcase_threshold_fraction"]
+    deepcase_abstain_mixed = deepcase_bundles["deepcase_abstain_mixed"]
+
+    assert isinstance(deepcase_majority_vote.model, DeepCaseModelConfig)
+    assert isinstance(deepcase_threshold_fraction.model, DeepCaseModelConfig)
+    assert isinstance(deepcase_abstain_mixed.model, DeepCaseModelConfig)
+    assert (
+        deepcase_majority_vote.model.cluster_score_strategy
+        is DeepCaseClusterScoreStrategy.MAJORITY_VOTE
+    )
+    assert (
+        deepcase_threshold_fraction.model.cluster_score_strategy
+        is DeepCaseClusterScoreStrategy.THRESHOLD_FRACTION
+    )
+    assert (
+        deepcase_abstain_mixed.model.cluster_score_strategy
+        is DeepCaseClusterScoreStrategy.ABSTAIN_MIXED
+    )
+    assert deepcase_majority_vote.applied_overrides == {
+        "model.name": "deepcase_majority_vote",
+        "model.cluster_score_strategy": "majority_vote",
+    }
 
 
 def test_load_dataset_experiment_config_is_cached(

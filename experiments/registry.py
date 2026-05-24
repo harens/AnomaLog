@@ -1172,23 +1172,26 @@ def _build_experiment_bundles(
     bundles: list[ExperimentBundle] = []
     for model_set_name in experiment.model_sets:
         model_set = registry.model_set(model_set_name)
-        model_overrides = _merge_model_overrides(
-            model_set.overrides,
-            experiment.overrides.get(model_set_name, {}),
-        )
-        bundles.extend(
-            _build_concrete_bundle(
-                request=_ConcreteBundleRequest(
-                    context=context,
+        for model_ref in model_set.models:
+            model_overrides = _merge_model_overrides(
+                _select_model_overrides(
+                    model_set.overrides,
                     model_ref=model_ref,
-                    run_group=model_set_name,
-                    model_overrides=model_overrides,
-                    experiment=experiment,
-                    repo_root=repo_root,
+                ),
+                experiment.overrides.get(model_set_name, {}),
+            )
+            bundles.append(
+                _build_concrete_bundle(
+                    request=_ConcreteBundleRequest(
+                        context=context,
+                        model_ref=model_ref,
+                        run_group=model_set_name,
+                        model_overrides=model_overrides,
+                        experiment=experiment,
+                        repo_root=repo_root,
+                    ),
                 ),
             )
-            for model_ref in model_set.models
-        )
     bundles.extend(
         _build_concrete_bundle(
             request=_ConcreteBundleRequest(
@@ -1210,6 +1213,40 @@ def _merge_model_overrides(*sources: dict[str, object]) -> dict[str, object]:
     for source in sources:
         merged.update(source)
     return merged
+
+
+def _select_model_overrides(
+    overrides: dict[str, object],
+    *,
+    model_ref: str,
+) -> dict[str, object]:
+    """Return the concrete override table for one model reference.
+
+    Model-set overrides may be declared as a flat table or as a nested table
+    keyed by model reference. The latter is the shape used by the checked-in
+    DeepCASE ablations, so the builder needs to select the correct per-model
+    sub-table before applying the overrides to the decoded config.
+
+    Raises:
+        ConfigError: If the selected nested override entry is not a TOML
+            table.
+    """
+    if not overrides:
+        return {}
+
+    nested_override_tables = any(
+        isinstance(value, dict) for value in overrides.values()
+    )
+    if not nested_override_tables:
+        return dict(overrides)
+
+    selected = overrides.get(model_ref)
+    if selected is None:
+        return {}
+    if not isinstance(selected, dict):
+        msg = f"Model overrides for {model_ref!r} must be a TOML table."
+        raise ConfigError(msg)
+    return {str(key): value for key, value in selected.items()}
 
 
 def _build_concrete_bundle(
