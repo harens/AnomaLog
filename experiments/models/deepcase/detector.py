@@ -10,6 +10,7 @@ import msgspec
 import numpy as np
 import scipy.sparse as sp
 import torch
+from deepcase.context_builder.loss import LabelSmoothing
 from deepcase.interpreter.utils import group_by, sp_unique
 from sklearn.neighbors import KDTree
 from typing_extensions import override
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterable, Iterator, Sequence
 
+    from deepcase.context_builder.context_builder import ContextBuilder
     from deepcase.interpreter.interpreter import Interpreter
     from rich.progress import Progress
 
@@ -1022,6 +1024,37 @@ class _CachedContextBuilderTrainingBatch:
     events: np.ndarray
 
 
+@dataclass(slots=True)
+class _ContextBuilderTrainingState:
+    """Mutable state for chunked DeepCASE context-builder training.
+
+    Attributes:
+        cached_batches (Sequence[_CachedContextBuilderTrainingBatch]): Cached
+            context-builder batches replayed across epochs.
+        context_builder (ContextBuilder): Upstream DeepCASE context builder
+            being trained.
+        criterion (torch.nn.Module): Label-smoothing loss used by the
+            official DeepCASE training loop.
+        device (torch.device): Runtime device for the model parameters and
+            minibatches.
+        optimiser (torch.optim.Optimizer): Single optimiser instance reused
+            across all cached batches.
+        epochs (int): Number of training epochs to replay.
+        batch_size (int): Minibatch size used within each cached batch.
+        teach_ratio (float): Teacher-forcing ratio forwarded to the context
+            builder.
+    """
+
+    cached_batches: Sequence[_CachedContextBuilderTrainingBatch]
+    context_builder: ContextBuilder
+    criterion: torch.nn.Module
+    device: torch.device
+    optimiser: torch.optim.Optimizer
+    epochs: int
+    batch_size: int
+    teach_ratio: float
+
+
 def _training_sample_count(sequence: TemplateSequence) -> int:
     if sequence.training_event_mask is not None:
         return sum(1 for is_eligible in sequence.training_event_mask if is_eligible)
@@ -1152,18 +1185,72 @@ def _fit_context_builder_in_chunks(
         context_length=config.context_length,
         timeout_seconds=config.timeout_seconds,
     )
-    for _ in range(config.epochs):
-        for batch in cached_batches:
-            model.context_builder.fit(
-                X=batch.contexts,
-                y=batch.events.reshape(-1, 1),
-                epochs=1,
+    context_builder = model.context_builder
+    mode = context_builder.training
+    device = next(context_builder.parameters()).device
+    optimiser = torch.optim.SGD(
+        params=context_builder.parameters(),
+        lr=config.learning_rate,
+    )
+    criterion = LabelSmoothing(
+        context_builder.decoder_event.out.out_features,
+        config.label_smoothing_delta,
+    )
+    context_builder.train()
+    try:
+        _train_context_builder_batches(
+            state=_ContextBuilderTrainingState(
+                cached_batches=cached_batches,
+                context_builder=context_builder,
+                criterion=criterion,
+                device=device,
+                optimiser=optimiser,
+                epochs=config.epochs,
                 batch_size=config.batch_size,
-                learning_rate=config.learning_rate,
                 teach_ratio=config.teach_ratio,
-                delta=config.label_smoothing_delta,
-                verbose=False,
+            ),
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        context_builder.train(mode)
+
+
+def _train_context_builder_batches(
+    *,
+    state: _ContextBuilderTrainingState,
+) -> None:
+    """Train the context builder over cached batches with one optimiser.
+
+    Args:
+        state (_ContextBuilderTrainingState): Training state holding the
+            cached batches, optimiser, and batch-loop parameters.
+    """
+    for _ in range(state.epochs):
+        for batch in state.cached_batches:
+            data = torch.utils.data.DataLoader(
+                torch.utils.data.TensorDataset(
+                    torch.as_tensor(batch.contexts, dtype=torch.int64),
+                    torch.as_tensor(batch.events, dtype=torch.int64).reshape(-1, 1),
+                ),
+                batch_size=state.batch_size,
+                shuffle=True,
             )
+            for contexts_batch, events_batch in data:
+                contexts_tensor = contexts_batch.to(state.device)
+                events_tensor = events_batch.to(state.device)
+                state.optimiser.zero_grad()
+                confidence, _ = state.context_builder.forward(
+                    contexts_tensor,
+                    events_tensor,
+                    steps=events_tensor.shape[1],
+                    teach_ratio=state.teach_ratio,
+                )
+                loss = state.criterion(confidence[:, 0], events_tensor[:, 0])
+                for step in range(1, confidence.shape[1]):
+                    loss += state.criterion(confidence[:, step], events_tensor[:, step])
+                loss.backward()
+                state.optimiser.step()
 
 
 def _materialise_context_builder_training_batches(

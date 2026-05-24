@@ -519,22 +519,26 @@ def test_deepcase_fit_passes_label_smoothing_delta(
     # incidental new line coverage in the upstream library wrappers.
     captured_delta: list[float] = []
 
-    def _fit_context_builder(
-        self: ContextBuilder,
-        *,
-        delta: float,
-        **kwargs: object,
-    ) -> ContextBuilder:
-        del kwargs
-        captured_delta.append(float(delta))
-        return self
+    class FakeCriterion:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del kwargs
+            assert isinstance(args[1], (int, float))
+            captured_delta.append(float(args[1]))
+
+        def __call__(
+            self,
+            confidence: torch.Tensor,
+            target: torch.Tensor,
+        ) -> torch.Tensor:
+            del target
+            return confidence.sum()
 
     def _fit_interpreter(self: Interpreter, **kwargs: object) -> Interpreter:
         del kwargs
         self.clusters = np.array([0, -1])
         return self
 
-    monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
+    monkeypatch.setattr(deepcase_detector, "LabelSmoothing", FakeCriterion)
     monkeypatch.setattr(Interpreter, "fit", _fit_interpreter)
     detector = _deep_case_config(
         name="deepcase",
@@ -558,28 +562,29 @@ def test_deepcase_fit_runs_context_builder_one_epoch_at_a_time(
         monkeypatch (pytest.MonkeyPatch): Replaces the upstream DeepCase fit
             methods so the test can observe how many one-epoch calls are made.
     """
-    epoch_calls: list[int] = []
+    batch_trainer_calls: list[deepcase_detector._ContextBuilderTrainingState] = []
 
-    def _fit_context_builder(
-        self: ContextBuilder,
+    def _train_context_builder_batches(
         *,
-        epochs: int,
-        **kwargs: object,
-    ) -> ContextBuilder:
-        del kwargs
-        epoch_calls.append(epochs)
-        return self
+        state: deepcase_detector._ContextBuilderTrainingState,
+    ) -> None:
+        batch_trainer_calls.append(state)
 
     def _fit_interpreter(self: Interpreter, **kwargs: object) -> Interpreter:
         del kwargs
         self.clusters = np.array([0, -1])
         return self
 
-    monkeypatch.setattr(ContextBuilder, "fit", _fit_context_builder)
+    monkeypatch.setattr(
+        deepcase_detector,
+        "_train_context_builder_batches",
+        _train_context_builder_batches,
+    )
     monkeypatch.setattr(Interpreter, "fit", _fit_interpreter)
+    epochs = 3
     detector = _deep_case_config(
         name="deepcase",
-        epochs=3,
+        epochs=epochs,
         iterations=100,
     ).build_detector()
     sequence = _sequence(templates=["A", "B"])
@@ -587,7 +592,8 @@ def test_deepcase_fit_runs_context_builder_one_epoch_at_a_time(
     with Progress(disable=True) as progress:
         detector.fit((sequence,), progress=progress)
 
-    assert epoch_calls == [1, 1, 1]
+    assert len(batch_trainer_calls) == 1
+    assert batch_trainer_calls[0].epochs == epochs
 
 
 def test_deepcase_detector_rejects_repeated_fit() -> None:
@@ -639,37 +645,13 @@ def test_deepcase_fit_chunks_training_and_clustering_batches(
         2,
     )
 
-    fit_batch_sizes: list[int] = []
-    tensor_devices: list[str] = []
-    original_as_tensor = torch.as_tensor
+    batch_trainer_calls: list[deepcase_detector._ContextBuilderTrainingState] = []
 
-    def _record_as_tensor(
-        data: object,
-        dtype: object = None,
-        device: object = None,
-    ) -> torch.Tensor:
-        if isinstance(dtype, torch.dtype) and isinstance(
-            device,
-            (str, int, torch.device),
-        ):
-            tensor_devices.append(str(device))
-            return original_as_tensor(data, dtype=dtype, device=device)
-        if isinstance(dtype, torch.dtype):
-            return original_as_tensor(data, dtype=dtype)
-        if isinstance(device, (str, int, torch.device)):
-            tensor_devices.append(str(device))
-            return original_as_tensor(data, device=device)
-        return original_as_tensor(data)
-
-    def _fake_context_fit(
-        self: ContextBuilder,
-        **kwargs: object,
-    ) -> ContextBuilder:
-        x = kwargs["X"]
-        assert isinstance(x, np.ndarray)
-        fit_batch_sizes.append(np.asarray(x).shape[0])
-        torch.as_tensor(x, dtype=torch.int64, device="cpu")
-        return self
+    def _train_context_builder_batches(
+        *,
+        state: deepcase_detector._ContextBuilderTrainingState,
+    ) -> None:
+        batch_trainer_calls.append(state)
 
     def _fake_attended_context(
         self: Interpreter,
@@ -692,17 +674,23 @@ def test_deepcase_fit_chunks_training_and_clustering_batches(
         del scores, verbose
         return self
 
-    monkeypatch.setattr(torch, "as_tensor", _record_as_tensor)
-    monkeypatch.setattr(ContextBuilder, "fit", _fake_context_fit)
+    monkeypatch.setattr(
+        deepcase_detector,
+        "_train_context_builder_batches",
+        _train_context_builder_batches,
+    )
     monkeypatch.setattr(Interpreter, "attended_context", _fake_attended_context)
     monkeypatch.setattr(Interpreter, "score", _fake_score)
 
     with Progress(disable=True) as progress:
         detector.fit((sequence,), progress=progress)
 
-    assert fit_batch_sizes == [2, 2, 1]
-    assert tensor_devices
-    assert all(device == str(detector.device) for device in tensor_devices)
+    assert len(batch_trainer_calls) == 1
+    cached_batches = batch_trainer_calls[0].cached_batches
+    assert [batch.contexts.shape[0] for batch in cached_batches] == [2, 2, 1]
+    assert all(
+        str(state.device) == str(detector.device) for state in batch_trainer_calls
+    )
     assert detector.train_sample_count == len(sequence.events)
 
 
@@ -1186,16 +1174,18 @@ def test_fit_context_builder_reuses_cached_training_batches(
         monkeypatch (pytest.MonkeyPatch): Replaces the hot-path helpers with
             counters so the test can observe chunk reuse directly.
     """
-    expected_fit_call_count = 3
+    expected_epoch_count = 3
     sequence = _sequence(templates=["A", "B"], label=0)
     event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
     config = _deep_case_config(
-        epochs=expected_fit_call_count,
+        epochs=expected_epoch_count,
         batch_size=2,
         learning_rate=0.01,
     )
-    fit_calls: list[dict[str, object]] = []
     build_calls = 0
+    optimiser_calls = 0
+    optimiser_zero_grad_calls = 0
+    optimiser_step_calls = 0
 
     def fake_build_training_batch_from_map(
         sequences: object,
@@ -1213,6 +1203,32 @@ def test_fit_context_builder_reuses_cached_training_batches(
             sample_count=1,
         )
 
+    class FakeOptimiser:
+        def __init__(self, params: object, lr: float) -> None:
+            del params, lr
+
+        @staticmethod
+        def zero_grad() -> None:
+            nonlocal optimiser_zero_grad_calls
+            optimiser_zero_grad_calls += 1
+
+        @staticmethod
+        def step() -> None:
+            nonlocal optimiser_step_calls
+            optimiser_step_calls += 1
+
+    class FakeCriterion:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def __call__(
+            self,
+            confidence: torch.Tensor,
+            target: torch.Tensor,
+        ) -> torch.Tensor:
+            del target
+            return confidence.sum()
+
     monkeypatch.setattr(
         deepcase_detector,
         "build_training_batch_from_map",
@@ -1221,11 +1237,26 @@ def test_fit_context_builder_reuses_cached_training_batches(
 
     model = DeepCASE(features=len(event_id_map.event_id_to_template))
 
-    def fake_fit(**kwargs: object) -> ContextBuilder:
-        fit_calls.append(dict(kwargs))
-        return model.context_builder
+    def fake_sgd(*args: object, **kwargs: object) -> FakeOptimiser:
+        del args, kwargs
+        nonlocal optimiser_calls
+        optimiser_calls += 1
+        return FakeOptimiser(params=(), lr=0.0)
 
-    monkeypatch.setattr(model.context_builder, "fit", fake_fit)
+    monkeypatch.setattr(deepcase_detector.torch.optim, "SGD", fake_sgd)
+    monkeypatch.setattr(deepcase_detector, "LabelSmoothing", FakeCriterion)
+
+    def fake_forward(
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del args, kwargs
+        return (
+            torch.ones((1, 1, 2), requires_grad=True),
+            torch.zeros((1, 1, 1)),
+        )
+
+    monkeypatch.setattr(model.context_builder, "forward", fake_forward)
     # Test the chunking helper directly so the caching regression stays focused.
     fit_context_builder_in_chunks = (
         deepcase_detector._fit_context_builder_in_chunks  # noqa: SLF001
@@ -1238,8 +1269,9 @@ def test_fit_context_builder_reuses_cached_training_batches(
     )
 
     assert build_calls == 1
-    assert len(fit_calls) == expected_fit_call_count
-    assert all(call["epochs"] == 1 for call in fit_calls)
+    assert optimiser_calls == 1
+    assert optimiser_zero_grad_calls == expected_epoch_count
+    assert optimiser_step_calls == expected_epoch_count
 
 
 def test_deepcase_score_mapping_is_conservative() -> None:
