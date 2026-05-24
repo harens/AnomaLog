@@ -99,6 +99,13 @@ def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
     assert config.parameter_detection_enabled is False
 
 
+def test_deeplog_model_config_defaults_short_session_padding_fidelity() -> None:
+    """DeepLog should default to the paper-faithful short-session policy."""
+    config = _deep_log_config(name="deeplog")
+
+    assert config.short_session_padding_fidelity is False
+
+
 def test_deeplog_model_config_accepts_parameter_detection_disabled() -> None:
     """DeepLog should decode explicit key-only HDFS reproduction configs."""
     config = _deep_log_config(
@@ -1510,6 +1517,44 @@ def test_deeplog_next_event_prediction_counts_independent_segments() -> None:
     )
 
 
+def test_deeplog_short_session_padding_fidelity_scores_last_event() -> None:
+    """Legacy short-session fidelity should emit one padded key decision."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=10,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            short_session_padding_fidelity=True,
+        ),
+    )
+    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert detector.key_model is not None
+    detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    detector.index_to_template = {
+        index: template for template, index in detector.template_to_index.items()
+    }
+
+    outcome = detector.predict(_sequence(templates=["A", "B", "D"]))
+    metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
+
+    assert outcome.findings
+    assert outcome.findings[0].event_index == 2
+    assert outcome.findings[0].key_model_finding is not None
+    assert metrics.next_event_prediction is not None
+    assert metrics.next_event_prediction.totals.events_seen == 3
+    assert metrics.next_event_prediction.totals.events_eligible == 1
+    assert metrics.next_event_prediction.exclusions.insufficient_history == 2
+
+
 def test_next_event_prediction_state_top_k_is_monotonic() -> None:
     """Top-k hit counts should never decrease as k grows."""
     state = NextEventPredictionState(
@@ -2195,6 +2240,7 @@ def test_deeplog_manifest_reports_parameter_model_metadata() -> None:
     assert manifest.parameter_schema_policy.startswith("strict:")
     assert manifest.parameter_validation_policy.startswith("per-template temporal")
     assert manifest.parameter_detection_enabled is True
+    assert manifest.short_session_padding_fidelity is False
     assert manifest.history_size == detector.config.history_size
     assert manifest.top_g == max(detector.config.top_g_values)
     assert manifest.top_g_values == list(detector.config.top_g_values)

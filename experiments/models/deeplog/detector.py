@@ -656,6 +656,17 @@ class DeepLogModelConfig(
         TorchDeviceName,
         msgspec.Meta(description="Torch device selection: auto, cpu, cuda, or mps."),
     ] = "auto"
+    short_session_padding_fidelity: Annotated[
+        bool,
+        msgspec.Meta(
+            description=(
+                "Enable the legacy DeepLog prediction-script padding fallback. "
+                "When enabled, standalone sessions shorter than "
+                "history_size + 1 still produce one top-g decision by padding "
+                "the left-hand history."
+            ),
+        ),
+    ] = False
 
     def build_detector(self) -> DeepLogDetector:
         """Construct a DeepLog detector for experiment execution.
@@ -883,6 +894,9 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 top_g=max(self.config.top_g_values),
             ),
             prefix_templates=self._prediction_prefix_templates(sequence),
+            include_short_session_padding_fallback=(
+                self.config.short_session_padding_fidelity
+            ),
         )
         self._record_key_top_g_replay(
             sequence=sequence,
@@ -1030,6 +1044,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             gaussian_confidence=self.config.gaussian_confidence,
             parameter_detection_enabled=self.config.parameter_detection_enabled,
             include_elapsed_time=self.config.include_elapsed_time,
+            short_session_padding_fidelity=self.config.short_session_padding_fidelity,
             train_key_vocabulary_size=len(self.template_to_index),
             trained_parameter_model_count=len(self.parameter_models),
             skipped_parameter_model_count=len(self.skipped_parameter_models),

@@ -257,6 +257,10 @@ def _assert_deeplog_manifest(
     )
     assert model_manifest["include_elapsed_time"] == deeplog_model.include_elapsed_time
     assert (
+        model_manifest["short_session_padding_fidelity"]
+        == deeplog_model.short_session_padding_fidelity
+    )
+    assert (
         model_manifest["parameter_detection_enabled"]
         == deeplog_model.parameter_detection_enabled
     )

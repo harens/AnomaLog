@@ -1142,8 +1142,15 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     def bundle_named(
         bundles: list[ExperimentBundle],
         detector: str,
+        *,
+        run_group: str | None = None,
     ) -> ExperimentBundle:
-        return next(bundle for bundle in bundles if bundle.model.detector == detector)
+        return next(
+            bundle
+            for bundle in bundles
+            if bundle.model.detector == detector
+            and (run_group is None or bundle.run_group == run_group)
+        )
 
     validate_deeplog_paper_config(
         dataset_config=bundle_named(bgl_1pct_bundles, "deeplog").dataset,
@@ -1154,8 +1161,16 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         model_config=bundle_named(bgl_10pct_bundles, "deeplog").model,
     )
     validate_deeplog_paper_config(
-        dataset_config=bundle_named(hdfs_bundles, "deeplog").dataset,
-        model_config=bundle_named(hdfs_bundles, "deeplog").model,
+        dataset_config=bundle_named(
+            hdfs_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).dataset,
+        model_config=bundle_named(
+            hdfs_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).model,
     )
 
     assert {bundle.model.detector for bundle in bgl_1pct_bundles} >= {
@@ -1202,7 +1217,13 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     _assert_bgl_10pct_deeplog_bundle(
         bundle_named(bgl_10pct_bundles, "deeplog"),
     )
-    _assert_hdfs_deeplog_bundle(bundle_named(hdfs_bundles, "deeplog"))
+    _assert_hdfs_deeplog_bundle(
+        bundle_named(
+            hdfs_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ),
+    )
 
 
 def test_wuyifan18_deeplog_preprocessed_config_uses_exact_session_boundary() -> None:
@@ -1260,7 +1281,11 @@ def test_wuyifan18_preprocessed_manifest_exposes_the_deeplog_bundle() -> None:
         "template_frequency",
         "markov",
     }
-    bundle = next(bundle for bundle in bundles if bundle.model.detector == "deeplog")
+    bundle = next(
+        bundle
+        for bundle in bundles
+        if bundle.model.detector == "deeplog" and bundle.run_group == "deeplog_default"
+    )
     assert bundle.dataset.preset == "hdfs_wuyifan18_deeplog_preprocessed"
     assert bundle.dataset.name == "hdfs_wuyifan18_preprocessed_exact_boundary"
     assert bundle.dataset.template_parser == "identity"
@@ -1421,6 +1446,7 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     bundles = load_experiment_bundles(sweep_path)
     assert {bundle.model.name for bundle in bundles} == {
         "deeplog_default",
+        "deeplog_short_session_padding_fidelity",
         "deepcase",
         "template_frequency_default",
         "markov_default",

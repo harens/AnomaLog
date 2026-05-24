@@ -33,6 +33,13 @@ models = ["deepcase"]
 "model.name" = "deepcase_abstain_mixed"
 "model.cluster_score_strategy" = "abstain_mixed"
 
+[model_sets.deeplog_short_session_padding_fidelity]
+models = ["deeplog_default"]
+
+[model_sets.deeplog_short_session_padding_fidelity.overrides.deeplog_default]
+"model.name" = "deeplog_short_session_padding_fidelity"
+"model.short_session_padding_fidelity" = true
+
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
 # Entity-chronological runs compare DeepCASE against the shared sanity
@@ -139,12 +146,11 @@ datasets = [
 [experiment_sets.hdfs_deeplog_paper]
 # DeepLog paper reproduction: the HDFS runs that preserve the original
 # normal-only training contract, plus the lightweight baselines that probe how
-# much of the signal comes from template statistics or local ordering.
-model_sets = ["baselines_no_nb"]
-models = [
-  "deeplog_default",
-  "deepcase",
-]
+# much of the signal comes from template statistics or local ordering. The
+# short-session padding compatibility view is model-set based so it stays an
+# explicit variant of `deeplog_default` rather than a separate model config.
+model_sets = ["baselines_no_nb", "deeplog_short_session_padding_fidelity"]
+models = ["deeplog_default", "deepcase"]
 datasets = [
   "hdfs/v1_deeplog_paper_entry100k_split_partial",
   "hdfs/v1_deeplog_paper_entry100k_assign_first",

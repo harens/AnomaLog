@@ -411,11 +411,12 @@ def _optimise_key_training_batch(
     optimizer.step()
 
 
-def score_key_sequence(
+def score_key_sequence(  # noqa: C901
     *,
     sequence: TemplateSequence,
     context: KeyScoringContext,
     prefix_templates: list[str] | None = None,
+    include_short_session_padding_fallback: bool = False,
 ) -> dict[int, DeepLogKeyFinding]:
     """Score one sequence with the DeepLog key model.
 
@@ -424,6 +425,8 @@ def score_key_sequence(
         context (KeyScoringContext): Fitted key-model state and settings.
         prefix_templates (list[str] | None): Optional templates from the
             immediately preceding chronological context.
+        include_short_session_padding_fallback (bool): Whether to score one
+            padded top-`g` decision for short standalone sessions.
 
     Returns:
         dict[int, DeepLogKeyFinding]: Event index to key-model finding.
@@ -435,6 +438,14 @@ def score_key_sequence(
     prefix_length = len(prefix_templates)
     if len(templates) <= context.history_size:
         if len(combined_templates) <= context.history_size:
+            if not include_short_session_padding_fallback or not templates:
+                return findings
+            short_finding = _score_short_session_with_padding(
+                templates=templates,
+                context=context,
+            )
+            if short_finding is not None:
+                findings[short_finding.event_index] = short_finding
             return findings
         templates = combined_templates
         prefix_length = len(prefix_templates)
@@ -519,6 +530,97 @@ def score_key_sequence(
             context=context,
         )
     return findings
+
+
+def _score_short_session_with_padding(  # noqa: PLR0914
+    *,
+    templates: list[str],
+    context: KeyScoringContext,
+) -> DeepLogKeyFinding | None:
+    """Score one short standalone sequence with left-padded key history.
+
+    This mirrors the original DeepLog reference script behaviour where sessions
+    shorter than `window_size + 1` are padded during prediction so they still
+    contribute one top-`g` anomaly decision.
+
+    Args:
+        templates (list[str]): Sequence templates for one standalone session.
+        context (KeyScoringContext): Fitted key-model state and settings.
+
+    Returns:
+        DeepLogKeyFinding | None: Decision for the last event, or `None` when
+            no target can be formed.
+    """
+    if not templates:
+        return None
+    target_index = len(templates) - 1
+    history_templates = templates[:-1]
+    padded_history_indexes = [-1] * context.history_size
+    history_tail = history_templates[-context.history_size :]
+    start = context.history_size - len(history_tail)
+    for offset, template in enumerate(history_tail):
+        index = context.template_to_index.get(template)
+        if index is None:
+            continue
+        padded_history_indexes[start + offset] = index
+
+    history_tensor = torch.zeros(
+        (1, context.history_size, len(context.template_to_index)),
+        dtype=torch.float32,
+        device=next(context.model.parameters()).device,
+    )
+    for pos, idx in enumerate(padded_history_indexes):
+        if idx >= 0:
+            history_tensor[0, pos, idx] = 1.0
+
+    with torch.inference_mode():
+        probabilities = torch.softmax(context.model(history_tensor), dim=1).cpu()[0]
+    rank_positions = torch.argsort(
+        torch.argsort(probabilities.unsqueeze(0), dim=1, descending=True),
+        dim=1,
+    )
+
+    top_probabilities, top_indexes = _top_key_predictions(
+        probabilities=probabilities,
+        vocabulary_size=len(context.template_to_index),
+        top_g=context.top_g,
+    )
+    top_predictions = [
+        DeepLogTopPrediction(
+            template=context.index_to_template[int(index)],
+            probability=float(probability),
+        )
+        for probability, index in zip(
+            top_probabilities.tolist(),
+            top_indexes.tolist(),
+            strict=True,
+        )
+    ]
+    actual_template = templates[target_index]
+    actual_index = context.template_to_index.get(actual_template)
+    is_oov = actual_index is None
+    actual_rank = (
+        None if actual_index is None else int(rank_positions[0, actual_index]) + 1
+    )
+    actual_probability = (
+        None if actual_index is None else float(probabilities[actual_index])
+    )
+    top_index_set = {int(index) for index in top_indexes.tolist()}
+    return DeepLogKeyFinding(
+        event_index=target_index,
+        history_templates=history_templates,
+        unknown_history_templates=[
+            template
+            for template in history_tail
+            if template not in context.template_to_index
+        ],
+        actual_template=actual_template,
+        actual_probability=actual_probability,
+        actual_rank=actual_rank,
+        is_anomalous=is_oov or (actual_index not in top_index_set),
+        is_oov=is_oov,
+        top_predictions=top_predictions,
+    )
 
 
 def _score_key_event(

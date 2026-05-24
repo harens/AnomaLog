@@ -78,11 +78,12 @@ diverge is short-session handling:
   treated as key-model anomalies because the trained vocabulary contains no
   probability for the observed template.
 - Short sessions:
-  this implementation does not left-pad short sessions. Sessions shorter than
-  `history_size + 1` therefore do not yield a key-model decision, matching
-  the fixed-window interpretation in the paper more closely. The attached
-  legacy prediction script behaves differently and pads short sessions before
-  scoring.
+  the default implementation does not left-pad short sessions. Sessions
+  shorter than `history_size + 1` therefore do not yield a key-model decision,
+  matching the fixed-window interpretation in the paper more closely. The
+  optional `short_session_padding_fidelity = true` model-set variant restores
+  the attached legacy prediction script's padded last-event decision for
+  compatibility with historical DeepLog artefacts.
 - Next-event diagnostics:
   default to `full_dataset` so the diagnostic output is directly comparable
   with DeepCASE. The diagnostic vocabulary policy is configurable on
@@ -162,6 +163,8 @@ This section keeps the short version in the main DeepLog note:
 
 - the reproduction configs now use generic split modes, not a DeepLog-only
   pipeline;
+- the HDFS paper-facing registry now exposes both the fixed-history DeepLog
+  default and the legacy short-session padding compatibility variant;
 - the experiment-layer `deeplog_default` model now defaults to key-only scoring,
   and the HDFS paper-facing bundles pin `top_g_values = [1, 3, 5, 7, 9]`;
 - for the official preprocessed HDFS regime, split-file prefixes are now used

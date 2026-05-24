@@ -170,6 +170,31 @@ def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
     )
 
 
+def test_hdfs_deeplog_paper_registry_includes_short_session_padding_variant() -> None:
+    """The HDFS DeepLog paper registry should expose the legacy padding variant."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    selected = registry.select(groups=("hdfs_deeplog_paper",))
+    hdfs_wuyifan18 = next(
+        experiment
+        for experiment in selected
+        if experiment.name == "hdfs_wuyifan18_deeplog_preprocessed"
+    )
+
+    assert hdfs_wuyifan18.models == (
+        "deeplog_default",
+        "deepcase",
+    )
+    assert hdfs_wuyifan18.model_sets == (
+        "baselines_no_nb",
+        "deeplog_short_session_padding_fidelity",
+    )
+
+
 def test_registry_select_combines_names_and_groups() -> None:
     """Explicit names and group filters should both contribute to selection."""
     registry = ExperimentRegistry(
@@ -461,6 +486,30 @@ def test_resolve_registry_experiment_applies_deepcase_model_set_overrides() -> N
     assert deepcase_majority_vote.applied_overrides == {
         "model.name": "deepcase_majority_vote",
         "model.cluster_score_strategy": "majority_vote",
+    }
+
+
+def test_resolve_registry_experiment_applies_deeplog_model_set_overrides() -> None:
+    """DeepLog model-set overrides should reach the resolved compatibility bundle."""
+    repo_root = Path(__file__).resolve().parents[2]
+    resolved = resolve_registry_experiment(
+        "hdfs_wuyifan18_deeplog_preprocessed",
+        registry_path=repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    deeplog_compat = next(
+        bundle
+        for bundle in resolved.bundles
+        if bundle.run_group == "deeplog_short_session_padding_fidelity"
+    )
+
+    assert isinstance(deeplog_compat.model, DeepLogModelConfig)
+    assert deeplog_compat.model.name == "deeplog_short_session_padding_fidelity"
+    assert deeplog_compat.model.short_session_padding_fidelity is True
+    assert deeplog_compat.applied_overrides == {
+        "model.name": "deeplog_short_session_padding_fidelity",
+        "model.short_session_padding_fidelity": True,
     }
 
 

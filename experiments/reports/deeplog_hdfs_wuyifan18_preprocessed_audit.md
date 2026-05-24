@@ -77,6 +77,23 @@ The key point is that the corpus contains many abnormal sessions that are
 perfectly in-vocabulary. Those are the only sessions that can plausibly become
 false negatives under the current key-only scorer.
 
+## Compatibility Variant
+
+The older `0.87474878 / 0.8013422` sequence result corresponds to the legacy
+DeepLog prediction-script behaviour, not to the strict fixed-history default.
+That older path left-pads short standalone sessions so they still contribute
+one final key decision. The
+`short_session_padding_fidelity = true` model-set variant restores that
+behaviour as an explicit compatibility view and is now exposed in the HDFS
+DeepLog paper registry.
+
+For the `wuyifan18` archive, that compatibility mode matters because the
+abnormal split contains `6,193` sessions of length `<= 10`, and the current
+strict default leaves all of them without a key-model decision. That is why
+the paper-faithful default and the legacy compatibility artefact produce
+materially different session-level recall even though the next-event top-`g`
+accuracy is effectively unchanged.
+
 ## What This Confirms
 
 - The 14-key training vocabulary is the correct consequence of the first
@@ -87,6 +104,8 @@ false negatives under the current key-only scorer.
 - The saved result artefact already shows a substantial sequence-level gap
   despite high next-event top-9 accuracy, which points to the paper rule
   `any miss => anomalous` rather than a parser failure.
+- The restored short-session padding flag explains the legacy compatibility
+  artefact without changing the default paper-faithful scorer.
 
 ## What I Did Not Recompute
 

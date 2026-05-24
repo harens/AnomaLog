@@ -279,6 +279,9 @@ class DeepLogManifest(ModelManifest, frozen=True):
             fitted and applied during the run.
         include_elapsed_time (bool): Whether elapsed time is modelled as a
             parameter feature.
+        short_session_padding_fidelity (bool): Whether the legacy DeepLog
+            prediction-script padding fallback was enabled for standalone short
+            sessions.
         train_key_vocabulary_size (int): Key-model vocabulary size from training.
         trained_parameter_model_count (int): Number of per-template parameter
             models trained successfully.
@@ -313,6 +316,7 @@ class DeepLogManifest(ModelManifest, frozen=True):
     gaussian_confidence: float
     parameter_detection_enabled: bool
     include_elapsed_time: bool
+    short_session_padding_fidelity: bool
     train_key_vocabulary_size: int
     trained_parameter_model_count: int
     skipped_parameter_model_count: int
