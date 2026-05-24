@@ -24,6 +24,7 @@ _DEEPCASE_EPS = 0.1
 _DEEPCASE_MIN_SAMPLES = 5
 _DEEPCASE_EPOCHS = 100
 _DEEPCASE_ITERATIONS = 100
+_DEEPCASE_ATTENTION_QUERY_ITERATIONS = 100
 _DEEPCASE_TRAIN_FRACTION = 0.2
 _DEEPCASE_TEST_FRACTION = 0.8
 
@@ -133,6 +134,11 @@ def _validate_deepcase_model_config(
         model_config.iterations,
         _DEEPCASE_ITERATIONS,
         "DeepCASE configs must use iterations = 100.",
+    )
+    _require_equal(
+        model_config.attention_query_iterations,
+        _DEEPCASE_ATTENTION_QUERY_ITERATIONS,
+        "DeepCASE configs must use attention_query_iterations = 100.",
     )
 
 

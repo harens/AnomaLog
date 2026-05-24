@@ -90,6 +90,8 @@ EXPECTED_SEMI_AUTOMATIC_TOTAL_CONTEXTUAL_SEQUENCE_COUNT = 40
 EXPECTED_SEMI_AUTOMATIC_COVERED_CONTEXTUAL_SEQUENCE_COUNT = 30
 EXPECTED_SEMI_AUTOMATIC_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT = 10
 EXPECTED_MASKED_BATCH_SAMPLE_COUNT = 2
+EXPECTED_DEEPCASE_EPOCHS = 100
+EXPECTED_DEEPCASE_ATTENTION_QUERY_ITERATIONS = 100
 ConfigValue = str | int | float | bool | None
 
 
@@ -485,7 +487,11 @@ def test_deepcase_model_config_defaults_next_event_policy() -> None:
     assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
     assert config.cluster_score_strategy is DeepCaseClusterScoreStrategy.ANY_ANOMALOUS
     assert config.cluster_anomaly_fraction_threshold == pytest.approx(0.75)
-    assert config.attention_query_iterations == 0
+    assert config.epochs == EXPECTED_DEEPCASE_EPOCHS
+    assert (
+        config.attention_query_iterations
+        == EXPECTED_DEEPCASE_ATTENTION_QUERY_ITERATIONS
+    )
 
 
 def test_deepcase_model_config_accepts_train_only_next_event_policy() -> None:

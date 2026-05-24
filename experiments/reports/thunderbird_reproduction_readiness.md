@@ -151,8 +151,45 @@ DeepCASE run is exposed separately as `thunderbird_entity_chronological`.
 The DeepCASE fit path caches each materialised training chunk once and replays
 those cached chunks across epochs, so the large Thunderbird corpus does not
 rebuild the same event-centred context windows on every pass.
-Prediction-time attention querying uses the default zero-iteration path unless
-an experiment explicitly opts into a heavier query sweep.
+Prediction-time attention querying uses the paper-faithful 100-iteration path;
+zero iterations are reserved for explicit ablation, smoke-test, or engineering
+runs.
+
+### Runtime Findings
+
+The slowness we saw on Thunderbird is consistent with a scale mismatch rather
+than with the 100-epoch fit budget itself.
+
+What I observed locally:
+
+- A small Context Builder microbenchmark with 8,192 synthetic samples took
+  about `1.59s` at vocab size `512` and about `3.51s` at vocab size `4,428`.
+- That indicates the event vocabulary size alone can materially change fit
+  cost, even before the full Thunderbird sample count is considered.
+- The Thunderbird fit path was also rebuilding the same chunked context arrays
+  on every epoch; that was fixed by caching the materialised batches once and
+  replaying them.
+- Prediction-time attention querying now keeps the paper-faithful 100-iteration
+  budget unless a run explicitly opts into a zero-iteration variant.
+
+Interpretation:
+
+- Thunderbird is a poor fit for a naive DeepCASE replay over all event-centred
+  samples if the parser fragments the template vocabulary too aggressively.
+- The scaling problem is mostly sample construction and vocabulary size, not a
+  request to reduce the paper-faithful 100-epoch budget.
+
+Paper and docs alignment:
+
+- The DeepCASE paper describes attention querying as a backpropagation-based
+  refinement step that adjusts the attention vector for the observed event.
+  See the S\&P paper PDF: [DeepCASE paper](https://sites.cs.ucsb.edu/~vigna/publications/2022_SP_DeepCASE.pdf).
+- The official DeepCASE examples use `Interpreter.predict(..., iterations=100)`
+  for the paper-faithful query path and document the same value in the code
+  integration guide: [DeepCASE code integration](https://deepcase.readthedocs.io/en/latest/usage/code.html).
+- The raw low-level `ContextBuilder.query()` API still defaults to
+  `iterations=0`, which is why AnomaLog must pass `100` explicitly whenever it
+  calls that helper directly: [ContextBuilder reference](https://deepcase.readthedocs.io/en/latest/reference/context_builder/context_builder.html).
 
 ## Local contract
 

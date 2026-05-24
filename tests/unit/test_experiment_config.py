@@ -1674,7 +1674,7 @@ def test_deepcase_configs_pin_expected_protocols() -> None:
     )
     assert isinstance(bgl_deepcase_bundle.model, DeepCaseModelConfig)
     assert bgl_deepcase_bundle.model.random_seed == 0
-    assert bgl_deepcase_bundle.model.attention_query_iterations == 0
+    assert bgl_deepcase_bundle.model.attention_query_iterations == 100
     validate_deepcase_bgl_extension_config(
         dataset_config=bgl_deepcase_bundle.dataset,
         model_config=bgl_deepcase_bundle.model,

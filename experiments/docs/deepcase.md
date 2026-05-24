@@ -33,10 +33,11 @@ to interpreter clustering. That keeps long training runs visibly alive instead
 of appearing to stall once sequence preparation has finished.
 
 Test-time DeepCase scoring uses the `attention_query_iterations` knob, which
-defaults to the library's zero-iteration behaviour. The `iterations` value
-still controls interpreter clustering during fit, but leaving scoring on the
-lighter default path keeps large benchmark runs from spending most of their
-time on an unnecessary optimisation loop.
+uses 100 for the paper-faithful path. The `iterations` value still controls
+interpreter clustering during fit, and `attention_query_iterations = 0` is
+reserved for explicit ablation, smoke-test, or engineering runs. If a helper
+calls `ContextBuilder.query()` directly, it must pass `iterations=100`
+explicitly because the low-level default is zero.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCASE would receive during manual

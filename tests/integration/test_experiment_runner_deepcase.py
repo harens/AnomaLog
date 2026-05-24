@@ -16,6 +16,7 @@ FIXTURE_LOG = Path(__file__).parent / "logs" / "deepcase_fixture.log"
 EXPECTED_CONTEXT_LENGTH = 2
 EXPECTED_TIMEOUT_SECONDS = 86_400.0
 EXPECTED_MIN_SAMPLES = 1
+EXPECTED_ATTENTION_QUERY_ITERATIONS = 100
 
 
 def _prepare_run_tree(tmp_path: Path) -> Path:
@@ -244,7 +245,10 @@ def _assert_deepcase_model_manifest(
     assert model_manifest["min_samples"] == EXPECTED_MIN_SAMPLES
     assert model_manifest["train_sample_count"] > 0
     assert model_manifest["train_event_vocabulary_size"] > 0
-    assert model_manifest["attention_query_iterations"] == 0
+    assert (
+        model_manifest["attention_query_iterations"]
+        == EXPECTED_ATTENTION_QUERY_ITERATIONS
+    )
     assert "known_benign_cluster_count" in model_manifest
     assert "known_malicious_cluster_count" in model_manifest
     assert "unknown_cluster_score_count" in model_manifest

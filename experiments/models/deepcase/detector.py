@@ -175,9 +175,8 @@ class DeepCaseModelConfig(
         iterations (NonNegativeInt): Interpreter query iterations used while
             building clusters.
         attention_query_iterations (NonNegativeInt): Prediction-time
-            attention-query iterations. The default keeps the upstream
-            zero-iteration scoring path unless a benchmark explicitly wants a
-            heavier query sweep.
+            attention-query iterations. The paper-faithful default is 100;
+            zero is reserved for explicit ablation or smoke-test variants.
         query_batch_size (PositiveInt): Interpreter query batch size.
         vocabulary_policy (VocabularyPolicy): Vocabulary policy for
             next-event diagnostics.
@@ -274,8 +273,13 @@ class DeepCaseModelConfig(
 
     epochs: Annotated[
         PositiveInt,
-        msgspec.Meta(description="Training epochs for the context builder."),
-    ] = 10
+        msgspec.Meta(
+            description=(
+                "Training epochs for the context builder. The paper-faithful "
+                "path uses 100."
+            ),
+        ),
+    ] = 100
     batch_size: Annotated[
         PositiveInt,
         msgspec.Meta(
@@ -301,8 +305,9 @@ class DeepCaseModelConfig(
         msgspec.Meta(
             description=(
                 "Maximum attention-querying iterations used while building "
-                "DeepCase interpreter clusters. Prediction-time scoring uses "
-                "the library's zero-iteration default path."
+                "DeepCase interpreter clusters. In the paper-faithful path, "
+                "this remains 100 for both clustering and interpreter query "
+                "refinement."
             ),
         ),
     ] = 100
@@ -311,10 +316,13 @@ class DeepCaseModelConfig(
         msgspec.Meta(
             description=(
                 "Attention-query iterations used during prediction-time "
-                "scoring. The upstream DeepCASE default is zero."
+                "scoring. The paper-faithful path uses 100; zero is reserved "
+                "for ablation or smoke-test variants. If ContextBuilder.query() "
+                "is called directly, pass iterations=100 explicitly because the "
+                "low-level default is zero."
             ),
         ),
-    ] = 0
+    ] = 100
     query_batch_size: Annotated[
         PositiveInt,
         msgspec.Meta(description="Batch size used during interpreter querying."),
