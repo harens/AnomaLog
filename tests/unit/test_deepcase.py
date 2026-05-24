@@ -485,6 +485,7 @@ def test_deepcase_model_config_defaults_next_event_policy() -> None:
     assert config.vocabulary_policy is VocabularyPolicy.FULL_DATASET
     assert config.cluster_score_strategy is DeepCaseClusterScoreStrategy.ANY_ANOMALOUS
     assert config.cluster_anomaly_fraction_threshold == pytest.approx(0.75)
+    assert config.attention_query_iterations == 0
 
 
 def test_deepcase_model_config_accepts_train_only_next_event_policy() -> None:
@@ -1168,6 +1169,71 @@ def test_deepcase_rejects_multi_entity_sequences() -> None:
         ),
     ):
         detector.fit((sequence,), progress=progress)
+
+
+def test_fit_context_builder_reuses_cached_training_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase should materialise each training chunk once across epochs.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the hot-path helpers with
+            counters so the test can observe chunk reuse directly.
+    """
+    expected_fit_call_count = 3
+    sequence = _sequence(templates=["A", "B"], label=0)
+    event_id_map = DeepCaseEventIdMap.from_sequences((sequence,))
+    config = _deep_case_config(
+        epochs=expected_fit_call_count,
+        batch_size=2,
+        learning_rate=0.01,
+    )
+    fit_calls: list[dict[str, object]] = []
+    build_calls = 0
+
+    def fake_build_training_batch_from_map(
+        sequences: object,
+        *,
+        event_id_map: DeepCaseEventIdMap,
+        context_length: int,
+        timeout_seconds: float,
+    ) -> object:
+        del sequences, event_id_map, context_length, timeout_seconds
+        nonlocal build_calls
+        build_calls += 1
+        return SimpleNamespace(
+            contexts=np.asarray([[0, 1]], dtype=int),
+            events=np.asarray([0], dtype=int),
+            sample_count=1,
+        )
+
+    monkeypatch.setattr(
+        deepcase_detector,
+        "build_training_batch_from_map",
+        fake_build_training_batch_from_map,
+    )
+
+    model = DeepCASE(features=len(event_id_map.event_id_to_template))
+
+    def fake_fit(**kwargs: object) -> ContextBuilder:
+        fit_calls.append(dict(kwargs))
+        return model.context_builder
+
+    monkeypatch.setattr(model.context_builder, "fit", fake_fit)
+    # Test the chunking helper directly so the caching regression stays focused.
+    fit_context_builder_in_chunks = (
+        deepcase_detector._fit_context_builder_in_chunks  # noqa: SLF001
+    )
+    fit_context_builder_in_chunks(
+        model=model,
+        train_sequences=(sequence,),
+        event_id_map=event_id_map,
+        config=config,
+    )
+
+    assert build_calls == 1
+    assert len(fit_calls) == expected_fit_call_count
+    assert all(call["epochs"] == 1 for call in fit_calls)
 
 
 def test_deepcase_score_mapping_is_conservative() -> None:
@@ -2023,10 +2089,10 @@ def test_deepcase_next_event_predictions_reset_between_bulk_runs(
     )
 
 
-def test_deepcase_predict_batch_uses_config_iterations(
+def test_deepcase_predict_batch_uses_attention_query_iterations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepCase scoring should forward the configured query iteration budget.
+    """DeepCase scoring should forward the dedicated query budget.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Replaces the upstream predict method so
@@ -2034,7 +2100,12 @@ def test_deepcase_predict_batch_uses_config_iterations(
     """
     train_sequence = _sequence(templates=["A", "B"])
     detector = DeepCaseDetector(
-        config=_deep_case_config(name="deepcase", epochs=1, iterations=7),
+        config=_deep_case_config(
+            name="deepcase",
+            epochs=1,
+            iterations=7,
+            attention_query_iterations=7,
+        ),
     )
     detector.event_id_map = DeepCaseEventIdMap.from_sequences((train_sequence,))
     detector.model = DeepCASE(features=len(detector.event_id_map.event_id_to_template))

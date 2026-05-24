@@ -13,6 +13,7 @@ batch_size = 4
 learning_rate = 0.01
 teach_ratio = 0.5
 iterations = 100
+attention_query_iterations = 0
 query_batch_size = 8
 cluster_score_strategy = "max"
 no_score = -1

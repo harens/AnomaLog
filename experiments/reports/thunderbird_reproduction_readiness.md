@@ -148,6 +148,11 @@ Thunderbird extension uses entity grouping rather than the chronological
 100-log windows used by the DeepLog reproduction. The public Thunderbird
 reproduction experiment therefore stays stream-shaped, while the entity-local
 DeepCASE run is exposed separately as `thunderbird_entity_chronological`.
+The DeepCASE fit path caches each materialised training chunk once and replays
+those cached chunks across epochs, so the large Thunderbird corpus does not
+rebuild the same event-centred context windows on every pass.
+Prediction-time attention querying uses the default zero-iteration path unless
+an experiment explicitly opts into a heavier query sweep.
 
 ## Local contract
 

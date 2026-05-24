@@ -244,6 +244,7 @@ def _assert_deepcase_model_manifest(
     assert model_manifest["min_samples"] == EXPECTED_MIN_SAMPLES
     assert model_manifest["train_sample_count"] > 0
     assert model_manifest["train_event_vocabulary_size"] > 0
+    assert model_manifest["attention_query_iterations"] == 0
     assert "known_benign_cluster_count" in model_manifest
     assert "known_malicious_cluster_count" in model_manifest
     assert "unknown_cluster_score_count" in model_manifest

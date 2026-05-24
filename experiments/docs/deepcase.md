@@ -32,10 +32,11 @@ DeepCase training reports progress per context-builder epoch before moving on
 to interpreter clustering. That keeps long training runs visibly alive instead
 of appearing to stall once sequence preparation has finished.
 
-Test-time DeepCase scoring now uses the configured attention-query iteration
-budget. The `iterations` value still controls interpreter clustering during
-fit, and it also governs the prediction-time attention query path so the
-runner stays faithful to the paper's semi-automatic inference loop.
+Test-time DeepCase scoring uses the `attention_query_iterations` knob, which
+defaults to the library's zero-iteration behaviour. The `iterations` value
+still controls interpreter clustering during fit, but leaving scoring on the
+lighter default path keeps large benchmark runs from spending most of their
+time on an unnecessary optimisation loop.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCASE would receive during manual

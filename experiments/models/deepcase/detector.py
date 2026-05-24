@@ -172,7 +172,12 @@ class DeepCaseModelConfig(
         learning_rate (PositiveFloat): Context-builder optimiser learning
             rate.
         teach_ratio (Probability): Teacher-forcing ratio.
-        iterations (NonNegativeInt): Interpreter query iterations.
+        iterations (NonNegativeInt): Interpreter query iterations used while
+            building clusters.
+        attention_query_iterations (NonNegativeInt): Prediction-time
+            attention-query iterations. The default keeps the upstream
+            zero-iteration scoring path unless a benchmark explicitly wants a
+            heavier query sweep.
         query_batch_size (PositiveInt): Interpreter query batch size.
         vocabulary_policy (VocabularyPolicy): Vocabulary policy for
             next-event diagnostics.
@@ -296,11 +301,20 @@ class DeepCaseModelConfig(
         msgspec.Meta(
             description=(
                 "Maximum attention-querying iterations used while building "
-                "DeepCase interpreter clusters and during prediction-time "
-                "attention queries."
+                "DeepCase interpreter clusters. Prediction-time scoring uses "
+                "the library's zero-iteration default path."
             ),
         ),
     ] = 100
+    attention_query_iterations: Annotated[
+        NonNegativeInt,
+        msgspec.Meta(
+            description=(
+                "Attention-query iterations used during prediction-time "
+                "scoring. The upstream DeepCASE default is zero."
+            ),
+        ),
+    ] = 0
     query_batch_size: Annotated[
         PositiveInt,
         msgspec.Meta(description="Batch size used during interpreter querying."),
@@ -638,6 +652,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             learning_rate=self.config.learning_rate,
             teach_ratio=self.config.teach_ratio,
             iterations=self.config.iterations,
+            attention_query_iterations=self.config.attention_query_iterations,
             query_batch_size=self.config.query_batch_size,
             cluster_score_strategy=self.config.cluster_score_strategy.value,
             cluster_anomaly_fraction_threshold=self.config.cluster_anomaly_fraction_threshold,
@@ -986,6 +1001,19 @@ class _AttendedTrainingChunk:
     sample_indexes: np.ndarray
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedContextBuilderTrainingBatch:
+    """Cached inputs for one DeepCASE context-builder training chunk.
+
+    Attributes:
+        contexts (np.ndarray): Cached context window matrix for one chunk.
+        events (np.ndarray): Cached target-event ids aligned with contexts.
+    """
+
+    contexts: np.ndarray
+    events: np.ndarray
+
+
 def _training_sample_count(sequence: TemplateSequence) -> int:
     if sequence.training_event_mask is not None:
         return sum(1 for is_eligible in sequence.training_event_mask if is_eligible)
@@ -1110,19 +1138,14 @@ def _fit_context_builder_in_chunks(
     event_id_map: DeepCaseEventIdMap,
     config: DeepCaseModelConfig,
 ) -> None:
+    cached_batches = _materialise_context_builder_training_batches(
+        train_sequences=train_sequences,
+        event_id_map=event_id_map,
+        context_length=config.context_length,
+        timeout_seconds=config.timeout_seconds,
+    )
     for _ in range(config.epochs):
-        for chunk in _chunk_training_sequences_by_sample_count(
-            train_sequences,
-            max_sample_count=DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE,
-        ):
-            batch = build_training_batch_from_map(
-                chunk,
-                event_id_map=event_id_map,
-                context_length=config.context_length,
-                timeout_seconds=config.timeout_seconds,
-            )
-            if batch.sample_count == 0:
-                continue
+        for batch in cached_batches:
             model.context_builder.fit(
                 X=batch.contexts,
                 y=batch.events.reshape(-1, 1),
@@ -1133,6 +1156,53 @@ def _fit_context_builder_in_chunks(
                 delta=config.label_smoothing_delta,
                 verbose=False,
             )
+
+
+def _materialise_context_builder_training_batches(
+    *,
+    train_sequences: Sequence[TemplateSequence],
+    event_id_map: DeepCaseEventIdMap,
+    context_length: int,
+    timeout_seconds: float,
+) -> list[_CachedContextBuilderTrainingBatch]:
+    """Return the reusable training chunks for the DeepCASE context builder.
+
+    The context windows are deterministic, so we build each chunk once and
+    replay those arrays across epochs instead of reconstructing the same
+    samples repeatedly.
+
+    Args:
+        train_sequences (Sequence[TemplateSequence]): Training sequences to
+            chunk and materialise.
+        event_id_map (DeepCaseEventIdMap): Train-time event vocabulary map.
+        context_length (int): Number of prior events in each context window.
+        timeout_seconds (float): Maximum time gap between context events and
+            the target event.
+
+    Returns:
+        list[_CachedContextBuilderTrainingBatch]: Cached context-builder input
+        chunks ready for replay across epochs.
+    """
+    cached_batches: list[_CachedContextBuilderTrainingBatch] = []
+    for chunk in _chunk_training_sequences_by_sample_count(
+        train_sequences,
+        max_sample_count=DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE,
+    ):
+        batch = build_training_batch_from_map(
+            chunk,
+            event_id_map=event_id_map,
+            context_length=context_length,
+            timeout_seconds=timeout_seconds,
+        )
+        if batch.sample_count == 0:
+            continue
+        cached_batches.append(
+            _CachedContextBuilderTrainingBatch(
+                contexts=batch.contexts,
+                events=batch.events,
+            ),
+        )
+    return cached_batches
 
 
 def _cluster_training_samples(
@@ -1370,7 +1440,7 @@ def _predict_batch_in_chunks(
                 dtype=torch.int64,
                 device=device,
             ),
-            iterations=config.iterations,
+            iterations=config.attention_query_iterations,
             batch_size=config.query_batch_size,
             verbose=False,
         )

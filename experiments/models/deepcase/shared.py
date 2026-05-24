@@ -611,7 +611,11 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         learning_rate (float): Context-builder optimizer learning rate.
         teach_ratio (float): Teacher-forcing ratio.
         iterations (int): Maximum interpreter query iterations used while
-            building clusters and during prediction-time attention queries.
+            building clusters. Prediction-time scoring keeps the library's
+            zero-iteration default path so large test runs do not spend their
+            time on an unnecessary optimisation loop.
+        attention_query_iterations (int): Prediction-time attention-query
+            iterations forwarded to the upstream DeepCASE scoring path.
         query_batch_size (int): Batch size used during querying/prediction.
         cluster_score_strategy (str): Cluster-labelling policy used after
             interpreter clustering.
@@ -655,6 +659,7 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     learning_rate: float
     teach_ratio: float
     iterations: int
+    attention_query_iterations: int
     query_batch_size: int
     cluster_score_strategy: str
     cluster_anomaly_fraction_threshold: float
