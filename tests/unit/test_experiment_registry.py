@@ -505,10 +505,13 @@ def test_resolve_registry_experiment_applies_deeplog_model_set_overrides() -> No
     )
 
     assert isinstance(deeplog_compat.model, DeepLogModelConfig)
-    assert deeplog_compat.model.name == "deeplog_short_session_padding_fidelity"
+    assert deeplog_compat.model.name == "deeplog_default"
     assert deeplog_compat.model.short_session_padding_fidelity is True
+    assert (
+        deeplog_compat.model_path
+        == repo_root / "experiments" / "configs" / "models" / "deeplog_default.toml"
+    )
     assert deeplog_compat.applied_overrides == {
-        "model.name": "deeplog_short_session_padding_fidelity",
         "model.short_session_padding_fidelity": True,
     }
 

@@ -37,7 +37,6 @@ models = ["deepcase"]
 models = ["deeplog_default"]
 
 [model_sets.deeplog_short_session_padding_fidelity.overrides.deeplog_default]
-"model.name" = "deeplog_short_session_padding_fidelity"
 "model.short_session_padding_fidelity" = true
 
 [experiments.bgl_entity_chronological]
