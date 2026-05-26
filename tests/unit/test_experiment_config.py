@@ -1446,11 +1446,20 @@ def test_wuyifan18_preprocessed_config_uses_real_split_files_for_model_input() -
     bundles = load_experiment_bundles(sweep_path)
     assert {bundle.model.name for bundle in bundles} == {
         "deeplog_default",
-        "deeplog_short_session_padding_fidelity",
         "deepcase",
         "template_frequency_default",
         "markov_default",
     }
+    assert {bundle.run_group for bundle in bundles} >= {
+        "deeplog_short_session_padding_fidelity",
+        "deeplog_default",
+    }
+    assert any(
+        bundle.run_group == "deeplog_short_session_padding_fidelity"
+        and isinstance(bundle.model, DeepLogModelConfig)
+        and bundle.model.short_session_padding_fidelity
+        for bundle in bundles
+    )
     bundle = next(
         bundle for bundle in bundles if bundle.model.name == "deeplog_default"
     )

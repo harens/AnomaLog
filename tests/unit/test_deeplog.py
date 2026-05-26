@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import msgspec
@@ -14,6 +15,7 @@ from anomalog.sequences import SplitLabel, TemplateSequence
 from experiments import ConfigError
 from experiments.config import load_experiment_bundles
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
+from experiments.models.deeplog import key as deeplog_key
 from experiments.models.deeplog.detector import DeepLogDetector, DeepLogModelConfig
 from experiments.models.deeplog.key import (
     KeyScoringContext,
@@ -225,6 +227,148 @@ def _key_context(*, model: KeyLSTM, top_g: int) -> KeyScoringContext:
         history_size=2,
         top_g=top_g,
     )
+
+
+def _reference_one_hot_histories(
+    *,
+    histories: list[list[int]],
+    vocab_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Mirror the reference one-hot encoder used by the DeepLog regression.
+
+    Args:
+        histories (list[list[int]]): Encoded history windows.
+        vocab_size (int): Number of known key indexes.
+        device (torch.device): Device used for tensor materialisation.
+
+    Returns:
+        torch.Tensor: One-hot encoded batch with shape
+            ``(batch, history_size, vocab_size)``.
+    """
+    history_index_tensor = torch.tensor(histories, dtype=torch.long, device=device)
+    history_tensor = torch.zeros(
+        (len(histories), len(histories[0]), vocab_size),
+        dtype=torch.float32,
+        device=device,
+    )
+    history_tensor.scatter_(2, history_index_tensor.unsqueeze(-1), 1.0)
+    return history_tensor
+
+
+def _reference_optimise_key_training_batch(
+    *,
+    model: KeyLSTM,
+    optimizer: torch.optim.Optimizer,
+    batch_histories: list[list[int]],
+    batch_targets: list[int],
+    vocab_size: int,
+    device: torch.device,
+) -> None:
+    """Mirror the reference microbatch update path used in the regression.
+
+    Args:
+        model (KeyLSTM): Key model being trained.
+        optimizer (torch.optim.Optimizer): Optimiser used for the update.
+        batch_histories (list[list[int]]): Encoded history windows.
+        batch_targets (list[int]): Matching next-key indexes.
+        vocab_size (int): Number of known key indexes.
+        device (torch.device): Device used for tensor materialisation.
+    """
+    batch_size = len(batch_histories)
+    microbatch_size = min(batch_size, 64)
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer.zero_grad()
+    for start in range(0, batch_size, microbatch_size):
+        end = start + microbatch_size
+        microbatch_histories = batch_histories[start:end]
+        microbatch_targets = batch_targets[start:end]
+        logits = model(
+            _reference_one_hot_histories(
+                histories=microbatch_histories,
+                vocab_size=vocab_size,
+                device=device,
+            ),
+        )
+        loss = criterion(
+            logits,
+            torch.tensor(
+                microbatch_targets,
+                dtype=torch.long,
+                device=device,
+            ),
+        )
+        scaled_loss = loss * (len(microbatch_histories) / batch_size)
+        scaled_loss.backward()
+    optimizer.step()
+
+
+def _reference_fit_key_model(
+    *,
+    training_corpus: NormalTrainingCorpus,
+    config: DeepLogModelConfig,
+    device: torch.device,
+) -> tuple[KeyLSTM, dict[str, int], dict[int, str]]:
+    """Mirror the reference streaming key-model trainer used in the regression.
+
+    Args:
+        training_corpus (NormalTrainingCorpus): Normal training corpus used to
+            build the reference batches.
+        config (DeepLogModelConfig): DeepLog configuration.
+        device (torch.device): Device used for training.
+
+    Returns:
+        tuple[KeyLSTM, dict[str, int], dict[int, str]]: Reference model and
+            vocabulary mappings.
+    """
+    template_to_index = {
+        template: idx for idx, template in enumerate(training_corpus.templates)
+    }
+    index_to_template = {idx: template for template, idx in template_to_index.items()}
+    model = KeyLSTM(
+        vocab_size=len(template_to_index),
+        hidden_size=config.hidden_size,
+        num_layers=config.num_layers,
+    )
+    model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    for _ in range(config.epochs):
+        model.train()
+        batch_histories: list[list[int]] = []
+        batch_targets: list[int] = []
+        for sequence in random.sample(
+            list(training_corpus.sequences),
+            k=len(training_corpus.sequences),
+        ):
+            for history, target in iter_key_examples(
+                sequences=(sequence,),
+                template_to_index=template_to_index,
+                history_size=config.history_size,
+            ):
+                batch_histories.append(history)
+                batch_targets.append(target)
+                if len(batch_histories) < config.batch_size:
+                    continue
+                _reference_optimise_key_training_batch(
+                    model=model,
+                    optimizer=optimizer,
+                    batch_histories=batch_histories,
+                    batch_targets=batch_targets,
+                    vocab_size=len(template_to_index),
+                    device=device,
+                )
+                batch_histories = []
+                batch_targets = []
+        if batch_histories:
+            _reference_optimise_key_training_batch(
+                model=model,
+                optimizer=optimizer,
+                batch_histories=batch_histories,
+                batch_targets=batch_targets,
+                vocab_size=len(template_to_index),
+                device=device,
+            )
+    return model.eval(), template_to_index, index_to_template
 
 
 def test_score_key_sequence_uses_ranked_top_g_candidates() -> None:
@@ -575,7 +719,12 @@ def test_fit_key_model_streams_batches_without_materialising_all_examples(
 def test_fit_key_model_splits_large_training_batches_into_microbatches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Large key-model batches should be processed in smaller GPU-safe chunks."""
+    """Large key-model batches should be processed in smaller GPU-safe chunks.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records key-model batch shapes during
+            training.
+    """
     batch_sizes: list[int] = []
     original_forward = KeyLSTM.forward
 
@@ -620,6 +769,128 @@ def test_fit_key_model_splits_large_training_batches_into_microbatches(
         )
 
     assert batch_sizes == [2, 2, 1]
+
+
+def test_fit_key_model_retries_with_smaller_microbatches_on_cuda_oom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key-model training should back off instead of failing on CUDA OOM.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Installs a controlled OOM failure
+            in the key-model one-hot encoder.
+    """
+    batch_sizes: list[int] = []
+
+    def _flaky_one_hot_history_indexes(
+        *,
+        history_indexes: torch.Tensor,
+        vocab_size: int,
+    ) -> torch.Tensor:
+        batch_sizes.append(int(history_indexes.shape[0]))
+        if history_indexes.shape[0] > 2:
+            msg = "CUDA out of memory. Tried to allocate 1.00 GiB."
+            raise RuntimeError(msg)
+        history_tensor = torch.zeros(
+            (
+                int(history_indexes.shape[0]),
+                int(history_indexes.shape[1]),
+                vocab_size,
+            ),
+            dtype=torch.float32,
+            device=history_indexes.device,
+        )
+        history_tensor.scatter_(2, history_indexes.unsqueeze(-1), 1.0)
+        return history_tensor
+
+    monkeypatch.setattr(
+        deeplog_key,
+        "_one_hot_history_indexes",
+        _flaky_one_hot_history_indexes,
+    )
+    monkeypatch.setattr(deeplog_key, "_KEY_TRAINING_MICROBATCH_SIZE", 4)
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C", "D", "E", "F"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C", "D", "E", "F"),
+        event_count=6,
+    )
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=1,
+        batch_size=5,
+        hidden_size=4,
+        num_layers=1,
+    )
+
+    with Progress(disable=True) as progress:
+        fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert batch_sizes == [4, 2, 2, 1]
+
+
+def test_fit_key_model_matches_reference_streaming_update_path() -> None:
+    """The throughput fix should not change the fitted key model materially."""
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C", "D", "E"],
+                split_label=SplitLabel.TRAIN,
+            ),
+            _sequence(
+                templates=["B", "C", "D", "E", "A"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C", "D", "E"),
+        event_count=10,
+    )
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=2,
+        batch_size=4,
+        hidden_size=4,
+        num_layers=1,
+    )
+
+    random.seed(1234)
+    torch.manual_seed(1234)
+    reference_model, reference_template_to_index, reference_index_to_template = (
+        _reference_fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+        )
+    )
+    random.seed(1234)
+    torch.manual_seed(1234)
+    optimised_model, template_to_index, index_to_template = fit_key_model(
+        training_corpus=corpus,
+        config=config,
+        device=torch.device("cpu"),
+        progress=None,
+    )
+
+    assert reference_template_to_index == template_to_index
+    assert reference_index_to_template == index_to_template
+    for reference_param, optimised_param in zip(
+        reference_model.parameters(),
+        optimised_model.parameters(),
+        strict=True,
+    ):
+        assert torch.allclose(reference_param, optimised_param, atol=5e-3, rtol=1e-5)
 
 
 def test_fit_parameter_models_reports_schema_preparation_progress(

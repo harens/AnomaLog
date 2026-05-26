@@ -30,7 +30,7 @@ from experiments.models.deeplog.shared import (
 )
 from experiments.models.sequence_masks import training_event_index_mask
 
-_KEY_TRAINING_MICROBATCH_SIZE = 64
+_KEY_TRAINING_MICROBATCH_SIZE = 256
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -61,26 +61,42 @@ class KeyScoringContext:
 
 
 @dataclass(frozen=True, slots=True)
+class _KeyTrainingSequenceExamples:
+    """Cached training examples for one replayable sequence.
+
+    Attributes:
+        template_indexes (torch.Tensor): Encoded templates for the full
+            sequence on CPU.
+        eligible_target_indexes (torch.Tensor): Zero-based indexes of the
+            eligible next-key targets for the sequence on CPU.
+    """
+
+    template_indexes: torch.Tensor
+    eligible_target_indexes: torch.Tensor
+
+
+@dataclass(frozen=True, slots=True)
 class _KeyTrainingRun:
     """Replayable state and settings for key-model training.
 
     Attributes:
         criterion (nn.CrossEntropyLoss): Training loss function.
-        sequences (tuple[TemplateSequence, ...]): Normal training sequences.
-        template_to_index (dict[str, int]): Template vocabulary mapping.
+        sequence_examples (tuple[_KeyTrainingSequenceExamples, ...]): Cached
+            replayable examples for each training sequence.
         history_size (int): Number of prior keys per example.
         epochs (int): Number of training epochs.
         batch_size (int): Training batch size.
         device (torch.device): Torch device used for the run.
+        vocab_size (int): Number of known key indexes.
     """
 
     criterion: nn.CrossEntropyLoss
-    sequences: tuple[TemplateSequence, ...]
-    template_to_index: dict[str, int]
+    sequence_examples: tuple[_KeyTrainingSequenceExamples, ...]
     history_size: int
     epochs: int
     batch_size: int
     device: torch.device
+    vocab_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +137,6 @@ def fit_key_model(
     Returns:
         tuple[KeyLSTM, dict[str, int], dict[int, str]]: Fitted key model and
             its template-index mappings.
-
-    Raises:
-        ValueError: If no history-target examples can be constructed.
     """
     # The paper's key model is trained only on log keys observed in normal
     # training data. We therefore make the vocabulary exactly that set.
@@ -144,15 +157,13 @@ def fit_key_model(
             total=total,
         )
     try:
-        if not _has_key_training_examples(
+        sequence_examples = _materialise_key_training_examples(
             sequences=training_corpus.sequences,
             template_to_index=template_to_index,
             history_size=config.history_size,
             progress=progress,
             prepare_task=prepare_task,
-        ):
-            msg = "DeepLog key model requires at least one history/next-key example."
-            raise ValueError(msg)
+        )
     finally:
         if progress is not None and prepare_task is not None:
             progress.remove_task(prepare_task)
@@ -169,27 +180,27 @@ def fit_key_model(
         optimizer=optimizer,
         training_run=_KeyTrainingRun(
             criterion=nn.CrossEntropyLoss(),
-            sequences=training_corpus.sequences,
-            template_to_index=template_to_index,
+            sequence_examples=sequence_examples,
             history_size=config.history_size,
             epochs=config.epochs,
             batch_size=config.batch_size,
             device=device,
+            vocab_size=len(template_to_index),
         ),
         progress=progress,
     )
     return model.eval(), template_to_index, index_to_template
 
 
-def _has_key_training_examples(
+def _materialise_key_training_examples(
     *,
     sequences: Iterable[TemplateSequence],
     template_to_index: dict[str, int],
     history_size: int,
     progress: Progress | None,
     prepare_task: TaskID | None,
-) -> bool:
-    """Return whether the corpus contains at least one key-model example.
+) -> tuple[_KeyTrainingSequenceExamples, ...]:
+    """Cache the replayable key-model examples for each sequence.
 
     Args:
         sequences (Iterable[TemplateSequence]): Normal training sequences.
@@ -199,47 +210,40 @@ def _has_key_training_examples(
         prepare_task (TaskID | None): Progress task used while scanning.
 
     Returns:
-        bool: True when at least one history-target example exists.
+        tuple[_KeyTrainingSequenceExamples, ...]: Cached sequence examples.
+
+    Raises:
+        ValueError: If the corpus contains no history/next-key examples.
     """
+    sequence_examples: list[_KeyTrainingSequenceExamples] = []
     has_examples = False
     for sequence in sequences:
-        if _sequence_has_key_training_example(
-            sequence=sequence,
-            template_to_index=template_to_index,
-            history_size=history_size,
-        ):
+        template_indexes = torch.tensor(
+            [template_to_index[template] for template in sequence.templates],
+            dtype=torch.long,
+        )
+        eligible_target_indexes = torch.tensor(
+            [
+                target_index
+                for target_index in training_event_index_mask(sequence)
+                if target_index >= history_size
+            ],
+            dtype=torch.long,
+        )
+        if template_indexes.numel() > history_size and eligible_target_indexes.numel():
             has_examples = True
+        sequence_examples.append(
+            _KeyTrainingSequenceExamples(
+                template_indexes=template_indexes,
+                eligible_target_indexes=eligible_target_indexes,
+            ),
+        )
         if progress is not None and prepare_task is not None:
             progress.advance(prepare_task)
-    return has_examples
-
-
-def _sequence_has_key_training_example(
-    *,
-    sequence: TemplateSequence,
-    template_to_index: dict[str, int],
-    history_size: int,
-) -> bool:
-    """Return whether one sequence contributes any key-model example.
-
-    Args:
-        sequence (TemplateSequence): Sequence to inspect.
-        template_to_index (dict[str, int]): Template vocabulary mapping.
-        history_size (int): Number of prior keys required for each example.
-
-    Returns:
-        bool: True when the sequence yields at least one training example.
-    """
-    eligible_target_indexes = set(training_event_index_mask(sequence))
-    if not eligible_target_indexes:
-        return False
-    template_indexes = [template_to_index[template] for template in sequence.templates]
-    if len(template_indexes) <= history_size:
-        return False
-    for start in range(len(template_indexes) - history_size):
-        if start + history_size in eligible_target_indexes:
-            return True
-    return False
+    if not has_examples:
+        msg = "DeepLog key model requires at least one history/next-key example."
+        raise ValueError(msg)
+    return tuple(sequence_examples)
 
 
 def iter_key_examples(
@@ -328,7 +332,7 @@ def _iter_key_training_batches(
     *,
     training_run: _KeyTrainingRun,
     batch_size: int,
-) -> Iterator[tuple[list[list[int]], list[int]]]:
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield minibatches of DeepLog key examples from replayable sequences.
 
     Args:
@@ -336,35 +340,49 @@ def _iter_key_training_batches(
         batch_size (int): Maximum number of examples per yielded batch.
 
     Yields:
-        tuple[list[list[int]], list[int]]: Key-history windows and matching
+        tuple[torch.Tensor, torch.Tensor]: Key-history windows and matching
             target indexes for one minibatch.
     """
-    training_sequences = list(training_run.sequences)
+    training_sequences = list(training_run.sequence_examples)
     random.shuffle(training_sequences)
-    batch_histories: list[list[int]] = []
-    batch_targets: list[int] = []
-    for sequence in training_sequences:
-        eligible_target_indexes = set(training_event_index_mask(sequence))
-        if not eligible_target_indexes:
+    batch_histories: list[torch.Tensor] = []
+    batch_targets: list[torch.Tensor] = []
+    batch_count = 0
+    for sequence_examples in training_sequences:
+        if sequence_examples.eligible_target_indexes.numel() == 0:
             continue
-        template_indexes = [
-            training_run.template_to_index[template] for template in sequence.templates
-        ]
-        if len(template_indexes) <= training_run.history_size:
+        template_indexes = sequence_examples.template_indexes
+        if template_indexes.numel() <= training_run.history_size:
             continue
-        for start in range(len(template_indexes) - training_run.history_size):
-            target_index = start + training_run.history_size
-            if target_index not in eligible_target_indexes:
+        history_windows = template_indexes.unfold(
+            0,
+            training_run.history_size,
+            1,
+        ).index_select(
+            0,
+            sequence_examples.eligible_target_indexes - training_run.history_size,
+        )
+        target_indexes = template_indexes.index_select(
+            0,
+            sequence_examples.eligible_target_indexes,
+        )
+        example_count = int(target_indexes.shape[0])
+        start_index = 0
+        while start_index < example_count:
+            remaining = batch_size - batch_count
+            take = min(remaining, example_count - start_index)
+            batch_histories.append(history_windows[start_index : start_index + take])
+            batch_targets.append(target_indexes[start_index : start_index + take])
+            batch_count += take
+            start_index += take
+            if batch_count < batch_size:
                 continue
-            batch_histories.append(template_indexes[start:target_index])
-            batch_targets.append(template_indexes[target_index])
-            if len(batch_histories) < batch_size:
-                continue
-            yield batch_histories, batch_targets
+            yield torch.cat(batch_histories, dim=0), torch.cat(batch_targets, dim=0)
             batch_histories = []
             batch_targets = []
+            batch_count = 0
     if batch_histories:
-        yield batch_histories, batch_targets
+        yield torch.cat(batch_histories, dim=0), torch.cat(batch_targets, dim=0)
 
 
 def _optimise_key_training_batch(
@@ -372,8 +390,8 @@ def _optimise_key_training_batch(
     model: KeyLSTM,
     optimizer: torch.optim.Optimizer,
     training_run: _KeyTrainingRun,
-    batch_histories: list[list[int]],
-    batch_targets: list[int],
+    batch_histories: torch.Tensor,
+    batch_targets: torch.Tensor,
 ) -> None:
     """Optimise the key model on one minibatch.
 
@@ -381,34 +399,55 @@ def _optimise_key_training_batch(
         model (KeyLSTM): Key model being trained.
         optimizer (torch.optim.Optimizer): Optimiser used for the update.
         training_run (_KeyTrainingRun): Replayable sequences and settings.
-        batch_histories (list[list[int]]): Encoded history windows.
-        batch_targets (list[int]): Matching next-key indexes.
+        batch_histories (torch.Tensor): Encoded history windows.
+        batch_targets (torch.Tensor): Matching next-key indexes.
+
+    Raises:
+        RuntimeError: If the configured device still exhausts memory at the
+            smallest supported microbatch size.
     """
-    batch_size = len(batch_histories)
+    batch_size = int(batch_histories.shape[0])
+    batch_history_indexes = batch_histories.to(device=training_run.device)
+    batch_target_indexes = batch_targets.to(device=training_run.device)
     microbatch_size = min(batch_size, _KEY_TRAINING_MICROBATCH_SIZE)
-    optimizer.zero_grad()
-    for start in range(0, batch_size, microbatch_size):
-        end = start + microbatch_size
-        microbatch_histories = batch_histories[start:end]
-        microbatch_targets = batch_targets[start:end]
-        logits = model(
-            _one_hot_histories(
-                histories=microbatch_histories,
-                vocab_size=len(training_run.template_to_index),
-                device=training_run.device,
-            ),
-        )
-        loss = training_run.criterion(
-            logits,
-            torch.tensor(
-                microbatch_targets,
-                dtype=torch.long,
-                device=training_run.device,
-            ),
-        )
-        scaled_loss = loss * (len(microbatch_histories) / batch_size)
-        scaled_loss.backward()
-    optimizer.step()
+    while True:
+        optimizer.zero_grad()
+        try:
+            for start in range(0, batch_size, microbatch_size):
+                end = start + microbatch_size
+                logits = model(
+                    _one_hot_history_indexes(
+                        history_indexes=batch_history_indexes[start:end],
+                        vocab_size=training_run.vocab_size,
+                    ),
+                )
+                loss = training_run.criterion(
+                    logits,
+                    batch_target_indexes[start:end],
+                )
+                scaled_loss = loss * ((end - start) / batch_size)
+                scaled_loss.backward()
+        except RuntimeError as exc:
+            if not _is_cuda_oom_error(exc) or microbatch_size <= 1:
+                raise
+            if training_run.device.type == "cuda":
+                torch.cuda.empty_cache()
+            microbatch_size = max(1, microbatch_size // 2)
+            continue
+        optimizer.step()
+        return
+
+
+def _is_cuda_oom_error(exc: RuntimeError) -> bool:
+    """Return whether a runtime error looks like a CUDA memory exhaustion.
+
+    Args:
+        exc (RuntimeError): Runtime error raised by the training step.
+
+    Returns:
+        bool: True when the exception message matches a CUDA OOM failure.
+    """
+    return "out of memory" in str(exc).lower()
 
 
 def score_key_sequence(  # noqa: C901
@@ -726,13 +765,34 @@ def _one_hot_histories(
         msg = "at least one history is required"
         raise ValueError(msg)
 
-    batch_size = len(histories)
-    history_size = len(histories[0])
     history_index_tensor = torch.tensor(histories, dtype=torch.long, device=device)
+    return _one_hot_history_indexes(
+        history_indexes=history_index_tensor,
+        vocab_size=vocab_size,
+    )
+
+
+def _one_hot_history_indexes(
+    *,
+    history_indexes: torch.Tensor,
+    vocab_size: int,
+) -> torch.Tensor:
+    """Encode a batch of indexed key histories as one-hot tensors.
+
+    Args:
+        history_indexes (torch.Tensor): Batched history indexes with shape
+            ``(batch, history_size)``.
+        vocab_size (int): Number of known key indexes.
+
+    Returns:
+        torch.Tensor: One-hot encoded batch with shape
+            ``(batch, history_size, vocab_size)``.
+    """
+    batch_size, history_size = history_indexes.shape
     history_tensor = torch.zeros(
         (batch_size, history_size, vocab_size),
         dtype=torch.float32,
-        device=device,
+        device=history_indexes.device,
     )
-    history_tensor.scatter_(2, history_index_tensor.unsqueeze(-1), 1.0)
+    history_tensor.scatter_(2, history_indexes.unsqueeze(-1), 1.0)
     return history_tensor
