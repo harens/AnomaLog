@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import Self, override
 
+from anomalog._sequence_split_policy import (
+    RawEntrySplitRequest,
+    build_raw_entry_split_plan,
+    count_straddling_groups,
+    resolve_straddling_group_label,
+    split_rows_by_label,
+)
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from anomalog.representations import (
     SequenceRepresentation,
@@ -505,18 +512,15 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         rows.sort(key=lambda row: row.line_order)
         yield from rows
 
-    def _build_row_split_labels(  # noqa: C901
+    def _build_row_split_labels(
         self,
     ) -> tuple[dict[int, SplitLabel], RawEntrySplitSummary | None]:
         """Build raw-entry split labels keyed by line order.
 
         Returns:
-            tuple[dict[int, SplitLabel], RawEntrySplitSummary | None]: Row-level
+            tuple[dict[int, str], RawEntrySplitSummary | None]: Row-level
                 split labels and an audit summary when a raw-entry split is
                 active.
-
-        Raises:
-            ValueError: If the configured raw-entry split mode is unsupported.
         """
         if (
             self.split_mode is None
@@ -524,191 +528,37 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         ):
             return {}, None
 
-        split_mode = self.split_mode
-        if split_mode is None:
-            msg = "raw-entry split mode must be set when building a split summary."
-            raise ValueError(msg)
-
-        ordered_rows = list(self._iter_source_order_rows())
-        total_rows = len(ordered_rows)
-        labels: dict[int, SplitLabel] = {}
-
-        def _empty_summary(cutoff_entry_index: int) -> RawEntrySplitSummary:
-            return RawEntrySplitSummary(
-                split_mode=split_mode.value,
+        plan = build_raw_entry_split_plan(
+            list(self._iter_source_order_rows()),
+            request=RawEntrySplitRequest(
+                split_mode=self.split_mode.value,
                 application_order=self.split_application_order.value,
-                cutoff_entry_index=cutoff_entry_index,
-                train_raw_entry_count=0,
-                train_normal_entry_count=0,
-                train_anomalous_entry_count=0,
-                test_raw_entry_count=0,
-                test_normal_entry_count=0,
-                test_anomalous_entry_count=0,
-            )
-
-        if total_rows == 0:
-            return {}, _empty_summary(0)
-
-        if split_mode == RawEntrySplitMode.PREFIX_COUNT:
-            requested_train_rows = min(
-                total_rows,
-                int(self.train_entry_count or 0),
-            )
-            cutoff_entry_index = requested_train_rows
-            for index, row in enumerate(ordered_rows):
-                label = (
-                    SplitLabel.TRAIN if index < cutoff_entry_index else SplitLabel.TEST
-                )
-                labels[row.line_order] = label
-            train_rows = ordered_rows[:cutoff_entry_index]
-            test_rows = ordered_rows[cutoff_entry_index:]
-            return labels, RawEntrySplitSummary(
-                split_mode=split_mode.value,
-                application_order=self.split_application_order.value,
-                cutoff_entry_index=cutoff_entry_index,
-                train_raw_entry_count=len(train_rows),
-                train_normal_entry_count=sum(
-                    1 for row in train_rows if not is_anomalous_label(row.anomalous)
-                ),
-                train_anomalous_entry_count=sum(
-                    1 for row in train_rows if is_anomalous_label(row.anomalous)
-                ),
-                test_raw_entry_count=len(test_rows),
-                test_normal_entry_count=sum(
-                    1 for row in test_rows if not is_anomalous_label(row.anomalous)
-                ),
-                test_anomalous_entry_count=sum(
-                    1 for row in test_rows if is_anomalous_label(row.anomalous)
-                ),
-            )
-
-        if split_mode == RawEntrySplitMode.PREFIX_FRACTION:
-            train_fraction = float(self.train_entry_fraction or 0.0)
-            requested_train_rows = min(
-                total_rows,
-                math.ceil(train_fraction * total_rows),
-            )
-            cutoff_entry_index = requested_train_rows
-            for index, row in enumerate(ordered_rows):
-                label = (
-                    SplitLabel.TRAIN if index < cutoff_entry_index else SplitLabel.TEST
-                )
-                labels[row.line_order] = label
-            train_rows = ordered_rows[:cutoff_entry_index]
-            test_rows = ordered_rows[cutoff_entry_index:]
-            return labels, RawEntrySplitSummary(
-                split_mode=split_mode.value,
-                application_order=self.split_application_order.value,
-                cutoff_entry_index=cutoff_entry_index,
-                train_raw_entry_count=len(train_rows),
-                train_normal_entry_count=sum(
-                    1 for row in train_rows if not is_anomalous_label(row.anomalous)
-                ),
-                train_anomalous_entry_count=sum(
-                    1 for row in train_rows if is_anomalous_label(row.anomalous)
-                ),
-                test_raw_entry_count=len(test_rows),
-                test_normal_entry_count=sum(
-                    1 for row in test_rows if not is_anomalous_label(row.anomalous)
-                ),
-                test_anomalous_entry_count=sum(
-                    1 for row in test_rows if is_anomalous_label(row.anomalous)
-                ),
-            )
-
-        if split_mode == RawEntrySplitMode.PREFIX_NORMAL_FRACTION:
-            normal_total = sum(
-                1 for row in ordered_rows if not is_anomalous_label(row.anomalous)
-            )
-            target_normal_rows = min(
-                normal_total,
-                math.ceil((self.train_normal_entry_fraction or 0.0) * normal_total),
-            )
-            normal_rows_seen = 0
-            cutoff_entry_index = total_rows
-            for index, row in enumerate(ordered_rows):
-                if normal_rows_seen >= target_normal_rows:
-                    labels[row.line_order] = SplitLabel.TEST
-                    continue
-                if is_anomalous_label(row.anomalous):
-                    labels[row.line_order] = SplitLabel.IGNORED
-                    continue
-                labels[row.line_order] = SplitLabel.TRAIN
-                normal_rows_seen += 1
-                cutoff_entry_index = index + 1
-            train_rows = [
-                row
-                for row in ordered_rows
-                if labels[row.line_order] is SplitLabel.TRAIN
-            ]
-            test_rows = [
-                row for row in ordered_rows if labels[row.line_order] is SplitLabel.TEST
-            ]
-            ignored_rows = [
-                row
-                for row in ordered_rows
-                if labels[row.line_order] is SplitLabel.IGNORED
-            ]
-            return labels, RawEntrySplitSummary(
-                split_mode=split_mode.value,
-                application_order=self.split_application_order.value,
-                cutoff_entry_index=cutoff_entry_index,
-                train_raw_entry_count=len(train_rows),
-                train_normal_entry_count=sum(
-                    1 for row in train_rows if not is_anomalous_label(row.anomalous)
-                ),
-                train_anomalous_entry_count=sum(
-                    1 for row in train_rows if is_anomalous_label(row.anomalous)
-                ),
-                test_raw_entry_count=len(test_rows),
-                test_normal_entry_count=sum(
-                    1 for row in test_rows if not is_anomalous_label(row.anomalous)
-                ),
-                test_anomalous_entry_count=sum(
-                    1 for row in test_rows if is_anomalous_label(row.anomalous)
-                ),
-                ignored_raw_entry_count=len(ignored_rows),
-                ignored_normal_entry_count=sum(
-                    1 for row in ignored_rows if not is_anomalous_label(row.anomalous)
-                ),
-                ignored_anomalous_entry_count=sum(
-                    1 for row in ignored_rows if is_anomalous_label(row.anomalous)
-                ),
-            )
-
-        msg = f"Unsupported raw-entry split mode: {split_mode.value}"
-        raise ValueError(msg)
-
-    @staticmethod
-    def _split_rows_by_label(
-        rows: Collection[StructuredLine],
-        row_labels: dict[int, SplitLabel],
-    ) -> Iterator[tuple[SplitLabel, list[StructuredLine]]]:
-        """Yield contiguous row segments that share the same split label.
-
-        Args:
-            rows (Collection[StructuredLine]): Structured rows in grouped
-                source order.
-            row_labels (dict[int, SplitLabel]): Raw-entry split labels keyed by
-                `line_order`.
-
-        Yields:
-            tuple[SplitLabel, list[StructuredLine]]: Contiguous segments that
-                share the same split label.
-        """
-        current_label: SplitLabel | None = None
-        current_rows: list[StructuredLine] = []
-        for row in rows:
-            label = row_labels.get(row.line_order, SplitLabel.TRAIN)
-            if current_label is None or label is current_label:
-                current_label = label if current_label is None else current_label
-                current_rows.append(row)
-                continue
-            yield current_label, current_rows
-            current_label = label
-            current_rows = [row]
-        if current_label is not None and current_rows:
-            yield current_label, current_rows
+                train_entry_count=self.train_entry_count,
+                train_entry_fraction=self.train_entry_fraction,
+                train_normal_entry_fraction=self.train_normal_entry_fraction,
+            ),
+        )
+        summary = RawEntrySplitSummary(
+            split_mode=plan.summary.split_mode,
+            application_order=plan.summary.application_order,
+            cutoff_entry_index=plan.summary.cutoff_entry_index,
+            train_raw_entry_count=plan.summary.train_raw_entry_count,
+            train_normal_entry_count=plan.summary.train_normal_entry_count,
+            train_anomalous_entry_count=plan.summary.train_anomalous_entry_count,
+            test_raw_entry_count=plan.summary.test_raw_entry_count,
+            test_normal_entry_count=plan.summary.test_normal_entry_count,
+            test_anomalous_entry_count=plan.summary.test_anomalous_entry_count,
+            ignored_raw_entry_count=plan.summary.ignored_raw_entry_count,
+            ignored_normal_entry_count=plan.summary.ignored_normal_entry_count,
+            ignored_anomalous_entry_count=plan.summary.ignored_anomalous_entry_count,
+        )
+        return (
+            {
+                line_order: SplitLabel(label)
+                for line_order, label in plan.row_labels.items()
+            },
+            summary,
+        )
 
     def _split_counts(self, total_count: int) -> SequenceSplitCounts:
         """Return train, ignored, and test counts for one chronological split.
@@ -909,34 +759,20 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             RawEntrySplitSummary | None: Raw-entry split diagnostics when a
                 before-grouping split is configured, otherwise `None`.
         """
-        row_labels, summary = self._build_row_split_labels()
-        if summary is None:
+        if (
+            self.split_mode is None
+            or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
+        ):
             return None
+        row_labels, summary = self._build_row_split_labels()
         return replace(
             summary,
-            straddling_group_count=self._count_straddling_groups(row_labels),
+            straddling_group_count=count_straddling_groups(
+                self.iter_grouped_rows(),
+                row_labels,
+            ),
             straddling_group_policy=self.straddling_group_policy.value,
         )
-
-    def _count_straddling_groups(self, row_labels: dict[int, SplitLabel]) -> int:
-        """Count grouped windows that cross the raw-entry split boundary.
-
-        Args:
-            row_labels (dict[int, SplitLabel]): Raw-entry split labels keyed by
-                `line_order`.
-
-        Returns:
-            int: Number of grouped windows that contain rows from both sides of
-                the raw-entry split boundary.
-        """
-        if not row_labels:
-            return 0
-        straddling_groups = 0
-        for rows in self.iter_grouped_rows():
-            labels = {row_labels.get(row.line_order, SplitLabel.TRAIN) for row in rows}
-            if len(labels) > 1:
-                straddling_groups += 1
-        return straddling_groups
 
     @abstractmethod
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
@@ -1037,7 +873,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             continuous_context=continuous_context,
         )
 
-    def _build_sequences_for_group(  # noqa: C901, PLR0912, PLR0913
+    def _build_sequences_for_group(  # noqa: C901, PLR0913
         self,
         *,
         window_id: int,
@@ -1071,9 +907,6 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         Yields:
             TemplateSequence: One or more sequences derived from the grouped
                 rows.
-
-        Raises:
-            ValueError: If the configured straddling policy is unsupported.
         """
         if not rows:
             return
@@ -1093,7 +926,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 yield seq
             return
 
-        segments = list(self._split_rows_by_label(rows, row_labels))
+        segments = list(split_rows_by_label(rows, row_labels))
         if not segments:
             return
 
@@ -1102,7 +935,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             == StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
         ):
             for offset, (segment_label, segment_rows) in enumerate(segments):
-                effective_label = segment_label
+                effective_label = SplitLabel(segment_label)
                 if (
                     train_only_normal_entities
                     and effective_label is SplitLabel.TRAIN
@@ -1124,28 +957,13 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                     yield seq
             return
 
-        if self.straddling_group_policy == StraddlingGroupPolicy.DROP_STRADDLERS:
-            unique_labels = {segment_label for segment_label, _ in segments}
-            if len(unique_labels) > 1:
-                return
-            seq = self._build_sequence(
-                window_id,
-                rows,
-                infer_template,
-                label_for_group,
-                next(iter(unique_labels)),
-            )
-            if seq is not None:
-                yield seq
+        split_label_value = resolve_straddling_group_label(
+            self.straddling_group_policy.value,
+            segments,
+        )
+        if split_label_value is None:
             return
-
-        if self.straddling_group_policy == StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT:
-            split_label = segments[0][0]
-        elif self.straddling_group_policy == StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT:
-            split_label = segments[-1][0]
-        else:
-            msg = f"Unsupported straddling policy: {self.straddling_group_policy.value}"
-            raise ValueError(msg)
+        split_label = SplitLabel(split_label_value)
 
         seq = self._build_sequence(
             window_id,

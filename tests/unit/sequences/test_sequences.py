@@ -21,6 +21,7 @@ from anomalog.sequences import (
     EntitySequenceBuilder,
     FixedSequenceBuilder,
     RawEntrySplitMode,
+    RawEntrySplitSummary,
     SequenceSplitCounts,
     SequenceSplitSummary,
     SplitApplicationOrder,
@@ -1368,6 +1369,216 @@ def test_entity_sequences_before_grouping_assign_by_first_event_uses_group_head(
     assert split_summary.straddling_group_policy == (
         StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT.value
     )
+
+
+def test_entity_sequences_before_grouping_assign_by_last_event_uses_group_tail() -> (
+    None
+):
+    """Last-event straddler policy should keep whole groups on the tail side."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT,
+        train_entry_count=2,
+    )
+
+    sequences = list(builder)
+
+    assert len(sequences) == 1
+    assert sequences[0].split_label is SplitLabel.TEST
+    assert sequences[0].templates == ["ONE", "TWO", "THREE", "FOUR"]
+    split_summary = builder.build_raw_entry_split_summary()
+    assert split_summary is not None
+    assert split_summary.straddling_group_count == 1
+    assert split_summary.straddling_group_policy == (
+        StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT.value
+    )
+
+
+def test_entity_sequences_before_grouping_drop_straddlers() -> None:
+    """Drop-straddler policy should omit any group that crosses the boundary."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=None,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=None,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.DROP_STRADDLERS,
+        train_entry_count=2,
+    )
+
+    sequences = list(builder)
+
+    assert sequences == []
+    split_summary = builder.build_raw_entry_split_summary()
+    assert split_summary is not None
+    assert split_summary.straddling_group_count == 1
+    assert split_summary.straddling_group_policy == (
+        StraddlingGroupPolicy.DROP_STRADDLERS.value
+    )
+
+
+def test_raw_entry_split_summary_as_dict_preserves_optional_counts() -> None:
+    """Raw-entry split summaries should serialise all recorded counts."""
+    summary = RawEntrySplitSummary(
+        split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION.value,
+        application_order=SplitApplicationOrder.BEFORE_GROUPING.value,
+        cutoff_entry_index=3,
+        train_raw_entry_count=2,
+        train_normal_entry_count=2,
+        train_anomalous_entry_count=0,
+        test_raw_entry_count=2,
+        test_normal_entry_count=1,
+        test_anomalous_entry_count=1,
+        ignored_raw_entry_count=1,
+        ignored_normal_entry_count=0,
+        ignored_anomalous_entry_count=1,
+        straddling_group_count=2,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES.value,
+    )
+
+    assert summary.as_dict() == {
+        "split_mode": RawEntrySplitMode.PREFIX_NORMAL_FRACTION.value,
+        "application_order": SplitApplicationOrder.BEFORE_GROUPING.value,
+        "cutoff_entry_index": 3,
+        "train_raw_entry_count": 2,
+        "train_normal_entry_count": 2,
+        "train_anomalous_entry_count": 0,
+        "test_raw_entry_count": 2,
+        "test_normal_entry_count": 1,
+        "test_anomalous_entry_count": 1,
+        "ignored_raw_entry_count": 1,
+        "ignored_normal_entry_count": 0,
+        "ignored_anomalous_entry_count": 1,
+        "straddling_group_count": 2,
+        "straddling_group_policy": StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES.value,
+    }
+
+
+def test_sequence_split_summary_as_dict_omits_entity_only_flag_when_absent() -> None:
+    """Sequence split summaries should only include entity-only metadata when set."""
+    summary = SequenceSplitSummary(
+        requested_train_fraction=0.25,
+        requested_test_fraction=0.75,
+        train_on_normal_entities_only=None,
+        train_pool_sequence_count=3,
+        ineligible_train_pool_count=0,
+        realised_train_sequence_count=1,
+        excluded_from_train_count=2,
+        eligible_train_sequence_count=1,
+        ignored_sequence_count=2,
+        effective_train_fraction_of_eligible=1.0,
+        effective_train_fraction_overall=0.25,
+    )
+
+    assert summary.as_dict() == {
+        "requested_train_fraction": 0.25,
+        "requested_test_fraction": 0.75,
+        "train_pool_sequence_count": 3,
+        "ineligible_train_pool_count": 0,
+        "realised_train_sequence_count": 1,
+        "excluded_from_train_count": 2,
+        "eligible_train_sequence_count": 1,
+        "ignored_sequence_count": 2,
+        "effective_train_fraction_of_eligible": 1.0,
+        "effective_train_fraction_overall": 0.25,
+    }
+
+
+def test_sequence_split_summary_as_dict_includes_entity_only_flag_when_set() -> None:
+    """Sequence split summaries should serialise the normal-only flag when set."""
+    summary = SequenceSplitSummary(
+        requested_train_fraction=0.2,
+        requested_test_fraction=0.8,
+        train_on_normal_entities_only=True,
+        train_pool_sequence_count=2,
+        ineligible_train_pool_count=1,
+        realised_train_sequence_count=1,
+        excluded_from_train_count=1,
+        eligible_train_sequence_count=1,
+        ignored_sequence_count=1,
+        effective_train_fraction_of_eligible=1.0,
+        effective_train_fraction_overall=0.1,
+    )
+
+    assert summary.as_dict() == {
+        "requested_train_fraction": 0.2,
+        "requested_test_fraction": 0.8,
+        "train_pool_sequence_count": 2,
+        "ineligible_train_pool_count": 1,
+        "realised_train_sequence_count": 1,
+        "excluded_from_train_count": 1,
+        "eligible_train_sequence_count": 1,
+        "ignored_sequence_count": 1,
+        "effective_train_fraction_of_eligible": 1.0,
+        "effective_train_fraction_overall": 0.1,
+        "train_on_normal_entities_only": True,
+    }
 
 
 @pytest.mark.allow_no_new_coverage
