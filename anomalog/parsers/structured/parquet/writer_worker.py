@@ -19,6 +19,7 @@ from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,
+    RAW_PARAMETERS_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
     StructuredLine,
@@ -85,6 +86,7 @@ STRUCTURED_BATCH_SCHEMA = pa.schema(
         pa.field(UNTEMPLATED_FIELD, pa.string()),
         pa.field(ANOMALOUS_FIELD, pa.int64()),
         pa.field(LINE_FIELD, pa.int64()),
+        pa.field(RAW_PARAMETERS_FIELD, pa.list_(pa.string())),
         pa.field(ENTITY_BUCKET_FIELD, pa.int32()),
     ],
 )

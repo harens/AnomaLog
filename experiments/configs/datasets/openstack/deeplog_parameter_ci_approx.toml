@@ -1,0 +1,19 @@
+name = "openstack_deeplog_parameter_ci_approx"
+description = "Parameter-only DeepLog OpenStack approximation that preserves raw numeric parameters and injects two synthetic anomalies into a Figure 9-sized VM-creation slice."
+
+[dataset]
+name = "openstack_deeplog_parameter_ci_approx"
+dataset_name = "OPENSTACK_DEEPLOG_PARAMETER_CI_APPROX"
+preset = "openstack_deeplog_parameter_ci_approx"
+template_parser = "identity"
+description = "OpenStack parameter-value approximation dataset using identity template parsing, raw numeric preservation, and a Figure 9-sized VM-creation slice."
+
+[dataset.sequence]
+grouping = "entity"
+
+[dataset.cache_paths]
+namespace = "openstack_deeplog_parameter_ci_approx"
+
+[[models]]
+ref = "deeplog_parameter_anomaly"
+run_group = "deeplog_parameter"

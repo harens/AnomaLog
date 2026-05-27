@@ -9,9 +9,183 @@ from typing import ClassVar
 from prefect.logging import get_logger
 from typing_extensions import override
 
-from anomalog.parsers.structured.contracts import BaseStructuredLine, StructuredParser
+from anomalog.parsers.structured.contracts import (
+    BaseStructuredLine,
+    StructuredLine,
+    StructuredParser,
+)
 
 UTC = timezone.utc
+_OPENSTACK_LABELLED_ROW_RE = re.compile(
+    r"^(?P<split>[^\t]+)\t(?P<label>[01])\t(?P<raw>.*)$",
+)
+_OPENSTACK_RE = re.compile(
+    r"""
+    ^\s*
+    (?P<logrecord>\S+)\s+
+    (?P<date>\d{4}-\d{2}-\d{2})\s+
+    (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
+    (?P<pid>\S+)\s+
+    (?P<level>[A-Z]+)\s+
+    (?P<component>\S+)
+    \s+\[(?P<addr>[^\]]+)\]
+    \s+(?P<content>.*\S)
+    \s*$
+    """,
+    re.VERBOSE,
+)
+_INSTANCE_PREFIX_RE = re.compile(
+    r"^\[instance:\s*(?P<instance_id>[^\]]+?)\]\s*",
+    re.IGNORECASE,
+)
+_INSTANCE_ID_PATTERNS = (
+    re.compile(r"\[instance:\s*(?P<instance_id>[^\]]+?)\]"),
+    re.compile(r"\bfor instance (?P<instance_id>\S+)"),
+)
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_PATH_RE = re.compile(r"(?<!\S)/(?:[\w.-]+/)*[\w.-]+")
+_INSTANCE_STORAGE_PATH_RE = re.compile(r"(?<!\S)/var/lib/nova/instances/[^)\s,.;:]+")
+_HEX_RE = re.compile(r"\b[0-9a-f]{12,}\b", re.IGNORECASE)
+_NUM_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
+
+
+def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
+    """Convert OpenStack date and time fragments to Unix milliseconds.
+
+    Returns:
+        int | None: Parsed timestamp in milliseconds, or `None` when parsing
+            fails.
+    """
+    value = f"{date_s} {time_s}"
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        pass
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _extract_openstack_instance_id(raw_payload: str) -> str | None:
+    """Return the OpenStack instance identifier, if present."""
+    for pattern in _INSTANCE_ID_PATTERNS:
+        match = pattern.search(raw_payload)
+        if match is None:
+            continue
+        instance_id = match.group("instance_id").strip()
+        if instance_id:
+            return instance_id
+    return None
+
+
+def _normalise_openstack_path_tokens(
+    text: str,
+    *,
+    preserve_numeric_values: bool,
+) -> str:
+    def _normalise_path(match: re.Match[str]) -> str:
+        token = match.group(0)
+        suffix = ""
+        while token and token[-1] in ",.;:)]":
+            suffix = token[-1] + suffix
+            token = token[:-1]
+        segments = token.split("/")
+        normalised_segments = []
+        for segment in segments:
+            if not segment:
+                normalised_segments.append(segment)
+                continue
+            if _UUID_RE.fullmatch(segment):
+                normalised_segments.append("UUID")
+                continue
+            if _IP_RE.fullmatch(segment):
+                normalised_segments.append("IP")
+                continue
+            if _HEX_RE.fullmatch(segment):
+                normalised_segments.append("HEX")
+                continue
+            if not preserve_numeric_values and re.fullmatch(r"\d+(?:\.\d+)?", segment):
+                normalised_segments.append("NUM")
+                continue
+            normalised_segments.append(segment)
+        return "/".join(normalised_segments) + suffix
+
+    return _PATH_RE.sub(_normalise_path, text)
+
+
+def _normalise_openstack_message(
+    content: str,
+    *,
+    preserve_numeric_values: bool,
+) -> str:
+    """Canonicalise OpenStack message text before template mining.
+
+    Returns:
+        str: Canonicalised OpenStack message text.
+    """
+    text = _INSTANCE_PREFIX_RE.sub("", content).strip()
+    text = _UUID_RE.sub("UUID", text)
+    text = _IP_RE.sub("IP", text)
+    text = _normalise_openstack_path_tokens(
+        text,
+        preserve_numeric_values=preserve_numeric_values,
+    )
+    text = _INSTANCE_STORAGE_PATH_RE.sub("INSTANCE_PATH", text)
+    text = _HEX_RE.sub("HEX", text)
+    if preserve_numeric_values:
+        return text
+    return _NUM_RE.sub("NUM", text)
+
+
+def _parse_openstack_labelled_row(
+    raw_line: str,
+) -> tuple[str, int, int, str, str, list[str]] | None:
+    """Parse a labelled OpenStack row into split, label, and payload fields.
+
+    Returns:
+        tuple[str, int, int, str, str, list[str]] | None: Split name, label,
+            timestamp, instance id, canonical content, and raw parameters, or
+            `None` when the row is malformed.
+    """
+    row_match = _OPENSTACK_LABELLED_ROW_RE.match(raw_line.rstrip("\n"))
+    if row_match is None:
+        return None
+    raw_payload = row_match.group("raw")
+    payload_match = _OPENSTACK_RE.match(raw_payload)
+    if payload_match is None:
+        return None
+    data = payload_match.groupdict()
+    timestamp_ms = _openstack_datetime_to_unix_ms(data["date"], data["time"])
+    if timestamp_ms is None:
+        return None
+    instance_id = _extract_openstack_instance_id(raw_payload)
+    if instance_id is None:
+        return None
+    return (
+        row_match.group("split").strip(),
+        int(row_match.group("label")),
+        timestamp_ms,
+        instance_id,
+        data["content"].strip(),
+        _extract_openstack_parameters(data["content"] or ""),
+    )
+
+
+def _extract_openstack_parameters(content: str) -> list[str]:
+    """Extract numeric OpenStack parameters from the message body.
+
+    Returns:
+        list[str]: Raw numeric tokens in encounter order.
+    """
+    text = _INSTANCE_PREFIX_RE.sub("", content).strip()
+    return _NUM_RE.findall(text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,238 +552,39 @@ class ThunderbirdParser(StructuredParser):
 
 @dataclass(frozen=True, slots=True)
 class OpenStackDeepLogParser(StructuredParser):
-    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
-
-    Input rows are expected in the derived-source format:
-    `<split_name>\\t<label>\\t<raw_openstack_line>`.
-    The parser maps each row into the canonical structured schema, keeps the
-    raw message content only for template mining, and prefixes the recovered
-    VM `instance_id` with the file split so the session boundary remains
-    explicit. Rows that do not expose an instance identifier are skipped
-    because there is no paper-faithful session key to recover from them.
-
-    The mined template text is normalised further before Spell sees it: the
-    leading instance tag is removed and volatile identifiers such as UUIDs,
-    IP addresses, instance-storage filenames, path segments, and standalone
-    numeric values are canonicalised. That keeps session handles out of the
-    key vocabulary while preserving the underlying message shape.
-
-    Attributes:
-        name (ClassVar[str]): Registry/config name for the built-in parser.
-    """
+    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset."""
 
     name: ClassVar[str] = "openstack_deeplog"
 
-    _ROW_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^(?P<split>[^\t]+)\t(?P<label>[01])\t(?P<raw>.*)$",
-    )
-    _OPENSTACK_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"""
-        ^\s*
-        (?P<logrecord>\S+)\s+
-        (?P<date>\d{4}-\d{2}-\d{2})\s+
-        (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
-        (?P<pid>\S+)\s+
-        (?P<level>[A-Z]+)\s+
-        (?P<component>\S+)
-        \s+\[(?P<addr>[^\]]+)\]
-        \s+(?P<content>.*\S)
-        \s*$
-        """,
-        re.VERBOSE,
-    )
-    _INSTANCE_PREFIX_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^\[instance:\s*(?P<instance_id>[^\]]+?)\]\s*",
-        re.IGNORECASE,
-    )
-    _INSTANCE_ID_PATTERNS: ClassVar[tuple[re.Pattern[str], ...]] = (
-        re.compile(r"\[instance:\s*(?P<instance_id>[^\]]+?)\]"),
-        re.compile(r"\bfor instance (?P<instance_id>\S+)"),
-    )
-    _UUID_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
-        re.IGNORECASE,
-    )
-    _IP_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-    )
-    _PATH_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?<!\S)/(?:[\w.-]+/)*[\w.-]+",
-    )
-    _INSTANCE_STORAGE_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?<!\S)/var/lib/nova/instances/[^)\s,.;:]+",
-    )
-    _HEX_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"\b[0-9a-f]{12,}\b",
-        re.IGNORECASE,
-    )
-    _NUM_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"\b\d+(?:\.\d+)?\b",
-    )
-
-    @staticmethod
-    def _extract_instance_id(raw_payload: str) -> str | None:
-        """Return the OpenStack instance identifier, if the line exposes one.
-
-        Args:
-            raw_payload (str): Raw OpenStack payload text from the labelled
-                source row.
-
-        Returns:
-            str | None: Recognised instance identifier, or `None` when the
-                payload does not expose one.
-        """
-        for pattern in OpenStackDeepLogParser._INSTANCE_ID_PATTERNS:
-            match = pattern.search(raw_payload)
-            if match is None:
-                continue
-            instance_id = match.group("instance_id").strip()
-            if instance_id:
-                return instance_id
-        return None
-
-    @staticmethod
-    def _normalise_message_text(content: str) -> str:
-        """Canonicalise volatile OpenStack message text before templating.
-
-        Args:
-            content (str): Raw message body extracted from the OpenStack log
-                line.
-
-        Returns:
-            str: Canonicalised message text with session markers and volatile
-                identifiers replaced by stable placeholders.
-        """
-        text = OpenStackDeepLogParser._INSTANCE_PREFIX_RE.sub("", content).strip()
-        text = OpenStackDeepLogParser._UUID_RE.sub("UUID", text)
-        text = OpenStackDeepLogParser._IP_RE.sub("IP", text)
-        text = OpenStackDeepLogParser._normalise_path_tokens(text)
-        text = OpenStackDeepLogParser._INSTANCE_STORAGE_PATH_RE.sub(
-            "INSTANCE_PATH",
-            text,
-        )
-        text = OpenStackDeepLogParser._HEX_RE.sub("HEX", text)
-        return OpenStackDeepLogParser._NUM_RE.sub("NUM", text)
-
-    @staticmethod
-    def _normalise_path_tokens(text: str) -> str:
-        """Normalise path-like tokens without erasing their structure.
-
-        Args:
-            text (str): Text containing path-like tokens to canonicalise.
-
-        Returns:
-            str: Text with volatile path segments replaced by stable
-                placeholders.
-        """
-
-        def _normalise_path(match: re.Match[str]) -> str:
-            token = match.group(0)
-            suffix = ""
-            while token and token[-1] in ",.;:)]":
-                suffix = token[-1] + suffix
-                token = token[:-1]
-            segments = token.split("/")
-            normalised_segments = []
-            for segment in segments:
-                if not segment:
-                    normalised_segments.append(segment)
-                    continue
-                if OpenStackDeepLogParser._UUID_RE.fullmatch(segment):
-                    normalised_segments.append("UUID")
-                    continue
-                if OpenStackDeepLogParser._IP_RE.fullmatch(segment):
-                    normalised_segments.append("IP")
-                    continue
-                if OpenStackDeepLogParser._HEX_RE.fullmatch(segment):
-                    normalised_segments.append("HEX")
-                    continue
-                if re.fullmatch(r"\d+(?:\.\d+)?", segment):
-                    normalised_segments.append("NUM")
-                    continue
-                normalised_segments.append(segment)
-            return "/".join(normalised_segments) + suffix
-
-        return OpenStackDeepLogParser._PATH_RE.sub(_normalise_path, text)
-
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
-        """Parse one labelled OpenStack row.
-
-        Args:
-            raw_line (str): Labelled row from the derived raw stream.
+        """Parse one labelled OpenStack row into the shared structured schema.
 
         Returns:
-            BaseStructuredLine | None: Parsed row or `None` when malformed.
+            BaseStructuredLine | None: Structured row, or `None` when the
+                labelled OpenStack row is malformed.
         """
-        s = raw_line.rstrip("\n")
         logger = get_logger()
-
-        row_match = self._ROW_RE.match(s)
-        if row_match is None:
-            logger.warning("Cannot parse OpenStack labelled row: %r", s)
-            return None
-
-        raw_payload = row_match.group("raw")
-        split_name = row_match.group("split").strip()
-        label = int(row_match.group("label"))
-
-        match = self._OPENSTACK_RE.match(raw_payload)
-        if match is None:
-            logger.warning("Cannot parse OpenStack payload row: %r", raw_payload)
-            return None
-
-        data = match.groupdict()
-        ts_ms = _openstack_datetime_to_unix_ms(data["date"], data["time"])
-        if ts_ms is None:
+        parsed = _parse_openstack_labelled_row(raw_line)
+        if parsed is None:
             logger.warning(
-                "Failed to parse OpenStack timestamp date=%r time=%r row=%r",
-                data["date"],
-                data["time"],
-                raw_payload,
+                "Cannot parse OpenStack labelled row: %r",
+                raw_line.rstrip("\n"),
             )
             return None
-        entity_id = self._extract_instance_id(raw_payload)
-        if entity_id is None:
-            logger.warning(
-                "Skipping OpenStack row without instance identifier: %r",
-                raw_payload,
-            )
-            return None
-        entity_id = f"{split_name}:{entity_id}"
-
-        return BaseStructuredLine(
-            timestamp_unix_ms=ts_ms,
+        split_name, label, timestamp_ms, instance_id, content, raw_parameters = parsed
+        entity_id = f"{split_name}:{instance_id}"
+        return StructuredLine(
+            timestamp_unix_ms=timestamp_ms,
             entity_id=entity_id,
-            untemplated_message_text=self._normalise_message_text(
-                data["content"] or "",
+            untemplated_message_text=_normalise_openstack_message(
+                content,
+                preserve_numeric_values=False,
             ),
             anomalous=label,
+            line_order=0,
+            raw_parameters=raw_parameters,
         )
-
-
-def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
-    """Convert OpenStack date/time fragments to epoch milliseconds.
-
-    Args:
-        date_s (str): Date fragment in `YYYY-MM-DD`.
-        time_s (str): Time fragment with optional fractional seconds.
-
-    Returns:
-        int | None: Unix epoch milliseconds, or `None` when parsing fails.
-    """
-    value = f"{date_s} {time_s}"
-    try:
-        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
-        return int(dt.timestamp() * 1000)
-    except ValueError:
-        pass
-    try:
-        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        return int(dt.timestamp() * 1000)
-    except ValueError:
-        pass
-    return None
 
 
 @dataclass(frozen=True, slots=True)

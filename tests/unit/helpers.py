@@ -4,11 +4,11 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import ClassVar, TypedDict
 from unittest.mock import create_autospec
 
 from prefect.context import TaskRunContext
-from typing_extensions import override
+from typing_extensions import NotRequired, Unpack, override
 
 from anomalog.labels import AnomalyLabelLookup
 from anomalog.parsers.structured.contracts import (
@@ -22,32 +22,38 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.writer_worker import EntityChronologyKey
 
 
+class _StructuredLineFields(TypedDict):
+    timestamp_unix_ms: int | None
+    entity_id: str | None
+    untemplated_message_text: str
+    anomalous: int | None
+    raw_parameters: NotRequired[list[str] | None]
+
+
 def structured_line(
     *,
     line_order: int,
-    timestamp_unix_ms: int | None,
-    entity_id: str | None,
-    untemplated_message_text: str,
-    anomalous: int | None,
+    **fields: Unpack[_StructuredLineFields],
 ) -> StructuredLine:
     """Build a concise StructuredLine fixture.
 
     Args:
         line_order (int): Stable line order to assign to the fixture row.
-        timestamp_unix_ms (int | None): Optional timestamp for the fixture row.
-        entity_id (str | None): Optional entity identifier for the fixture row.
-        untemplated_message_text (str): Raw message text for the fixture row.
-        anomalous (int | None): Optional anomaly label for the fixture row.
+        **fields: Field values used to construct the fixture row. Expected
+            keys are `timestamp_unix_ms`, `entity_id`,
+            `untemplated_message_text`, `anomalous`, and optionally
+            `raw_parameters`.
 
     Returns:
         StructuredLine: Structured row with the supplied field values.
     """
     return StructuredLine(
         line_order=line_order,
-        timestamp_unix_ms=timestamp_unix_ms,
-        entity_id=entity_id,
-        untemplated_message_text=untemplated_message_text,
-        anomalous=anomalous,
+        timestamp_unix_ms=fields["timestamp_unix_ms"],
+        entity_id=fields["entity_id"],
+        untemplated_message_text=fields["untemplated_message_text"],
+        anomalous=fields["anomalous"],
+        raw_parameters=fields.get("raw_parameters"),
     )
 
 

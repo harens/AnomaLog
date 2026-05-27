@@ -14,7 +14,12 @@ from typing_extensions import override
 from anomalog import DatasetSpec
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader
-from anomalog.parsers import BGLParser, Drain3Parser, ParquetStructuredSink
+from anomalog.parsers import (
+    BGLParser,
+    Drain3Parser,
+    OpenStackDeepLogParser,
+    ParquetStructuredSink,
+)
 from anomalog.parsers.structured import (
     BaseStructuredLine,
     DelimitedLabelledEventParser,
@@ -26,13 +31,13 @@ from anomalog.parsers.template import (
     ExtractedParameters,
     IdentityTemplateParser,
     LogTemplate,
-    SpellTemplateParser,
     TemplateParser,
 )
 from anomalog.presets import (
     bgl,
     hdfs_v1,
     hdfs_wuyifan18_deeplog_preprocessed,
+    openstack_deeplog_parameter_ci_approx,
     openstack_deeplog_preprocessed,
     preset_names,
     resolve_preset,
@@ -48,6 +53,7 @@ from anomalog.sequences import (
 )
 from anomalog.sources import DatasetSource, PostProcessedSource, RemoteZipSource
 from anomalog.sources.local import LocalZipSource
+from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
 
@@ -152,6 +158,11 @@ class _RecordingSink(StructuredSink):
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         return self._sink.iter_structured_lines(columns=columns)
+
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        return self._sink.iter_structured_lines_in_source_order()
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         return self._sink.load_inline_label_cache()
@@ -391,6 +402,7 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
         "hdfs_v1",
         "hdfs_wuyifan18_deeplog_preprocessed",
         "openstack_deeplog_preprocessed",
+        "openstack_deeplog_parameter_ci_approx",
         "thunderbird",
         "thunderbird_smoke",
     }
@@ -410,10 +422,31 @@ def test_wuyifan18_deeplog_hdfs_preset_uses_preprocessed_session_source() -> Non
 @pytest.mark.allow_no_new_coverage
 def test_openstack_deeplog_preset_uses_preprocessed_session_source() -> None:
     """OpenStack DeepLog preset should expose the preprocessed event stream."""
-    assert openstack_deeplog_preprocessed.template_parser is SpellTemplateParser
+    assert openstack_deeplog_preprocessed.template_parser is IdentityTemplateParser
     source = openstack_deeplog_preprocessed.source
     assert source is not None
     assert source.raw_logs_relpath == Path("preprocessed/openstack_labelled_raw.log")
+
+
+@pytest.mark.allow_no_new_coverage
+def test_openstack_deeplog_parameter_ci_preset_uses_parameter_preserving_source() -> (
+    None
+):
+    """The parameter-only preset should bind the raw-parameter OpenStack path."""
+    assert (
+        openstack_deeplog_parameter_ci_approx.template_parser is IdentityTemplateParser
+    )
+    source = openstack_deeplog_parameter_ci_approx.source
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.post_process, partial)
+    assert source.post_process.func is materialise_openstack_deeplog_parameter_ci_subset
+    assert (
+        openstack_deeplog_parameter_ci_approx.structured_parser.__class__
+        is OpenStackDeepLogParser
+    )
+    assert source.raw_logs_relpath == Path(
+        "preprocessed/openstack_deeplog_parameter_subset.log",
+    )
 
 
 def test_builtin_presets_reject_unknown_names() -> None:

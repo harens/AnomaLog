@@ -15,7 +15,7 @@ from anomalog.parsers import (
     ThunderbirdParser,
 )
 from anomalog.parsers.structured import DelimitedLabelledEventParser
-from anomalog.parsers.template import IdentityTemplateParser, SpellTemplateParser
+from anomalog.parsers.template import IdentityTemplateParser
 from anomalog.sources import (
     AITADSScenarioSource,
     PostProcessedSource,
@@ -25,6 +25,7 @@ from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
+from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
 from anomalog.sources.raw_prefix import (
     materialise_raw_log_prefix,
     materialise_raw_log_segment,
@@ -143,7 +144,27 @@ openstack_deeplog_preprocessed = (
         ),
     )
     .parse_with(OpenStackDeepLogParser())
-    .template_with(SpellTemplateParser)
+    .template_with(IdentityTemplateParser)
+)
+
+openstack_deeplog_parameter_ci_approx = (
+    DatasetSpec("OPENSTACK_DEEPLOG_PARAMETER_CI_APPROX")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/OpenStack.tar.gz",
+                md5_checksum="66bd42c07837a094d9b0ea2d036b5713",
+            ),
+            post_process=partial(
+                materialise_openstack_deeplog_parameter_ci_subset,
+            ),
+            raw_logs_relpath=Path(
+                "preprocessed/openstack_deeplog_parameter_subset.log",
+            ),
+        ),
+    )
+    .parse_with(OpenStackDeepLogParser())
+    .template_with(IdentityTemplateParser)
 )
 
 thunderbird = (
@@ -188,13 +209,12 @@ thunderbird_smoke = (
 )
 
 
-def _build_ait_ads_preset() -> DatasetSpec:
-    return (
-        DatasetSpec("AIT_ADS")
-        .from_source(AITADSScenarioSource())
-        .parse_with(AITADSParser())
-        .template_with(IdentityTemplateParser)
-    )
+ait_ads = (
+    DatasetSpec("AIT_ADS")
+    .from_source(AITADSScenarioSource())
+    .parse_with(AITADSParser())
+    .template_with(IdentityTemplateParser)
+)
 
 
 _PRESETS: dict[str, DatasetSpec] = {
@@ -203,9 +223,10 @@ _PRESETS: dict[str, DatasetSpec] = {
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
     "hdfs_wuyifan18_deepcase_table_iv_compat": hdfs_wuyifan18_deepcase_table_iv_compat,
     "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
+    "openstack_deeplog_parameter_ci_approx": openstack_deeplog_parameter_ci_approx,
     "thunderbird": thunderbird,
     "thunderbird_smoke": thunderbird_smoke,
-    "ait_ads": _build_ait_ads_preset(),
+    "ait_ads": ait_ads,
 }
 
 

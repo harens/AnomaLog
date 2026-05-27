@@ -6,6 +6,7 @@ from anomalog.parsers.structured import (
     resolve_structured_parser,
     structured_parser_names,
 )
+from anomalog.parsers.structured.contracts import StructuredLine
 from anomalog.parsers.structured.deeplog_preprocessed import (
     DelimitedLabelledEventParser,
 )
@@ -99,10 +100,12 @@ def test_openstack_deeplog_parser_normalises_numeric_message_tokens() -> None:
     )
 
     assert parsed is not None
+    assert isinstance(parsed, StructuredLine)
     assert parsed.entity_id == "openstack_train:29d7b230-75ab-4140-81d8-7353d8f7e69b"
     assert parsed.untemplated_message_text == (
         "Attempting claim: memory NUM MB, disk NUM GB, vcpus NUM CPU"
     )
+    assert parsed.raw_parameters == ["2048", "20", "1"]
 
 
 def test_openstack_deeplog_parser_collapses_instance_storage_paths() -> None:

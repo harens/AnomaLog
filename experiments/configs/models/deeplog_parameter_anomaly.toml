@@ -1,0 +1,6 @@
+name = "deeplog_parameter_anomaly"
+detector = "deeplog"
+parameter_detection_enabled = true
+key_detection_enabled = false
+include_elapsed_time = true
+description = "Parameter-only DeepLog configuration for OpenStack parameter-value anomaly experiments."
