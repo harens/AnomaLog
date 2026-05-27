@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from pathlib import Path
+
 UTC = timezone.utc
 
 OPENSTACK_RE = re.compile(
@@ -86,7 +87,12 @@ _OPENSTACK_PARAMETER_DURATION_MULTIPLIER = 6.0
 
 
 def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
-    """Convert OpenStack date and time fragments to Unix milliseconds."""
+    """Convert OpenStack date and time fragments to Unix milliseconds.
+
+    Returns:
+        int | None: Parsed timestamp in milliseconds, or `None` when parsing
+            fails.
+    """
     value = f"{date_s} {time_s}"
     try:
         dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
@@ -152,7 +158,11 @@ def normalise_openstack_message(
     *,
     preserve_numeric_values: bool,
 ) -> str:
-    """Canonicalise OpenStack message text before template mining."""
+    """Canonicalise OpenStack message text before template mining.
+
+    Returns:
+        str: Canonicalised OpenStack message text.
+    """
     text = INSTANCE_PREFIX_RE.sub("", content).strip()
     text = UUID_RE.sub("UUID", text)
     text = IP_RE.sub("IP", text)
@@ -168,13 +178,22 @@ def normalise_openstack_message(
 
 
 def extract_openstack_parameters(content: str) -> list[str]:
-    """Extract raw numeric parameter tokens from an OpenStack message body."""
+    """Extract raw numeric parameter tokens from an OpenStack message body.
+
+    Returns:
+        list[str]: Raw numeric tokens in encounter order.
+    """
     text = INSTANCE_PREFIX_RE.sub("", content).strip()
     return NUM_RE.findall(text)
 
 
 def parse_openstack_payload(raw_payload: str) -> OpenStackParsedPayload | None:
-    """Parse a raw OpenStack payload into timestamp, instance, and content."""
+    """Parse a raw OpenStack payload into timestamp, instance, and content.
+
+    Returns:
+        OpenStackParsedPayload | None: Parsed payload fields, or `None` when
+            the payload does not match the expected OpenStack shape.
+    """
     match = OPENSTACK_RE.match(raw_payload)
     if match is None:
         return None
@@ -296,7 +315,12 @@ def materialise_openstack_deeplog_parameter_ci_subset(
     source_root: Path,
     raw_logs_path: Path,
 ) -> None:
-    """Materialise a Figure 9-sized OpenStack VM-creation slice with anomalies."""
+    """Materialise a Figure 9-sized OpenStack VM-creation slice with anomalies.
+
+    Raises:
+        ValueError: If the archive does not expose enough normal VM instances
+            for the configured train, validation, and anomaly offsets.
+    """
     if _OPENSTACK_PARAMETER_TRAIN_INSTANCES < 1:
         msg = "train_instances must be positive."
         raise ValueError(msg)
