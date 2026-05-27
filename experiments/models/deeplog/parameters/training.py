@@ -205,6 +205,8 @@ def fit_parameter_model(
             normalisation=normalisation,
             gaussian=gaussian,
             model=model,
+            train_pair_count=len(train_pairs),
+            validation_pair_count=len(validation_pairs),
         ),
         None,
     )

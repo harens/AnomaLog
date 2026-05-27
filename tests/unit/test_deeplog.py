@@ -2418,6 +2418,87 @@ def test_fit_parameter_only_mode_skips_key_model() -> None:
     assert detector.parameter_models
 
 
+def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
+    """Parameter-only DeepLog runs should surface a compact CI report."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=1,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=2,
+            device="cpu",
+            parameter_detection_enabled=True,
+            key_detection_enabled=False,
+        ),
+    )
+    with Progress(disable=True) as progress:
+        detector.fit(
+            [
+                _sequence(
+                    templates=["T", "T", "T"],
+                    params_by_event=[["1.0"], ["2.0"], ["3.0"]],
+                    dts_by_event=[None, 10, 11],
+                    split_label=SplitLabel.TRAIN,
+                ),
+            ],
+            progress=progress,
+        )
+    detector.parameter_models["T"] = ParameterModelState(
+        template="T",
+        schema=ParameterFeatureSchema(
+            feature_names=["dt_prev_ms", "param_0"],
+            numeric_parameter_positions=[0],
+            include_elapsed_time=True,
+            dropped_parameter_positions=[],
+        ),
+        normalisation=NormalisationStats(means=[0.0, 0.0], stddevs=[1.0, 1.0]),
+        gaussian=GaussianThreshold(
+            mean=0.1,
+            stddev=0.01,
+            lower_bound=0.0,
+            upper_bound=0.2,
+        ),
+        model=_StaticParameterModel(output_vector=[0.0, 0.0]),
+        train_pair_count=4,
+        validation_pair_count=2,
+    )
+
+    outcome = detector.predict(
+        _sequence(
+            templates=["T", "T", "T"],
+            params_by_event=[["1.0"], ["2.0"], ["3.0"]],
+            dts_by_event=[None, 10, 11],
+            label=1,
+            split_label=SplitLabel.TEST,
+        ),
+    )
+    assert outcome.triggered_by_parameter_model is True
+
+    metrics = detector.run_metrics(
+        run_metrics={
+            "sequence_count": 1,
+            "train_sequence_count": 0,
+            "test_sequence_count": 1,
+            "ignored_sequence_count": 0,
+        },
+    )
+    assert metrics.parameter_ci_report is not None
+    report = metrics.parameter_ci_report
+    assert report.paper_approximation is True
+    assert report.paper_exact_reproduction is False
+    assert report.highlighted_templates == ["T"]
+    assert report.total_point_count == 2
+    assert report.total_anomalous_point_count == 2
+    assert (
+        report.series[0].thresholds.confidence_99
+        > report.series[0].thresholds.confidence_98
+    )
+    assert report.anomalous_points[0].detected_at_98 in {True, False}
+
+
 def test_fit_trains_models_and_skips_non_numeric_templates() -> None:
     """Training should build both DeepLog models and record skipped templates."""
     expected_train_event_count = 14

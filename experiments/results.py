@@ -180,6 +180,12 @@ def write_run_outputs(
             debug_reporting=debug_reporting,
         ),
     )
+    parameter_ci_report = _parameter_ci_report(model_summary.metrics)
+    if parameter_ci_report is not None:
+        _write_json(
+            result_paths.run_dir / "figure9_parameter_ci.json",
+            parameter_ci_report,
+        )
     _write_json(
         result_paths.environment_path,
         build_environment_metadata(
@@ -544,7 +550,19 @@ def build_run_metrics_report(
             for scope, block in metric_blocks.items()
         },
     }
+    for key, value in run_metrics.items():
+        if key != "parameter_ci_report" or value is None:
+            continue
+        report[key] = value
     return _compact_run_metrics_report(report, debug_reporting=debug_reporting)
+
+
+def _parameter_ci_report(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the detector-owned parameter CI report, if present."""
+    report = metrics.get("parameter_ci_report")
+    if isinstance(report, dict):
+        return report
+    return None
 
 
 def _build_metric_blocks(

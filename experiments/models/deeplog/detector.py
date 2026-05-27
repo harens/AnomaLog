@@ -33,6 +33,10 @@ from experiments.models.deeplog.parameters import (
     parameter_model_input_size,
     score_parameter_sequence,
 )
+from experiments.models.deeplog.parameters.reporting import (
+    DeepLogParameterCiReport,
+    ParameterCiState,
+)
 from experiments.models.deeplog.shared import (
     DeepLogEventFinding,
     DeepLogKeyFinding,
@@ -105,12 +109,16 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
             Sequence-level trigger source counts split by actual label. This
             remains meaningful for session-based runs, but is suppressed for
             continuous stream batches where sequence boundaries are internal.
+        parameter_ci_report (DeepLogParameterCiReport | None): Parameter-value
+            confidence-interval report for the scored run. This is only
+            populated when the parameter branch is enabled.
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
     top_g_replay: DeepLogTopGReplayDiagnostics | None
     event_level_detection: DeepLogEventLevelDetectionDiagnostics | None
     sequence_trigger_breakdown: DeepLogSequenceTriggerBreakdown | None
+    parameter_ci_report: DeepLogParameterCiReport | None
 
 
 class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
@@ -735,6 +743,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         default=None,
         repr=False,
     )
+    _parameter_ci_state: ParameterCiState | None = field(
+        default=None,
+        repr=False,
+    )
     _event_level_events_seen: int = field(default=0, init=False, repr=False)
     _event_level_events_eligible: int = field(default=0, init=False, repr=False)
     _event_level_tp: int = field(default=0, init=False, repr=False)
@@ -867,6 +879,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._sequence_trigger_breakdown_applicable = True
         self._reset_next_event_prediction_state()
         self._reset_key_top_g_replay_state()
+        self._reset_parameter_ci_state()
         self._reset_event_level_state()
         self._mark_fit_complete()
 
@@ -942,6 +955,10 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 key_finding=key_finding,
                 parameter_finding=parameter_finding,
             )
+        self._record_parameter_ci_findings(
+            sequence=sequence,
+            parameter_findings=parameter_findings,
+        )
 
         if self._stream_context is not None:
             self._update_stream_context(
@@ -1131,12 +1148,15 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             DeepLogRunMetrics: DeepLog-owned metrics for the latest scoring
             run.
         """
-        del run_metrics
+        parameter_ci_report = self._parameter_ci_report_snapshot(
+            run_metrics=run_metrics,
+        )
         if not self.config.key_detection_enabled:
             event_level_detection = self._event_level_state_snapshot()
             self._stream_context = None
             self._reset_next_event_prediction_state()
             self._reset_key_top_g_replay_state()
+            self._reset_parameter_ci_state()
             self._reset_event_level_state()
             self._reset_sequence_trigger_breakdown()
             self._reset_next_event_prediction_segment_state()
@@ -1146,6 +1166,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 top_g_replay=None,
                 event_level_detection=event_level_detection,
                 sequence_trigger_breakdown=None,
+                parameter_ci_report=parameter_ci_report,
             )
         segment_diagnostics = self._next_event_prediction_segment_snapshot()
         next_event_prediction = self._next_event_prediction_state_snapshot(
@@ -1161,6 +1182,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self._stream_context = None
         self._reset_next_event_prediction_state()
         self._reset_key_top_g_replay_state()
+        self._reset_parameter_ci_state()
         self._reset_event_level_state()
         self._reset_sequence_trigger_breakdown()
         self._reset_next_event_prediction_segment_state()
@@ -1170,6 +1192,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             top_g_replay=top_g_replay,
             event_level_detection=event_level_detection,
             sequence_trigger_breakdown=sequence_trigger_breakdown,
+            parameter_ci_report=parameter_ci_report,
         )
 
     def _record_next_event_predictions(
@@ -1240,6 +1263,17 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
     def _reset_key_top_g_replay_state(self) -> None:
         """Reset exact-rank replay state before a fresh scoring run."""
         self._key_top_g_replay_state = _KeyTopGReplayState()
+
+    def _ensure_parameter_ci_state(self) -> ParameterCiState:
+        state = self._parameter_ci_state
+        if state is None:
+            state = ParameterCiState()
+            self._parameter_ci_state = state
+        return state
+
+    def _reset_parameter_ci_state(self) -> None:
+        """Reset parameter-CI report state before a fresh scoring run."""
+        self._parameter_ci_state = ParameterCiState()
 
     def _reset_next_event_prediction_segment_state(self) -> None:
         """Reset segment diagnostics before a fresh scoring run."""
@@ -1378,6 +1412,22 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             return None
         return state.snapshot(top_g_values=self.config.top_g_values)
 
+    def _parameter_ci_report_snapshot(
+        self,
+        *,
+        run_metrics: dict[str, Any],
+    ) -> DeepLogParameterCiReport | None:
+        """Return the recorded parameter CI approximation report, if any."""
+        state = self._parameter_ci_state
+        if state is None:
+            return None
+        train_sequence_count = int(run_metrics.get("train_sequence_count", 0) or 0)
+        test_sequence_count = int(run_metrics.get("test_sequence_count", 0) or 0)
+        return state.snapshot(
+            train_sequence_count=train_sequence_count,
+            test_sequence_count=test_sequence_count,
+        )
+
     def _event_level_state_snapshot(
         self,
     ) -> DeepLogEventLevelDetectionDiagnostics | None:
@@ -1489,6 +1539,20 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         ][int(actual_is_anomalous)]
         setattr(self, label_attr, getattr(self, label_attr) + 1)
         setattr(self, trigger_attr, getattr(self, trigger_attr) + 1)
+
+    def _record_parameter_ci_findings(
+        self,
+        *,
+        sequence: TemplateSequence,
+        parameter_findings: dict[int, DeepLogParameterFinding],
+    ) -> None:
+        if not parameter_findings:
+            return
+        self._ensure_parameter_ci_state().record_sequence(
+            sequence=sequence,
+            parameter_findings=parameter_findings,
+            parameter_models=self.parameter_models,
+        )
 
     def _record_event_level_decision(
         self,

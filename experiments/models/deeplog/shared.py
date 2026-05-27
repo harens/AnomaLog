@@ -97,6 +97,10 @@ class ParameterModelState:
         normalisation (NormalisationStats): Per-feature normalisation stats.
         gaussian (GaussianThreshold): Residual calibration thresholds.
         model (ParameterLSTM): Fitted parameter model.
+        train_pair_count (int): Number of normalised training pairs used to fit
+            the model.
+        validation_pair_count (int): Number of held-out validation pairs used to
+            calibrate the Gaussian threshold.
     """
 
     template: str
@@ -104,6 +108,8 @@ class ParameterModelState:
     normalisation: NormalisationStats
     gaussian: GaussianThreshold
     model: ParameterLSTM
+    train_pair_count: int = 0
+    validation_pair_count: int = 0
 
 
 class ParameterModelManifestEntry(msgspec.Struct, frozen=True):
