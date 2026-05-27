@@ -170,6 +170,37 @@ def test_load_experiment_registry_registers_thunderbird_entity_runs() -> None:
     )
 
 
+def test_load_experiment_registry_splits_bgl_protocol_targets() -> None:
+    """BGL paper and benchmark targets should resolve as distinct registry sets."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    ccs2017 = registry.select(groups=("bgl_deeplog_ccs2017_paper",))
+    benchmark_2022 = registry.select(groups=("bgl_how_far_are_we_2022",))
+
+    expected_ccs2017_count = 2
+    assert len(ccs2017) == expected_ccs2017_count
+    assert [experiment.dataset for experiment in ccs2017] == [
+        "bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online",
+        "bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online",
+    ]
+    assert {experiment.model_sets for experiment in ccs2017} == {("baselines_no_nb",)}
+    assert {experiment.models for experiment in ccs2017} == {("deeplog_default",)}
+    assert len(benchmark_2022) == 1
+    assert [experiment.dataset for experiment in benchmark_2022] == [
+        "bgl/how_far_are_we_2022",
+    ]
+    assert {experiment.model_sets for experiment in benchmark_2022} == {
+        ("baselines_no_nb",),
+    }
+    assert {experiment.models for experiment in benchmark_2022} == {
+        ("deeplog_default",),
+    }
+
+
 def test_hdfs_deeplog_paper_registry_includes_short_session_padding_variant() -> None:
     """The HDFS DeepLog paper registry should expose the legacy padding variant."""
     repo_root = Path(__file__).resolve().parents[2]

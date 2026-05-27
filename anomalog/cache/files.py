@@ -16,47 +16,6 @@ _ALLOWED = re.compile(r"[^A-Za-z0-9._/-]")
 CachePolicyKwarg: TypeAlias = str | int | float | bool | None
 
 
-def _try_file_path_from_asset_url(asset_url: str | None) -> Path | None:
-    """Return a local Path if the URL looks like a file URI.
-
-    Accepts URLs like:
-    - "file:///abs/path/to/data.csv"
-    - "file://localhost/abs/path/to/data.csv" (common variant).
-
-    Notes:
-    - Prefect asset keys cannot contain spaces or '%' so you should not depend on keys
-      being reversible file URIs. Use Asset.properties.url (or Asset.url if present).
-    - We URL-decode percent escapes (e.g. %20) so paths with spaces work.
-
-    Examples:
-        >>> _try_file_path_from_asset_url("file:///tmp/example.txt").name
-        'example.txt'
-        >>> _try_file_path_from_asset_url("http://example.com") is None
-        True
-
-    Args:
-        asset_url (str | None): Asset URL to interpret as a local file URI.
-
-    Returns:
-        Path | None: Local path for file URIs, or `None` for non-file URLs.
-    """
-    if not asset_url:
-        return None
-
-    parsed = urlparse(asset_url)
-    if parsed.scheme != "file":
-        return None
-
-    # urlparse("file:///...") -> path="/..."
-    # urlparse("file://localhost/...") -> netloc="localhost", path="/..."
-    # Decode %XX escapes (e.g. %20 -> space)
-    path = unquote(parsed.path)
-    if not path:
-        return None
-
-    return Path(path)
-
-
 def _file_fingerprint(path: Path) -> tuple[str, int, int, int]:
     """(exists_flag, mtime_ns, size_bytes, inode).
 

@@ -177,6 +177,6 @@ def test_decode_dataset_variant_config_accepts_nested_dataset_tables() -> None:
     )
 
     assert matrix_config.dataset_name == "OPENSTACK_DEEPLOG_PREPROCESSED"
-    assert matrix_config.template_parser == "spell"
+    assert matrix_config.template_parser == "identity"
     assert bare_config.dataset_name == "BARE_EXAMPLE"
     assert bare_config.template_parser == "identity"

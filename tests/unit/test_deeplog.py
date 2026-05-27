@@ -99,6 +99,19 @@ def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
     config = _deep_log_config(name="deeplog")
 
     assert config.parameter_detection_enabled is False
+    assert config.key_detection_enabled is True
+
+
+def test_deeplog_model_config_accepts_parameter_only_mode() -> None:
+    """DeepLog should decode an explicit parameter-only scoring mode."""
+    config = _deep_log_config(
+        name="deeplog",
+        parameter_detection_enabled=True,
+        key_detection_enabled=False,
+    )
+
+    assert config.parameter_detection_enabled is True
+    assert config.key_detection_enabled is False
 
 
 def test_deeplog_model_config_defaults_short_session_padding_fidelity() -> None:
@@ -2360,6 +2373,49 @@ def test_fit_uses_configured_cpu_device_with_progress() -> None:
     assert detector.device.type == "cpu"
     assert detector.key_model is not None
     assert "T" in detector.parameter_models
+
+
+def test_fit_parameter_only_mode_skips_key_model() -> None:
+    """DeepLog should be able to fit the parameter branch without key scoring."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=1,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=2,
+            validation_fraction=0.5,
+            device="cpu",
+            parameter_detection_enabled=True,
+            key_detection_enabled=False,
+        ),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit(
+            [
+                _sequence(
+                    templates=["A", "T", "A", "T", "A", "T"],
+                    params_by_event=[[], ["1.0"], [], ["2.0"], [], ["3.0"]],
+                    dts_by_event=[None, 10, None, 12, None, 14],
+                    split_label=SplitLabel.TRAIN,
+                ),
+                _sequence(
+                    templates=["A", "T", "A", "T", "A", "T"],
+                    params_by_event=[[], ["4.0"], [], ["5.0"], [], ["6.0"]],
+                    dts_by_event=[None, 15, None, 18, None, 21],
+                    split_label=SplitLabel.TRAIN,
+                ),
+            ],
+            progress=progress,
+        )
+
+    assert detector.key_model is None
+    assert detector.template_to_index == {}
+    assert detector.index_to_template == {}
+    assert detector.parameter_models
 
 
 def test_fit_trains_models_and_skips_non_numeric_templates() -> None:

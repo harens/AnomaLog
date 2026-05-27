@@ -78,16 +78,6 @@ def _hold_dataset_build_lock(
             sleep(0.01)
 
 
-def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
-    """File URLs should decode path segments and accept the localhost variant."""
-    try_file_path_from_asset_url = vars(cache_files)["_try_file_path_from_asset_url"]
-    path = try_file_path_from_asset_url("file://localhost/tmp/a%20b.txt")
-
-    assert path is not None
-    assert path.name == "a b.txt"
-    assert path.parent.name == "tmp"
-
-
 def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
     tmp_path: Path,
 ) -> None:

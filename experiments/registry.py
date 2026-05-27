@@ -630,7 +630,13 @@ def _decode_experiment_definition(
 
     _reject_unknown_keys(
         raw,
-        allowed={"dataset", "models", "model_sets", "overrides", "description"},
+        allowed={
+            "dataset",
+            "models",
+            "model_sets",
+            "overrides",
+            "description",
+        },
         context=f"{experiment_kind} {name!r}",
     )
 
@@ -668,7 +674,13 @@ def _decode_experiment_set_definition(
 
     _reject_unknown_keys(
         raw,
-        allowed={"models", "model_sets", "datasets", "overrides", "description"},
+        allowed={
+            "models",
+            "model_sets",
+            "datasets",
+            "overrides",
+            "description",
+        },
         context=f"experiment set {name!r}",
     )
 

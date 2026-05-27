@@ -33,6 +33,11 @@ from corpus-specific artefacts and parser heuristics.
   - `networking`: `1` occurrence
 - They are not treated as a paper-prescribed parameter policy, but they should
   remain visible to any future parameter model.
+- A separate audit of the `/var/lib/nova/instances` collapse is now recorded
+  in [OpenStack `/var/lib` path normalisation audit](openstack_varlib_path_normalisation_audit.md).
+  The short version is that the rule materially reduces vocabulary explosion
+  and unknown targets, but the additional keys exposed without it are mostly
+  path-instance noise rather than cleaner anomaly signal.
 
 ## BGL
 

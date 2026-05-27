@@ -629,6 +629,16 @@ class DeepLogModelConfig(
             ),
         ),
     ] = False
+    key_detection_enabled: Annotated[
+        bool,
+        msgspec.Meta(
+            description=(
+                "Whether to fit and apply the next-key detector. Set this to "
+                "False for parameter-only anomaly experiments that still need "
+                "template mining but should not evaluate the log-key model."
+            ),
+        ),
+    ] = True
     include_elapsed_time: Annotated[
         bool,
         msgspec.Meta(
@@ -815,12 +825,17 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         device = resolve_torch_device(self.config.device)
         if logger is not None:
             logger.info("DeepLog resolved torch device: %s", device)
-        key_model, template_to_index, index_to_template = fit_key_model(
-            training_corpus=training_corpus,
-            config=self.config,
-            device=device,
-            progress=progress,
-        )
+        if self.config.key_detection_enabled:
+            key_model, template_to_index, index_to_template = fit_key_model(
+                training_corpus=training_corpus,
+                config=self.config,
+                device=device,
+                progress=progress,
+            )
+        else:
+            key_model = None
+            template_to_index = {}
+            index_to_template = {}
         if self.config.parameter_detection_enabled:
             parameter_models, skipped_parameter_models = fit_parameter_models(
                 training_corpus=training_corpus,
@@ -867,7 +882,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         Raises:
             ValueError: If the detector has not been fit yet.
         """
-        if self.key_model is None:
+        if self.config.key_detection_enabled and self.key_model is None:
             msg = "deeplog must be fit before prediction."
             raise ValueError(msg)
 
@@ -882,57 +897,15 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             prefix_length=self._prediction_prefix_length(sequence),
         )
 
-        # DeepLog makes one decision per event after the initial warm-up
-        # window. First it asks whether the next log key itself looks normal.
-        key_findings = score_key_sequence(
+        key_findings = self._score_key_findings(
             sequence=sequence,
-            context=KeyScoringContext(
-                model=self.key_model,
-                template_to_index=self.template_to_index,
-                index_to_template=self.index_to_template,
-                history_size=self.config.history_size,
-                top_g=max(self.config.top_g_values),
-            ),
-            prefix_templates=self._prediction_prefix_templates(sequence),
-            include_short_session_padding_fallback=(
-                self.config.short_session_padding_fidelity
-            ),
+            evaluation_event_indexes=evaluation_event_indexes,
         )
-        self._record_key_top_g_replay(
-            sequence=sequence,
-            key_findings=key_findings,
-        )
-        self._record_next_event_predictions(
+        parameter_findings = self._score_parameter_findings(
             sequence=sequence,
             key_findings=key_findings,
             evaluation_event_indexes=evaluation_event_indexes,
-            segment_state=self._next_event_prediction_segment_state,
         )
-        # The paper's inference path is "key first, parameters second". We
-        # therefore only pay the parameter-model cost for events whose key
-        # history was accepted as normal by the key model.
-        if self.config.parameter_detection_enabled:
-            parameter_eligible_event_indexes = {
-                event_index
-                for event_index, key_finding in key_findings.items()
-                if (
-                    not key_finding.is_anomalous
-                    and event_index in evaluation_event_indexes
-                )
-            }
-            parameter_findings = score_parameter_sequence(
-                sequence=sequence,
-                parameter_models=self.parameter_models,
-                history_size=self.config.history_size,
-                eligible_event_indexes=parameter_eligible_event_indexes,
-                prefix_events_by_template=(
-                    None
-                    if not sequence.continuous_context or self._stream_context is None
-                    else self._stream_context.parameter_events_by_template
-                ),
-            )
-        else:
-            parameter_findings = {}
 
         event_indexes = sorted(
             (set(key_findings) | set(parameter_findings)) & evaluation_event_indexes,
@@ -997,6 +970,72 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             triggered_by_key_model=key_triggered,
             triggered_by_parameter_model=parameter_triggered,
             findings=findings,
+        )
+
+    def _score_key_findings(
+        self,
+        *,
+        sequence: TemplateSequence,
+        evaluation_event_indexes: set[int],
+    ) -> dict[int, DeepLogKeyFinding]:
+        if not self.config.key_detection_enabled or self.key_model is None:
+            return {}
+        key_findings = score_key_sequence(
+            sequence=sequence,
+            context=KeyScoringContext(
+                model=self.key_model,
+                template_to_index=self.template_to_index,
+                index_to_template=self.index_to_template,
+                history_size=self.config.history_size,
+                top_g=max(self.config.top_g_values),
+            ),
+            prefix_templates=self._prediction_prefix_templates(sequence),
+            include_short_session_padding_fallback=(
+                self.config.short_session_padding_fidelity
+            ),
+        )
+        self._record_key_top_g_replay(
+            sequence=sequence,
+            key_findings=key_findings,
+        )
+        self._record_next_event_predictions(
+            sequence=sequence,
+            key_findings=key_findings,
+            evaluation_event_indexes=evaluation_event_indexes,
+            segment_state=self._next_event_prediction_segment_state,
+        )
+        return key_findings
+
+    def _score_parameter_findings(
+        self,
+        *,
+        sequence: TemplateSequence,
+        key_findings: dict[int, DeepLogKeyFinding],
+        evaluation_event_indexes: set[int],
+    ) -> dict[int, DeepLogParameterFinding]:
+        if not self.config.parameter_detection_enabled:
+            return {}
+        if self.config.key_detection_enabled:
+            eligible_event_indexes = {
+                event_index
+                for event_index, key_finding in key_findings.items()
+                if (
+                    not key_finding.is_anomalous
+                    and event_index in evaluation_event_indexes
+                )
+            }
+        else:
+            eligible_event_indexes = evaluation_event_indexes
+        return score_parameter_sequence(
+            sequence=sequence,
+            parameter_models=self.parameter_models,
+            history_size=self.config.history_size,
+            eligible_event_indexes=eligible_event_indexes,
+            prefix_events_by_template=(
+                None
+                if not sequence.continuous_context or self._stream_context is None
+                else self._stream_context.parameter_events_by_template
+            ),
         )
 
     def model_manifest(self, *, sequence_summary: SequenceSummary) -> DeepLogManifest:
@@ -1093,6 +1132,21 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             run.
         """
         del run_metrics
+        if not self.config.key_detection_enabled:
+            event_level_detection = self._event_level_state_snapshot()
+            self._stream_context = None
+            self._reset_next_event_prediction_state()
+            self._reset_key_top_g_replay_state()
+            self._reset_event_level_state()
+            self._reset_sequence_trigger_breakdown()
+            self._reset_next_event_prediction_segment_state()
+            self._sequence_trigger_breakdown_applicable = True
+            return DeepLogRunMetrics(
+                next_event_prediction=None,
+                top_g_replay=None,
+                event_level_detection=event_level_detection,
+                sequence_trigger_breakdown=None,
+            )
         segment_diagnostics = self._next_event_prediction_segment_snapshot()
         next_event_prediction = self._next_event_prediction_state_snapshot(
             segment_diagnostics=segment_diagnostics,

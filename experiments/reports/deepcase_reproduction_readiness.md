@@ -48,6 +48,17 @@ Readiness:
 - The next-event metric block is now auditable, but exact paper parity still
   depends on sourcing the public DeepCASE HDFS files.
 
+Research note:
+
+- keep HDFS DeepCASE in the registry because it already exposes the paper's
+  next-event block and the workload-reduction summaries;
+- do not treat the HDFS DeepCASE entry as a generic anomaly-detection
+  baseline, because its published comparison target is the prediction and
+  workload view rather than the same sequence-level anomaly framing used by
+  DeepLog;
+- if the registry is renamed later, preserve this distinction in the note so
+  the bundle is not mistaken for a second DeepLog-style reproduction.
+
 ## HDFS Table X Workload Reduction
 
 Paper target:

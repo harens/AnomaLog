@@ -105,23 +105,6 @@ def _normalize_toml_table(
     return {str(key): value for key, value in obj.items()}
 
 
-def _load_toml(path: Path, *, expected_type: type[TDecoded]) -> TDecoded:
-    try:
-        return msgspec.toml.decode(
-            path.read_bytes(),
-            type=expected_type,
-            dec_hook=_path_dec_hook,
-        )
-    except (
-        msgspec.ValidationError,
-        msgspec.DecodeError,
-        TypeError,
-        ValueError,
-    ) as exc:
-        msg = f"{path}: {exc}"
-        raise ConfigError(msg) from exc
-
-
 def _decode_toml_file(
     path: Path,
     *,
