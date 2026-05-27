@@ -92,7 +92,7 @@ def _build_dataset_spec(_dataset: object, *, repo_root: Path) -> SimpleNamespace
     def _build() -> SimpleNamespace:
         return SimpleNamespace()
 
-    return SimpleNamespace(build=_build)
+    return SimpleNamespace(clear_cache=lambda: None, build=_build)
 
 
 def _build_sequence_split_summary(
@@ -704,6 +704,99 @@ def test_run_bundle_replaces_stale_output_directory_without_force(
     assert result == [run_dir]
     assert removed_paths == [run_dir]
     assert run_dir.exists()
+
+
+def test_run_bundle_force_clears_dataset_cache_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Force reruns should invalidate the dataset cache before rebuilding.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces orchestration helpers.
+        tmp_path (Path): Temporary filesystem root used for the fake run.
+    """
+    sequence_config = _SequenceConfig()
+    bundle = SimpleNamespace(
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(
+            dataset_name="demo",
+            sequence=sequence_config,
+        ),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="demo-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    run_dir = tmp_path / "run"
+    run_paths = SimpleNamespace(
+        run_dir=run_dir,
+        metrics_path=run_dir / "metrics.json",
+        run_log_path=run_dir / "run.log",
+        predictions_path=run_dir / "predictions.jsonl",
+    )
+    clear_cache_calls: list[str] = []
+
+    def _build_dataset_spec(
+        _dataset: object,
+        *,
+        repo_root: Path,
+    ) -> SimpleNamespace:
+        del repo_root
+
+        def _build() -> SimpleNamespace:
+            return SimpleNamespace()
+
+        def _clear_cache() -> None:
+            clear_cache_calls.append("demo")
+
+        return SimpleNamespace(clear_cache=_clear_cache, build=_build)
+
+    monkeypatch.setattr(runner, "prepare_result_paths", lambda _bundle: run_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, **_kwargs: (
+            list(sequence_factory()),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [run_dir]
+    assert clear_cache_calls == ["demo"]
 
 
 def test_run_experiment_skips_completed_bundle_and_rebuilds_stale_bundle(

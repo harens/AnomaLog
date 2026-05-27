@@ -39,6 +39,11 @@ from experiments.results import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from anomalog.parsers.template import TemplatedDataset
+    from anomalog.sequences import SequenceSplitSummary
+    from experiments.models import ModelRunSummary
+    from experiments.results import ResultPaths
+
 _PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
 
 
@@ -66,7 +71,8 @@ class RegisteredExperimentRunRequest:
         registry_path (Path): Path to the registry TOML file.
         repo_root (Path | None): Repository root used to resolve relative
             paths.
-        force (bool): Whether to replace existing deterministic run outputs.
+        force (bool): Whether to replace existing deterministic run outputs and
+            clear cached dataset materialisations before rebuilding.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
         debug_reporting (bool): Whether to keep verbose diagnostics.
         console (bool): Whether to emit console progress through Prefect.
@@ -79,6 +85,16 @@ class RegisteredExperimentRunRequest:
     write_predictions: bool = False
     debug_reporting: bool = False
     console: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _BundleFinaliseContext:
+    bundle: ExperimentBundle
+    templated: TemplatedDataset
+    model_summary: ModelRunSummary
+    result_paths: ResultPaths
+    logger: logging.Logger
+    debug_reporting: bool
 
 
 class SharedConsoleHandler(logging.Handler):
@@ -120,7 +136,7 @@ def run_experiment(
     Args:
         config_path (Path): Dataset manifest TOML path to execute.
         force (bool): Whether to replace an existing deterministic result
-            directories.
+            directory and clear the dataset build cache before rebuilding.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
             each concrete run.
         debug_reporting (bool): Whether to keep the verbose diagnostic payloads
@@ -328,7 +344,7 @@ def _run_bundle_group_parallel(
     return results_by_index, failures_by_index
 
 
-def _run_bundle(  # noqa: PLR0914 - orchestration function intentionally tracks stage timings and artefact paths.
+def _run_bundle(
     bundle: ExperimentBundle,
     *,
     force: bool = False,
@@ -341,7 +357,7 @@ def _run_bundle(  # noqa: PLR0914 - orchestration function intentionally tracks 
     Args:
         bundle (ExperimentBundle): Concrete run bundle to execute.
         force (bool): Whether to replace an existing deterministic result
-            directory.
+            directory and clear the dataset build cache before rebuilding.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
             the concrete run.
         debug_reporting (bool): Whether to keep verbose diagnostic payloads in
@@ -376,6 +392,12 @@ def _run_bundle(  # noqa: PLR0914 - orchestration function intentionally tracks 
         if bundle.applied_overrides:
             logger.info("Applied overrides: %s", bundle.applied_overrides)
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
+        if force:
+            logger.info(
+                "Force run requested; clearing dataset cache for %s",
+                bundle.dataset.dataset_name,
+            )
+            dataset_spec.clear_cache()
         logger.info("Building dataset %s", bundle.dataset.dataset_name)
         templated = dataset_spec.build()
         sequence_started_at = perf_counter()
@@ -421,81 +443,144 @@ def _run_bundle(  # noqa: PLR0914 - orchestration function intentionally tracks 
             bundle.model.detector,
             perf_counter() - model_started_at,
         )
-        split_summary_started_at = perf_counter()
-        sequences_for_split_summary = bundle.dataset.sequence.apply(templated)
-        split_summary = build_sequence_split_summary(
-            sequences_for_split_summary,
-            sequence_summary=model_summary.sequence_summary,
-        )
-        logger.info(
-            "Stage complete: split summary construction for %s in %.3fs",
-            bundle.dataset.dataset_name,
-            perf_counter() - split_summary_started_at,
-        )
-        train_on_normal_entities_only = split_summary.train_on_normal_entities_only
-        if train_on_normal_entities_only is not None:
-            total_sequences = model_summary.sequence_summary.sequence_count
-            test_sequences = model_summary.sequence_summary.test_sequence_count
-            train_pool_sequences = split_summary.train_pool_sequence_count
-            logger.info(
-                ("Fixed entity split: train_pool=%s, train=%s, ignored=%s, test=%s"),
-                train_pool_sequences,
-                split_summary.realised_train_sequence_count,
-                split_summary.ignored_sequence_count,
-                test_sequences,
-            )
-        if train_on_normal_entities_only:
-            logger.warning(
-                "Normal-only training uses the chronological train pool and "
-                "excludes ineligible entities from training; requested "
-                "train_fraction=%.4f, realised_train=%s, eligible_normals=%s, "
-                "train_pool=%s, ineligible_prefix=%s, total=%s",
-                split_summary.requested_train_fraction,
-                split_summary.realised_train_sequence_count,
-                split_summary.eligible_train_sequence_count,
-                split_summary.train_pool_sequence_count,
-                split_summary.ineligible_train_pool_count,
-                total_sequences,
-            )
-        metrics_started_at = perf_counter()
-        metric_report = build_run_metrics_report(
-            bundle=bundle,
-            sequences=bundle.dataset.sequence.apply(templated),
-            model_summary=model_summary,
-            debug_reporting=debug_reporting,
-        )
-        logger.info(
-            "Stage complete: run metric report construction for %s in %.3fs",
-            bundle.dataset.dataset_name,
-            perf_counter() - metrics_started_at,
-        )
-        _log_metric_report(logger, metric_report, debug_reporting=debug_reporting)
-        logger.info(
-            "Model run complete with %s sequences",
-            model_summary.sequence_summary.sequence_count,
-        )
-        outputs_started_at = perf_counter()
-        sequences_for_outputs = bundle.dataset.sequence.apply(templated)
-        write_run_outputs(
-            context=ResultWriteContext(
+        _finalise_bundle_run(
+            context=_BundleFinaliseContext(
                 bundle=bundle,
                 templated=templated,
-                sequences=sequences_for_outputs,
                 model_summary=model_summary,
                 result_paths=result_paths,
+                logger=logger,
                 debug_reporting=debug_reporting,
             ),
         )
-        logger.info(
-            "Stage complete: run output writing for %s in %.3fs",
-            bundle.dataset.dataset_name,
-            perf_counter() - outputs_started_at,
-        )
-        logger.info(
-            "Wrote experiment artifacts to %s",
-            shlex.quote(str(result_paths.run_dir)),
-        )
     return result_paths.run_dir
+
+
+def _finalise_bundle_run(
+    *,
+    context: _BundleFinaliseContext,
+) -> None:
+    """Build the post-model summaries and persist the final artefacts."""
+    split_summary = _build_bundle_split_summary(context=context)
+    _log_bundle_split_summary(context=context, split_summary=split_summary)
+    metric_report = _build_bundle_metric_report(context=context)
+    _log_bundle_metric_report(context=context, metric_report=metric_report)
+    _write_bundle_outputs(context=context)
+
+
+def _build_bundle_split_summary(
+    *,
+    context: _BundleFinaliseContext,
+) -> SequenceSplitSummary:
+    split_summary_started_at = perf_counter()
+    sequences_for_split_summary = context.bundle.dataset.sequence.apply(
+        context.templated,
+    )
+    split_summary = build_sequence_split_summary(
+        sequences_for_split_summary,
+        sequence_summary=context.model_summary.sequence_summary,
+    )
+    context.logger.info(
+        "Stage complete: split summary construction for %s in %.3fs",
+        context.bundle.dataset.dataset_name,
+        perf_counter() - split_summary_started_at,
+    )
+    return split_summary
+
+
+def _log_bundle_split_summary(
+    *,
+    context: _BundleFinaliseContext,
+    split_summary: SequenceSplitSummary,
+) -> None:
+    train_on_normal_entities_only = split_summary.train_on_normal_entities_only
+    if train_on_normal_entities_only is not None:
+        total_sequences = context.model_summary.sequence_summary.sequence_count
+        test_sequences = context.model_summary.sequence_summary.test_sequence_count
+        train_pool_sequences = split_summary.train_pool_sequence_count
+        context.logger.info(
+            ("Fixed entity split: train_pool=%s, train=%s, ignored=%s, test=%s"),
+            train_pool_sequences,
+            split_summary.realised_train_sequence_count,
+            split_summary.ignored_sequence_count,
+            test_sequences,
+        )
+    if train_on_normal_entities_only:
+        context.logger.warning(
+            "Normal-only training uses the chronological train pool and "
+            "excludes ineligible entities from training; requested "
+            "train_fraction=%.4f, realised_train=%s, eligible_normals=%s, "
+            "train_pool=%s, ineligible_prefix=%s, total=%s",
+            split_summary.requested_train_fraction,
+            split_summary.realised_train_sequence_count,
+            split_summary.eligible_train_sequence_count,
+            split_summary.train_pool_sequence_count,
+            split_summary.ineligible_train_pool_count,
+            total_sequences,
+        )
+
+
+def _build_bundle_metric_report(
+    *,
+    context: _BundleFinaliseContext,
+) -> dict[str, object]:
+    metrics_started_at = perf_counter()
+    sequences_for_metrics = context.bundle.dataset.sequence.apply(context.templated)
+    metric_report = build_run_metrics_report(
+        bundle=context.bundle,
+        sequences=sequences_for_metrics,
+        model_summary=context.model_summary,
+        debug_reporting=context.debug_reporting,
+    )
+    context.logger.info(
+        "Stage complete: run metric report construction for %s in %.3fs",
+        context.bundle.dataset.dataset_name,
+        perf_counter() - metrics_started_at,
+    )
+    return metric_report
+
+
+def _log_bundle_metric_report(
+    *,
+    context: _BundleFinaliseContext,
+    metric_report: dict[str, object],
+) -> None:
+    _log_metric_report(
+        context.logger,
+        metric_report,
+        debug_reporting=context.debug_reporting,
+    )
+    context.logger.info(
+        "Model run complete with %s sequences",
+        context.model_summary.sequence_summary.sequence_count,
+    )
+
+
+def _write_bundle_outputs(
+    *,
+    context: _BundleFinaliseContext,
+) -> None:
+    outputs_started_at = perf_counter()
+    sequences_for_outputs = context.bundle.dataset.sequence.apply(context.templated)
+    write_run_outputs(
+        context=ResultWriteContext(
+            bundle=context.bundle,
+            templated=context.templated,
+            sequences=sequences_for_outputs,
+            model_summary=context.model_summary,
+            result_paths=context.result_paths,
+            debug_reporting=context.debug_reporting,
+        ),
+    )
+    context.logger.info(
+        "Stage complete: run output writing for %s in %.3fs",
+        context.bundle.dataset.dataset_name,
+        perf_counter() - outputs_started_at,
+    )
+    context.logger.info(
+        "Wrote experiment artifacts to %s",
+        shlex.quote(str(context.result_paths.run_dir)),
+    )
 
 
 def _log_metric_report(
