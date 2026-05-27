@@ -164,6 +164,15 @@ OpenStack research note:
 - treat the registry entry as an internal DeepLog-style comparison against the
   same file-boundary split, not as a claim about OpenStack anomaly-detection
   parity with the original paper.
+- the current evidence suggests that Spell becomes largely redundant once the
+  structured OpenStack parser has already normalised volatile fields;
+- that is a methodological result, not a claim that Spell is harmful: the main
+  win from the parser is hygiene normalisation and identifier/path leakage
+  suppression, while the remaining risk is semantic signal collapse upstream of
+  template mining;
+- the raw-content leakage control remains a negative example: it explodes the
+  key space and memorises identifiers/paths rather than recovering cleaner
+  anomaly signal.
 
 Naive Bayes is likewise omitted from the HDFS paper manifests. The HDFS
 prefix split keeps the training side normal-only, so the classifier cannot be
@@ -181,6 +190,15 @@ Current data and paper counts:
 | --- | ---: | ---: | --- | --- |
 | raw log entries | 4,747,963 | 4,747,963 | yes | Matches paper count. |
 | anomalous entries | 348,460 | 348,460 | yes | Matches paper count. |
+
+The later `How Far Are We?` BGL benchmark needs a separate note because it
+uses a different protocol from the CCS 2017 DeepLog paper. The exact count
+audit for that benchmark now lives in
+[BGL How Far Are We? 2022 count audit](bgl_how_far_are_we_2022_count_audit.md).
+The short version is that the same raw LogHub BGL family is available, but the
+current corpus and window-boundary interpretation still do not reproduce the
+paper row exactly. The closest direct match is `3,604` total windows with
+`2,623` train, `981` test, `496` anomalous train, and `169` anomalous test.
 
 The new BGL reproduction configs use `grouping = "chronological_stream"` with a
 fixed `chunk_size = 100000`. That is a deterministic memory-bound container for
@@ -270,5 +288,5 @@ evaluation policy and reported as such.
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/openstack_deeplog_preprocessed.toml`
 - BGL:
-  - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
-  - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`
+  - `experiments/configs/datasets/bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml`
+  - `experiments/configs/datasets/bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml`

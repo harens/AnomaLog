@@ -216,8 +216,8 @@ My interpretation is that both settings are intended to be effectively normal-on
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_split_partial.toml`
   - `experiments/configs/datasets/hdfs_v1_deeplog_paper_entry100k_assign_first.toml`
 - BGL:
-  - `experiments/configs/datasets/bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml`
-  - `experiments/configs/datasets/bgl_deeplog_paper_10pct_entry_stream_no_online.toml`
+  - `experiments/configs/datasets/bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml`
+  - `experiments/configs/datasets/bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml`
 
 ### Where To Look Next
 

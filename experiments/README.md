@@ -51,8 +51,8 @@ The checked-in dataset-manifest set is split by dataset family:
   holds the shared chronological entity dataset contract.
 - `bgl/entity_chronological.toml` and `hdfs/v1_entity_chronological.toml`
   are the concrete chronological entity variants built from that base.
-- `bgl/deeplog_paper_1pct_normal_entry_stream_no_online.toml` and
-  `bgl/deeplog_paper_10pct_entry_stream_no_online.toml` keep the BGL DeepLog
+- `bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml` and
+  `bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml` keep the BGL DeepLog
   paper-reproduction probes separate because they differ in the normal-entry
   prefix fraction, which changes how much anomalous context is preserved in the
   mixed stream batches.
@@ -214,7 +214,7 @@ paper-reproduction dataset variant:
 
 ```bash
 uv run python -m experiments.runners.run_suite \
-  --experiment bgl_deeplog_paper_10pct_entry_stream_no_online
+  --experiment bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online
 ```
 
 If you want the full BGL DeepLog paper set instead, keep using the family
@@ -222,7 +222,7 @@ group:
 
 ```bash
 uv run python -m experiments.runners.run_suite \
-  --group bgl_deeplog_paper
+  --group bgl_deeplog_ccs2017_paper
 ```
 
 Thunderbird has one public registry entry for the chronological DeepLog
@@ -247,14 +247,14 @@ command with the exact same registry experiment name:
 
 ```bash
 uv run python -m experiments.execution.slurm submit \
-  --experiment bgl_deeplog_paper_10pct_entry_stream_no_online
+  --experiment bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online
 ```
 
 To run a local group:
 
 ```bash
 uv run python -m experiments.runners.run_suite \
-  --group bgl_deeplog_paper \
+  --group bgl_deeplog_ccs2017_paper \
   --group hdfs_deeplog_paper \
   --max-parallel 2
 ```
@@ -269,7 +269,7 @@ The same registry also drives the optional Slurm backend:
 
 ```bash
 uv run python -m experiments.execution.slurm submit \
-  --group bgl_deeplog_paper \
+  --group bgl_deeplog_ccs2017_paper \
   --group hdfs_deeplog_paper
 ```
 
@@ -312,7 +312,7 @@ reproducing the paper experiments:
 
 ```bash
 uv run python -m experiments.runners.run_suite \
-  --group bgl_deeplog_paper \
+  --group bgl_deeplog_ccs2017_paper \
   --group hdfs_deeplog_paper \
   --max-parallel 2
 ```

@@ -14,6 +14,7 @@ from anomalog.sources.deeplog_preprocessed import (
 )
 from experiments import ConfigError
 from experiments.audit import (
+    validate_bgl_how_far_are_we_2022_config,
     validate_deepcase_bgl_extension_config,
     validate_deeplog_paper_config,
 )
@@ -29,6 +30,7 @@ from experiments.config import (
     RawEntryPrefixFractionSplitConfig,
     RawEntryPrefixNormalFractionSplitConfig,
     RemoteZipSourceConfig,
+    TimeSequenceConfig,
     load_experiment_bundles,
 )
 from experiments.config_types import CachePathsConfigModel
@@ -1019,6 +1021,49 @@ def test_load_experiment_bundles_supports_chronological_stream_grouping(
 
 
 @pytest.mark.allow_no_new_coverage
+def test_load_experiment_bundles_supports_time_window_grouping(
+    tmp_path: Path,
+) -> None:
+    """Time-window configs should decode through the shared loader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for a synthetic config tree.
+    """
+    sweep_path = _write_config_tree(
+        tmp_path,
+        sweep_name="time_window_grouping",
+        dataset=(
+            "time_window_grouping",
+            (
+                'name = "time_window_grouping"\n'
+                'dataset_name = "demo"\n'
+                'preset = "bgl"\n'
+                'evaluation_unit = "window"\n'
+                "\n[sequence]\n"
+                'grouping = "time"\n'
+                "time_span_ms = 3600000\n"
+                "step = 3600000\n"
+                "train_fraction = 0.8\n"
+                "test_fraction = 0.2\n"
+            ),
+        ),
+        model=(
+            "template_frequency_default",
+            'name = "template_frequency_default"\ndetector = "template_frequency"\n',
+        ),
+    )
+
+    bundle = _load_one_bundle(sweep_path)
+
+    assert isinstance(bundle.dataset.sequence, TimeSequenceConfig)
+    assert bundle.dataset.sequence.time_span_ms == 3_600_000
+    assert bundle.dataset.sequence.step == 3_600_000
+    assert bundle.dataset.sequence.train_fraction == pytest.approx(0.8)
+    assert bundle.dataset.sequence.test_fraction == pytest.approx(0.2)
+    assert bundle.dataset.evaluation_unit is EvaluationUnit.WINDOW
+
+
+@pytest.mark.allow_no_new_coverage
 def test_load_experiment_bundles_supports_raw_entry_prefix_splits(
     tmp_path: Path,
 ) -> None:
@@ -1115,14 +1160,24 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         / "experiments"
         / "configs"
         / "datasets"
-        / "bgl_deeplog_paper_1pct_normal_entry_stream_no_online.toml",
+        / "bgl"
+        / "bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml",
     )
     bgl_10pct_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
         / "configs"
         / "datasets"
-        / "bgl_deeplog_paper_10pct_entry_stream_no_online.toml",
+        / "bgl"
+        / "bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml",
+    )
+    bgl_2022_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "bgl"
+        / "how_far_are_we_2022.toml",
     )
     hdfs_bundles = load_experiment_bundles(
         repo_root
@@ -1172,6 +1227,19 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
             run_group="deeplog_default",
         ).model,
     )
+    validate_bgl_how_far_are_we_2022_config(
+        dataset_config=bundle_named(bgl_2022_bundles, "deeplog").dataset,
+        model_config=bundle_named(bgl_2022_bundles, "deeplog").model,
+    )
+    assert bundle_named(bgl_2022_bundles, "deeplog").dataset.template_parser == "spell"
+    assert isinstance(
+        bundle_named(bgl_2022_bundles, "deeplog").dataset.sequence.split,
+        RawEntryPrefixFractionSplitConfig,
+    )
+    split = bundle_named(bgl_2022_bundles, "deeplog").dataset.sequence.split
+    assert split is not None
+    assert split.application_order.value == "before_grouping"
+    assert split.straddling_group_policy.value == "drop_straddlers"
 
     assert {bundle.model.detector for bundle in bgl_1pct_bundles} >= {
         "deeplog",
@@ -1793,6 +1861,13 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         / "datasets"
         / "openstack/deeplog_preprocessed.toml",
     )
+    openstack_parameter_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "openstack/deeplog_parameter_ci_approx.toml",
+    )
     ait_ads_bundles = load_experiment_bundles(
         repo_root / "experiments" / "configs" / "datasets" / "ait_ads/base.toml",
     )
@@ -1849,6 +1924,9 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
     assert run_group_for(openstack_bundles, "markov") == "baselines"
     assert run_group_for(openstack_bundles, "deeplog") == "deeplog"
     assert run_group_for(openstack_bundles, "deepcase") == "deepcase"
+    assert run_group_for(openstack_parameter_bundles, "deeplog") == (
+        "deeplog_parameter"
+    )
 
     assert run_group_for(ait_ads_bundles, "template_frequency") == "baselines_no_nb"
     assert run_group_for(ait_ads_bundles, "markov") == "baselines_no_nb"

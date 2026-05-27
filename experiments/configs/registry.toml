@@ -41,9 +41,11 @@ models = ["deeplog_default"]
 
 [experiments.bgl_entity_chronological]
 dataset = "bgl/entity_chronological"
-# Entity-chronological runs compare DeepCASE against the shared sanity
-# baselines, keep the non-paper DeepLog extension inline, and add cluster
-# labelling ablations only where BGL's event labels make them meaningful.
+# AnomaLog benchmark extension, not a DeepLog or DeepCASE paper protocol.
+# Uses entity-local chronological grouping to expose sequence-level and
+# event-level benchmarking on BGL with true line-level labels.
+# Useful for regression tracking and workload-reduction experiments because
+# BGL provides event labels directly, avoiding parent-sequence label smearing.
 model_sets = [
   "baselines_with_nb",
   "deepcase_majority_vote",
@@ -57,8 +59,11 @@ models = [
 
 [experiments.hdfs_v1_entity_chronological]
 dataset = "hdfs/v1_entity_chronological"
-# Entity-chronological runs compare DeepCASE against the shared sanity
-# baselines and keep the non-paper DeepLog extension inline.
+# Generic entity-grouped HDFS benchmark used for local comparisons and
+# regression tracking. This is not the original DeepLog paper split.
+# Sessions are grouped by block identifier and evaluated chronologically,
+# but the split semantics differ from the paper's first-100k protocol and
+# from the historical wuyifan18 benchmark archive.
 model_sets = ["baselines_with_nb"]
 models = [
   "deepcase",
@@ -67,32 +72,42 @@ models = [
 
 [experiments.openstack_deeplog_preprocessed]
 dataset = "openstack/deeplog_preprocessed"
-# OpenStack stays key-only because the current structured parser and Spell
-# normalisation make paper-style parameter comparison unreliable. The run is
-# still useful as a DeepLog-style comparison against the same file-boundary
-# split, but it should not be read as a full parameter-anomaly reproduction.
+# Best-effort DeepLog OpenStack reproduction using instance_id session grouping.
+# Rows without recoverable instance identifiers are excluded to preserve the
+# paper-facing session semantics.
+# Template mining strips volatile identifiers (UUIDs, IPs, paths, instance
+# filenames, numeric tokens) before Spell parsing to avoid vocabulary leakage.
+# The local LogHub-derived corpus does not currently reproduce the paper's
+# reported counts or template inventory exactly.
 model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",
   "deepcase",
 ]
 
+[experiments.openstack_deeplog_figure9_parameter_ci_approx]
+dataset = "openstack/deeplog_parameter_ci_approx"
+description = "Parameter-only DeepLog OpenStack approximation of Figure 9 that preserves raw numeric parameters and injects two synthetic anomalies into a Figure 9-sized held-out VM-creation slice."
+models = ["deeplog_parameter_anomaly"]
+
 [experiments.thunderbird]
 dataset = "thunderbird"
-# Thunderbird follows the benchmark slice used by the public LogLLM/DeepLog
-# family: the canonical Thunderbird.log file, a 10-million-line range starting
-# at line 160,000,000, and 100-log chronological windows. The DeepLog-style
-# reproduction stays stream-shaped and keeps the simple baselines together.
+# Thunderbird benchmark reproduction targeting the later public 100-log-window
+# Thunderbird protocol used by ICSE-2022-style evaluations rather than the
+# original DeepLog paper.
+# Uses the canonical Thunderbird.log archive and the public
+# 160M-170M contiguous line slice.
+# Windows are fixed-size chronological 100-log sequences with alert-token
+# labels preserved from the raw corpus.
 model_sets = ["baselines_with_nb"]
 models = ["deeplog_default"]
 
 [experiments.thunderbird_entity_chronological]
 dataset = "thunderbird/entity_chronological"
-# DeepCASE needs entity-local sequences, so the Thunderbird extension is split
-# out into its own entity-grouped experiment rather than sharing the
-# chronological reproduction contract. The cluster-labelling ablations are
-# kept here as a benchmark extension because Thunderbird labels are available
-# at the alert level.
+# Entity-local Thunderbird benchmark extension for DeepCASE and shared
+# baselines. This is not a paper-faithful DeepLog Thunderbird protocol.
+# Unlike the reproduction benchmark, this configuration uses entity grouping
+# rather than fixed 100-log chronological windows.
 model_sets = [
   "baselines_with_nb",
   "deepcase_majority_vote",
@@ -106,35 +121,43 @@ models = [
 
 [experiments.ait_ads]
 dataset = "ait_ads/base"
-# AIT-ADS is a single continuous alert chronology, so it keeps the
-# stream-oriented baselines.
+# AIT-ADS combined chronological alert-stream benchmark.
+# Follows the AACT-style combined multi-scenario chronology rather than
+# per-scenario evaluation.
+# Alerts from all scenarios are merged globally by timestamp and evaluated as
+# a continuous alert stream.
+# Alert-level metrics are the intended reporting unit.
 model_sets = ["baselines_no_nb"]
 models = ["deeplog_default"]
 
 [experiments.ait_ads_entity]
 dataset = "ait_ads/entity_chronological"
-# DeepCASE needs entity-local sequences, but the split still follows the
-# global alert chronology before entity grouping so host context and
-# time-ordering stay paper-faithful.
+# Entity-local AIT-ADS configuration for DeepCASE-style contextual modelling.
+# Chronological splitting is applied before entity grouping to preserve the
+# paper-facing temporal evaluation semantics.
+# Included as a best-effort approximation of the AACT/DeepCASE-style workflow;
+# the original paper uses time-series cross-validation rather than a simple
+# holdout split.
 model_sets = ["baselines_no_nb"]
 models = [
   "deeplog_default",
   "deepcase",
 ]
 
-[experiment_sets.bgl_deeplog_paper]
-# DeepLog paper reproduction: the LSTM next-event target plus the shared
-# baselines that tell us whether the dataset is separable before the neural
-# model does anything interesting. The baselines foreground event-level
-# detection on BGL because the dataset labels individual log lines.
+[experiment_sets.bgl_deeplog_ccs2017_paper]
+# Best-effort reproduction of the DeepLog CCS 2017 BGL normal-entry protocol.
+# Uses a chronological raw-entry stream with split-before-grouping semantics.
+# Only normal target events before the cutoff are eligible for training.
+# Event-level metrics are the paper-facing metrics; sequence metrics are
+# retained only as diagnostics.
 model_sets = ["baselines_no_nb"]
 models = ["deeplog_default"]
 datasets = [
-  "bgl/deeplog_paper_1pct_normal_entry_stream_no_online",
-  "bgl/deeplog_paper_10pct_entry_stream_no_online",
+  "bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online",
+  "bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online",
 ]
 
-[experiment_sets.bgl_deeplog_paper.overrides.deeplog_default]
+[experiment_sets.bgl_deeplog_ccs2017_paper.overrides.deeplog_default]
 "model.history_size" = 3
 "model.top_g_values" = [1, 3, 6]
 "model.num_layers" = 1
@@ -142,17 +165,44 @@ datasets = [
 "model.primary_metric_scope" = "event_level_detection"
 "model.secondary_metric_scopes" = ["next_event_prediction", "sequence_level_detection"]
 
+[experiment_sets.bgl_how_far_are_we_2022]
+# Later DeepLog BGL benchmark protocol from "How Far Are We?".
+# This path uses fixed one-hour time windows with a raw-entry split applied
+# before grouping and straddling windows dropped, matching the benchmark's
+# chronological BGL recipe rather than the CCS 2017 raw-entry stream. The
+# top-g candidate setting is left at the model default pending a separate
+# benchmark-specific confirmation.
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
+datasets = ["bgl/how_far_are_we_2022"]
+
+[experiment_sets.bgl_how_far_are_we_2022.overrides.deeplog_default]
+"model.history_size" = 10
+
 [experiment_sets.hdfs_deeplog_paper]
-# DeepLog paper reproduction: the HDFS runs that preserve the original
-# normal-only training contract, plus the lightweight baselines that probe how
-# much of the signal comes from template statistics or local ordering. The
-# short-session padding compatibility view is model-set based so it stays an
-# explicit variant of `deeplog_default` rather than a separate model config.
+# Best-effort reconstruction of the DeepLog HDFS first-100k protocol using
+# current LogHub-derived data.
+# Training is normal-only and uses key-only DeepLog scoring with the paper
+# top-g configuration.
+# The current LogHub corpus does not exactly reproduce the original paper
+# counts or transition distribution.
 model_sets = ["baselines_no_nb", "deeplog_short_session_padding_fidelity"]
 models = ["deeplog_default", "deepcase"]
 datasets = [
+  # Sessions are assigned to train/test according to the first event crossing
+  # the raw-entry cutoff boundary.
   "hdfs/v1_deeplog_paper_entry100k_split_partial",
+  # Sessions crossing the split boundary are partitioned rather than assigned
+  # wholesale.
+  # Included as a protocol-sensitivity audit because the DeepLog paper does not
+  # fully specify straddling-session behaviour.
+  # Retained for reproducibility analysis rather than as the preferred paper view.
   "hdfs/v1_deeplog_paper_entry100k_assign_first",
+  # Reproduction target for the widely reused wuyifan18 preprocessed DeepLog
+  # HDFS benchmark archive.
+  # Uses the packaged hdfs_train / hdfs_test_normal / hdfs_test_abnormal files
+  # directly rather than reconstructing sessions from raw LogHub logs.
+  # Preserves the original duplicate-weighted benchmark evaluation semantics.
   "hdfs/wuyifan18_deeplog_preprocessed",
 ]
 
@@ -160,10 +210,12 @@ datasets = [
 "model.top_g_values" = [1, 3, 5, 7, 9]
 
 [experiment_sets.hdfs_deepcase_table_iv_compat]
-# DeepCASE Table-IV compatibility: the normal-only HDFS entity-local view
-# sliced 20/80 by chronological raw-entry order, with next-event prediction
-# as the headline metric. This is a compatibility view, not the DeepLog
-# anomaly benchmark.
+# DeepCASE Table-IV compatibility configuration.
+# Mirrors the paper's next-event prediction framing rather than DeepLog-style
+# sequence anomaly detection.
+# Uses only hdfs_test_normal with a chronological 20/80 train/evaluation split.
+# Intended for weighted top-1 next-event comparison against the published
+# DeepCASE HDFS prediction results.
 model_sets = ["baselines_no_nb"]
 models = ["deepcase", "deeplog_default"]
 datasets = ["hdfs/wuyifan18_deepcase_table_iv_compat"]

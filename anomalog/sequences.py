@@ -499,18 +499,9 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         `line_order`, so this helper preserves source chronology without
         forcing callers to materialise the full dataset first.
         """
-        source_order_iter = getattr(
-            self.sink,
-            "iter_structured_lines_in_source_order",
-            None,
-        )
-        if callable(source_order_iter):
-            yield from source_order_iter()()
-            return
-
-        rows = list(self.sink.iter_structured_lines()())
-        rows.sort(key=lambda row: row.line_order)
-        yield from rows
+        source_order_iter = self.sink.iter_structured_lines_in_source_order()
+        yield from source_order_iter()
+        return
 
     def _build_row_split_labels(
         self,
@@ -765,11 +756,16 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         ):
             return None
         row_labels, summary = self._build_row_split_labels()
+        if summary is None:
+            return None
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
         return replace(
             summary,
             straddling_group_count=count_straddling_groups(
                 self.iter_grouped_rows(),
-                row_labels,
+                row_label_values,
             ),
             straddling_group_policy=self.straddling_group_policy.value,
         )
@@ -838,6 +834,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
 
         for r in rows:
             template, params = infer_template(r.untemplated_message_text)
+            if r.raw_parameters is not None:
+                params = list(r.raw_parameters)
             dt, prev_ts = self._compute_dt(prev_ts, r.timestamp_unix_ms)
 
             events.append((template, list(params), dt))
@@ -845,8 +843,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             if seq_label == 1:
                 continue
 
-            line_lab = getattr(r, "anomalous", None)
-            if is_anomalous_label(line_lab):
+            if is_anomalous_label(r.anomalous):
                 seq_label = 1
                 continue
 
@@ -926,7 +923,10 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 yield seq
             return
 
-        segments = list(split_rows_by_label(rows, row_labels))
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
+        segments = list(split_rows_by_label(rows, row_label_values))
         if not segments:
             return
 
@@ -1424,6 +1424,26 @@ def _split_label_from_prefixed_entity_id(entity_id: str | None) -> SplitLabel | 
     return None
 
 
+def _split_label_from_row_split_labels(
+    row_split_labels: Collection[SplitLabel],
+) -> SplitLabel:
+    """Return the preserved split label for one grouped window.
+
+    Args:
+        row_split_labels (Collection[SplitLabel]): Raw-entry split labels
+            aligned with one grouped window.
+
+    Returns:
+        SplitLabel: Window-level split label, keeping train precedence when a
+            window straddles the raw-entry cutoff.
+    """
+    if any(label is SplitLabel.TRAIN for label in row_split_labels):
+        return SplitLabel.TRAIN
+    if any(label is SplitLabel.TEST for label in row_split_labels):
+        return SplitLabel.TEST
+    return SplitLabel.IGNORED
+
+
 @dataclass(slots=True, frozen=True, kw_only=True)
 class NonEntitySequenceBuilder(SequenceBuilder):
     """Sequence builder for non-entity grouping strategies.
@@ -1578,6 +1598,36 @@ class TimeSequenceBuilder(NonEntitySequenceBuilder):
             time_span_ms=self.time_span_ms,
             step=self.step,
         )
+
+    @override
+    def __iter__(self) -> Iterator[TemplateSequence]:
+        """Iterate over time windows with optional raw-entry split semantics.
+
+        Yields:
+            TemplateSequence: One grouped time window, optionally segmented
+                according to a raw-entry split applied before grouping.
+        """
+        if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+            yield from NonEntitySequenceBuilder.__iter__(self)
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        row_labels, _ = self._build_row_split_labels()
+
+        for window_id, rows in enumerate(self.iter_grouped_rows()):
+            split_label = _split_label_from_row_split_labels(
+                [row_labels.get(row.line_order, SplitLabel.TRAIN) for row in rows],
+            )
+            yield from self._build_sequences_for_group(
+                window_id=window_id,
+                rows=rows,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+                split_label=split_label,
+                row_labels=row_labels,
+                train_only_normal_entities=False,
+            )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)

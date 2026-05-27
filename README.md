@@ -183,7 +183,7 @@ To run a curated local suite:
 
 ```bash
 uv run python -m experiments.runners.run_suite \
-  --group bgl_deeplog_paper \
+  --group bgl_deeplog_ccs2017_paper \
   --group hdfs_deeplog_paper \
   --max-parallel 2
 ```
@@ -192,7 +192,7 @@ The same registry also drives the optional Slurm backend:
 
 ```bash
 uv run python -m experiments.execution.slurm submit \
-  --group bgl_deeplog_paper \
+  --group bgl_deeplog_ccs2017_paper \
   --group hdfs_deeplog_paper
 ```
 

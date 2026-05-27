@@ -2179,6 +2179,111 @@ def test_time_sequence_builder_uses_public_windowing_and_preserves_null_deltas()
     assert sequences[0].label == 1
 
 
+def test_time_sequence_builder_can_split_before_grouping() -> None:
+    """Time windows should honour a raw-entry split before grouping."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="b",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="b",
+            untemplated_message_text="four",
+            anomalous=1,
+        ),
+    )
+
+    builder = TimeSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        time_span_ms=2_000,
+        step=2_000,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        train_entry_fraction=0.5,
+        train_frac=0.8,
+        test_frac=0.2,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert [len(sequence.events) for sequence in sequences] == [2, 2]
+
+
+def test_time_sequence_builder_can_drop_straddling_windows_before_grouping() -> None:
+    """Time windows should be droppable when they straddle the raw cut."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="b",
+            untemplated_message_text="three",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="b",
+            untemplated_message_text="four",
+            anomalous=1,
+        ),
+    )
+
+    builder = TimeSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        time_span_ms=2_000,
+        step=2_000,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.DROP_STRADDLERS,
+        train_entry_fraction=0.5,
+        train_frac=0.8,
+        test_frac=0.2,
+    )
+
+    assert list(builder) == []
+
+
 def test_fixed_sequence_builder_drops_incomplete_trailing_windows() -> None:
     """Fixed grouping should only emit full windows and ignore group labels."""
     sink = _sink(

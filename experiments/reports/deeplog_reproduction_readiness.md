@@ -39,8 +39,8 @@ The checks below are intentionally conservative:
 
 | Config | Batch count | Train batch / ignored / test batch | Eligible training targets | Event-level evaluation available? |
 | --- | ---: | --- | ---: | --- |
-| `bgl_deeplog_paper_1pct_normal_entry_stream_no_online` | 48 | 1 / 0 / 47 | 43,996 | yes |
-| `bgl_deeplog_paper_10pct_entry_stream_no_online` | 48 | 7 / 0 / 41 | 439,951 | yes |
+| `bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online` | 48 | 1 / 0 / 47 | 43,996 | yes |
+| `bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online` | 48 | 7 / 0 / 41 | 439,951 | yes |
 
 ### 1% normal mismatch closure
 

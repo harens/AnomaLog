@@ -20,6 +20,7 @@ from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,
+    RAW_PARAMETERS_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
     EntityLabelCounts,
@@ -36,6 +37,41 @@ from anomalog.parsers.structured.parquet.writer_worker import (
     WriterConfig,
     extract_structured_components,
 )
+
+
+def _value_at_int(arr: pa.Array | None, i: int) -> int | None:
+    if arr is None:
+        return None
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return None
+    return scalar.as_py()
+
+
+def _value_at_str(
+    arr: pa.Array | None,
+    i: int,
+    *,
+    default: str | None,
+) -> str | None:
+    if arr is None:
+        return default
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return default
+    return scalar.as_py()
+
+
+def _value_at_str_list(arr: pa.Array | None, i: int) -> list[str] | None:
+    if arr is None:
+        return None
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return None
+    values = scalar.as_py()
+    if values is None:
+        return None
+    return [str(value) for value in values]
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,35 +311,16 @@ class ParquetStructuredSink(StructuredSink):
         entity_col = column_or_default(ENTITY_FIELD)
         msg_col = column_or_default(UNTEMPLATED_FIELD)
         anomalous_col = column_or_default(ANOMALOUS_FIELD)
-
-        def value_at_int(arr: pa.Array | None, i: int) -> int | None:
-            if arr is None:
-                return None
-            scalar = arr[i]
-            if not scalar.is_valid:
-                return None
-            return scalar.as_py()
-
-        def value_at_str(
-            arr: pa.Array | None,
-            i: int,
-            *,
-            default: str | None,
-        ) -> str | None:
-            if arr is None:
-                return default
-            scalar = arr[i]
-            if not scalar.is_valid:
-                return default
-            return scalar.as_py()
+        raw_parameters_col = column_or_default(RAW_PARAMETERS_FIELD)
 
         for i in range(batch.num_rows):
             yield StructuredLine(
-                line_order=value_at_int(line_col, i) or 0,
-                timestamp_unix_ms=value_at_int(ts_col, i),
-                entity_id=value_at_str(entity_col, i, default=None),
-                untemplated_message_text=value_at_str(msg_col, i, default="") or "",
-                anomalous=value_at_int(anomalous_col, i),
+                line_order=_value_at_int(line_col, i) or 0,
+                timestamp_unix_ms=_value_at_int(ts_col, i),
+                entity_id=_value_at_str(entity_col, i, default=None),
+                untemplated_message_text=_value_at_str(msg_col, i, default="") or "",
+                anomalous=_value_at_int(anomalous_col, i),
+                raw_parameters=_value_at_str_list(raw_parameters_col, i),
             )
 
     def _dataset(self) -> ds.Dataset:
@@ -704,6 +721,8 @@ class ParquetStructuredSink(StructuredSink):
             tuple[StructuredLine, ...]: Rows belonging to each emitted time window.
         """
         buffer: deque[StructuredLine] = deque()
+        # Keep the first window anchored to the first observed timestamp so the
+        # initial bucket does not split rows that naturally belong together.
         window_start = first_ts
         window_end = window_start + time_span_ms
 

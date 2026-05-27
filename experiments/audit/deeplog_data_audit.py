@@ -17,6 +17,7 @@ from experiments.config import (
     RawEntryPrefixCountSplitConfig,
     RawEntryPrefixFractionSplitConfig,
     RawEntryPrefixNormalFractionSplitConfig,
+    TimeSequenceConfig,
     serialise_config,
 )
 from experiments.config_loader import _decode_dataset_config
@@ -724,8 +725,8 @@ def validate_deeplog_paper_config(
         model_config (ExperimentModelConfig | None): Optional decoded model
             config to validate.
     """
-    if dataset_config.name.startswith("bgl_deeplog_paper_"):
-        _validate_bgl_deeplog_paper_config(
+    if dataset_config.name.startswith("bgl_deeplog_ccs2017_paper_"):
+        _validate_bgl_deeplog_ccs2017_paper_config(
             dataset_config=dataset_config,
             model_config=model_config,
         )
@@ -738,28 +739,88 @@ def validate_deeplog_paper_config(
         )
 
 
-def _validate_bgl_deeplog_paper_config(
+def validate_bgl_how_far_are_we_2022_config(
+    *,
+    dataset_config: DatasetVariantConfig,
+    model_config: ExperimentModelConfig | None = None,
+) -> None:
+    """Fail fast when the BGL 2022 benchmark config drifts from its protocol.
+
+    Raises:
+        ValueError: If the dataset name does not identify the 2022 BGL set or
+            the split fractions do not match the benchmark protocol.
+        TypeError: If the dataset does not use time-window grouping.
+    """
+    del model_config
+    if not dataset_config.name.startswith("bgl_how_far_are_we_2022"):
+        msg = "BGL 2022 benchmark validation requires a BGL 2022 dataset config."
+        raise ValueError(msg)
+    sequence = dataset_config.sequence
+    if not isinstance(sequence, TimeSequenceConfig):
+        msg = "BGL 2022 benchmark configs must use time grouping."
+        raise TypeError(msg)
+    if dataset_config.template_parser != "spell":
+        msg = "BGL 2022 benchmark configs must use the Spell template parser."
+        raise ValueError(msg)
+    split = sequence.split
+    if not isinstance(split, RawEntryPrefixFractionSplitConfig):
+        msg = "BGL 2022 benchmark configs must split raw entries before grouping."
+        raise TypeError(msg)
+    if split.application_order is not SplitApplicationOrder.BEFORE_GROUPING:
+        msg = "BGL 2022 benchmark configs must split before grouping."
+        raise ValueError(msg)
+    if split.straddling_group_policy is not StraddlingGroupPolicy.DROP_STRADDLERS:
+        msg = "BGL 2022 benchmark configs must drop raw-entry straddlers."
+        raise ValueError(msg)
+    _require_equal(
+        sequence.time_span_ms,
+        3_600_000,
+        "BGL 2022 benchmark configs must use a 1-hour time span.",
+    )
+    _require_equal(
+        sequence.step,
+        3_600_000,
+        "BGL 2022 benchmark configs must use a 1-hour step.",
+    )
+    _require_close(
+        sequence.train_fraction,
+        0.8,
+        "BGL 2022 benchmark configs must use train_fraction = 0.8.",
+    )
+    _require_close(
+        sequence.test_fraction,
+        0.2,
+        "BGL 2022 benchmark configs must use test_fraction = 0.2.",
+    )
+    _require_close(
+        split.train_entry_fraction,
+        0.8,
+        "BGL 2022 benchmark configs must use train_entry_fraction = 0.8.",
+    )
+
+
+def _validate_bgl_deeplog_ccs2017_paper_config(
     *,
     dataset_config: DatasetVariantConfig,
     model_config: ExperimentModelConfig | None,
 ) -> None:
     sequence = dataset_config.sequence
     if not isinstance(sequence, ChronologicalStreamSequenceConfig):
-        msg = "BGL DeepLog paper configs must use chronological_stream grouping."
+        msg = "BGL CCS 2017 DeepLog configs must use chronological_stream grouping."
         raise TypeError(msg)
     _require_equal(
         sequence.chunk_size,
         _BGL_PAPER_CHUNK_SIZE,
-        "BGL DeepLog paper configs must use chunk_size = 100000.",
+        "BGL CCS 2017 DeepLog configs must use chunk_size = 100000.",
     )
     split = sequence.split
     if split is None:
-        msg = "BGL DeepLog paper configs must define a raw-entry split."
+        msg = "BGL CCS 2017 DeepLog configs must define a raw-entry split."
         raise ValueError(msg)
     _require_equal(
         split.application_order,
         SplitApplicationOrder.BEFORE_GROUPING,
-        "BGL DeepLog paper configs must split before grouping.",
+        "BGL CCS 2017 DeepLog configs must split before grouping.",
     )
     if isinstance(split, RawEntryPrefixFractionSplitConfig):
         _require_close(
@@ -770,12 +831,12 @@ def _validate_bgl_deeplog_paper_config(
         _require_close(
             sequence.train_fraction,
             _BGL_PAPER_TRAIN_FRACTION_10PCT,
-            "BGL 10% paper configs must use train_fraction = 0.10.",
+            "BGL CCS 2017 10% configs must use train_fraction = 0.10.",
         )
         _require_close(
             sequence.test_fraction,
             1.0 - _BGL_PAPER_TRAIN_FRACTION_10PCT,
-            "BGL 10% paper configs must use test_fraction = 0.90.",
+            "BGL CCS 2017 10% configs must use test_fraction = 0.90.",
         )
     elif isinstance(split, RawEntryPrefixNormalFractionSplitConfig):
         if isclose(
@@ -787,12 +848,12 @@ def _validate_bgl_deeplog_paper_config(
             _require_close(
                 sequence.train_fraction,
                 _BGL_PAPER_TRAIN_FRACTION_1PCT,
-                "BGL 1% paper configs must use train_fraction = 0.01.",
+                "BGL CCS 2017 1% configs must use train_fraction = 0.01.",
             )
             _require_close(
                 sequence.test_fraction,
                 1.0 - _BGL_PAPER_TRAIN_FRACTION_1PCT,
-                "BGL 1% paper configs must use test_fraction = 0.99.",
+                "BGL CCS 2017 1% configs must use test_fraction = 0.99.",
             )
         elif isclose(
             split.train_normal_entry_fraction,
@@ -803,20 +864,19 @@ def _validate_bgl_deeplog_paper_config(
             _require_close(
                 sequence.train_fraction,
                 _BGL_PAPER_TRAIN_FRACTION_10PCT,
-                "BGL 10% paper configs must use train_fraction = 0.10.",
+                "BGL CCS 2017 10% configs must use train_fraction = 0.10.",
             )
             _require_close(
                 sequence.test_fraction,
                 1.0 - _BGL_PAPER_TRAIN_FRACTION_10PCT,
-                "BGL 10% paper configs must use test_fraction = 0.90.",
+                "BGL CCS 2017 10% configs must use test_fraction = 0.90.",
             )
         else:
-            msg = (
-                "BGL paper configs must use train_normal_entry_fraction = 0.01 or 0.10."
-            )
+            msg = "BGL CCS 2017 configs must use train_normal_entry_fraction = "
+            msg += "0.01 or 0.10."
             raise ValueError(msg)
     else:
-        msg = "BGL DeepLog paper configs must use raw-entry prefix split modes."
+        msg = "BGL CCS 2017 DeepLog configs must use raw-entry prefix split modes."
         raise TypeError(msg)
     if model_config is not None:
         if not isinstance(model_config, _TopGValuesModelConfig):
