@@ -2555,16 +2555,19 @@ def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
     report = metrics.parameter_ci_report
     assert report.paper_approximation is True
     assert report.paper_exact_reproduction is False
+    assert "Figure 9" in report.result_note
     assert report.highlighted_templates == ["T"]
     assert report.total_point_count == 2
     assert report.total_anomalous_point_count == 2
     assert report.series[0].point_count == 2
+    assert report.series[0].validation_sample_warning is not None
     assert report.series[0].threshold_summaries[0].confidence == pytest.approx(0.98)
     assert report.series[0].threshold_summaries[0].point_count == 2
     assert report.series[0].threshold_summaries[0].anomalous_point_count == 2
     assert metrics.parameter_ci_trace is not None
     trace = metrics.parameter_ci_trace
     assert trace is not None
+    assert "injected overlays" in trace.result_note
     assert trace.total_point_count == 2
     assert trace.total_anomalous_point_count == 2
     assert (
@@ -2606,12 +2609,14 @@ def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points()
     assert report.highlighted_templates == []
     assert report.total_point_count == 0
     assert report.total_anomalous_point_count == 0
+    assert "Figure 9" in report.result_note
     assert metrics.parameter_ci_trace is not None
     trace = metrics.parameter_ci_trace
     assert trace is not None
     assert trace.series_count == 0
     assert trace.total_point_count == 0
     assert trace.total_anomalous_point_count == 0
+    assert "Figure 9" in trace.result_note
 
 
 def test_parameter_ci_summary_honours_explicit_highlight_order() -> None:
@@ -2739,6 +2744,87 @@ def test_parameter_ci_summary_honours_explicit_highlight_order() -> None:
     assert [series.template for series in trace.series] == ["B", "A"]
 
 
+def test_parameter_ci_summary_prefers_event_labels_when_available() -> None:
+    """Point labels should follow injected event labels when they exist."""
+    state = ParameterCiState()
+    parameter_models = {
+        "A": ParameterModelState(
+            template="A",
+            schema=ParameterFeatureSchema(
+                feature_names=["dt_prev_ms"],
+                numeric_parameter_positions=[],
+                include_elapsed_time=True,
+                dropped_parameter_positions=[],
+            ),
+            normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+            gaussian=GaussianThreshold(
+                mean=0.1,
+                stddev=0.01,
+                lower_bound=0.0,
+                upper_bound=0.2,
+            ),
+            model=_StaticParameterModel(output_vector=[0.0]),
+            train_pair_count=4,
+            validation_pair_count=2,
+        ),
+    }
+    state.record_sequence(
+        sequence=_sequence(
+            templates=["A", "A"],
+            split_label=SplitLabel.TEST,
+            label=1,
+            event_labels=(0, 1),
+        ),
+        parameter_findings={
+            0: DeepLogParameterFinding(
+                event_index=0,
+                template="A",
+                feature_names=["dt_prev_ms"],
+                observed_vector=[1.0],
+                predicted_vector=[0.5],
+                residual_mse=0.1,
+                gaussian_mean=0.1,
+                gaussian_stddev=0.01,
+                gaussian_lower_bound=0.0,
+                gaussian_upper_bound=0.2,
+                most_anomalous_feature="dt_prev_ms",
+                is_anomalous=False,
+            ),
+            1: DeepLogParameterFinding(
+                event_index=1,
+                template="A",
+                feature_names=["dt_prev_ms"],
+                observed_vector=[1.0],
+                predicted_vector=[0.5],
+                residual_mse=0.3,
+                gaussian_mean=0.1,
+                gaussian_stddev=0.01,
+                gaussian_lower_bound=0.0,
+                gaussian_upper_bound=0.2,
+                most_anomalous_feature="dt_prev_ms",
+                is_anomalous=False,
+            ),
+        },
+        parameter_models=parameter_models,
+    )
+
+    report = state.snapshot_summary(
+        train_sequence_count=1,
+        test_sequence_count=1,
+    )
+    assert report is not None
+    assert report.series[0].anomalous_point_count == 1
+    assert report.total_anomalous_point_count == 1
+
+    trace = state.snapshot_trace(
+        train_sequence_count=1,
+        test_sequence_count=1,
+    )
+    assert trace is not None
+    assert [point.label for point in trace.series[0].points] == [0, 1]
+    assert trace.series[0].points[1].feature_squared_errors == [0.25]
+
+
 def test_parameter_only_scoring_carries_entity_history() -> None:
     """Continuous entity windows should carry parameter history between VM ids."""
     detector = DeepLogDetector(
@@ -2809,12 +2895,14 @@ def test_parameter_only_scoring_carries_entity_history() -> None:
     assert report.total_anomalous_point_count == 4
     assert report.highlighted_templates == ["T"]
     assert report.series[0].point_count == 4
+    assert report.series[0].validation_sample_warning is not None
     assert report.series[0].threshold_summaries[0].point_count == 4
     assert metrics.parameter_ci_trace is not None
     trace = metrics.parameter_ci_trace
     assert trace is not None
     assert trace.total_point_count == 4
     assert trace.total_anomalous_point_count == 4
+    assert trace.series[0].validation_sample_warning is not None
 
 
 def test_fit_trains_models_and_skips_non_numeric_templates() -> None:

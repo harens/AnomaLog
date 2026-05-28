@@ -1960,6 +1960,7 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
         "During sync_power_state the instance has a pending task (spawning). Skip.",
         "Took NUM seconds to build instance.",
     )
+    assert openstack_parameter_model.validation_fraction == pytest.approx(0.2)
     assert run_group_for(hdfs_bundles, "deeplog") == "deeplog_default"
 
     assert run_group_for(thunderbird_bundles, "template_frequency") == (

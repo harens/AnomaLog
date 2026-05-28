@@ -29,6 +29,8 @@ class _HasTemplate(Protocol):
 
 TSeries = TypeVar("TSeries", bound=_HasTemplate)
 
+_MIN_CALIBRATION_SAMPLE_COUNT = 30
+
 
 class DeepLogParameterCiThresholds(msgspec.Struct, frozen=True):
     """Gaussian upper thresholds used for the Figure 9 style CI report."""
@@ -59,6 +61,7 @@ class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
     feature_names: list[str]
     train_pair_count: int
     validation_pair_count: int
+    validation_sample_warning: str | None
     point_count: int
     anomalous_point_count: int
     residual_mse_mean: float
@@ -81,6 +84,7 @@ class DeepLogParameterCiTracePoint(msgspec.Struct, frozen=True):
     detected_at_99: bool
     detected_at_999: bool
     most_anomalous_feature: str | None
+    feature_squared_errors: list[float | None]
 
 
 class DeepLogParameterCiTraceSeries(msgspec.Struct, frozen=True):
@@ -90,6 +94,7 @@ class DeepLogParameterCiTraceSeries(msgspec.Struct, frozen=True):
     feature_names: list[str]
     train_pair_count: int
     validation_pair_count: int
+    validation_sample_warning: str | None
     point_count: int
     anomalous_point_count: int
     thresholds: DeepLogParameterCiThresholds
@@ -102,6 +107,7 @@ class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
     task: str
     paper_approximation: bool
     paper_exact_reproduction: bool
+    result_note: str
     train_sequence_count: int
     test_sequence_count: int
     series_count: int
@@ -117,6 +123,7 @@ class DeepLogParameterCiTraceReport(msgspec.Struct, frozen=True):
     task: str
     paper_approximation: bool
     paper_exact_reproduction: bool
+    result_note: str
     train_sequence_count: int
     test_sequence_count: int
     series_count: int
@@ -177,7 +184,10 @@ class ParameterCiState:
                 DeepLogParameterCiTracePoint(
                     window_id=sequence.window_id,
                     split_label=sequence.split_label.value,
-                    label=sequence.label,
+                    label=_event_label_for_sequence_point(
+                        sequence=sequence,
+                        event_index=event_index,
+                    ),
                     event_index=event_index,
                     template=finding.template,
                     residual_mse=finding.residual_mse,
@@ -185,6 +195,10 @@ class ParameterCiState:
                     detected_at_99=finding.residual_mse > thresholds.confidence_99,
                     detected_at_999=finding.residual_mse > thresholds.confidence_999,
                     most_anomalous_feature=finding.most_anomalous_feature,
+                    feature_squared_errors=_feature_squared_errors(
+                        observed=finding.observed_vector,
+                        predicted=finding.predicted_vector,
+                    ),
                 ),
             )
 
@@ -204,6 +218,7 @@ class ParameterCiState:
                 task="parameter_ci_approximation",
                 paper_approximation=True,
                 paper_exact_reproduction=False,
+                result_note=_parameter_ci_result_note(),
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
                 series_count=0,
@@ -234,6 +249,9 @@ class ParameterCiState:
                     feature_names=list(state.feature_names),
                     train_pair_count=state.train_pair_count,
                     validation_pair_count=state.validation_pair_count,
+                    validation_sample_warning=_validation_sample_warning(
+                        state.validation_pair_count,
+                    ),
                     point_count=point_count,
                     anomalous_point_count=anomalous_point_count,
                     residual_mse_mean=_mean(residual_mses),
@@ -252,6 +270,7 @@ class ParameterCiState:
             task="parameter_ci_approximation",
             paper_approximation=True,
             paper_exact_reproduction=False,
+            result_note=_parameter_ci_result_note(),
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
@@ -279,6 +298,7 @@ class ParameterCiState:
                 task="parameter_ci_approximation",
                 paper_approximation=True,
                 paper_exact_reproduction=False,
+                result_note=_parameter_ci_result_note(),
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
                 series_count=0,
@@ -306,6 +326,9 @@ class ParameterCiState:
                     feature_names=list(state.feature_names),
                     train_pair_count=state.train_pair_count,
                     validation_pair_count=state.validation_pair_count,
+                    validation_sample_warning=_validation_sample_warning(
+                        state.validation_pair_count,
+                    ),
                     point_count=len(points),
                     anomalous_point_count=sum(
                         1 for point in points if point.label != 0
@@ -323,6 +346,7 @@ class ParameterCiState:
             task="parameter_ci_approximation",
             paper_approximation=True,
             paper_exact_reproduction=False,
+            result_note=_parameter_ci_result_note(),
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
@@ -424,6 +448,52 @@ def _mean(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(sum(values) / len(values), 8)
+
+
+def _validation_sample_warning(validation_pair_count: int) -> str | None:
+    """Return a note when Gaussian calibration uses a small validation tail."""
+    if validation_pair_count >= _MIN_CALIBRATION_SAMPLE_COUNT:
+        return None
+    return (
+        "validation_pair_count="
+        f"{validation_pair_count}; Gaussian CI calibration is based on a "
+        "small normal validation tail and should be treated as fragile."
+    )
+
+
+def _parameter_ci_result_note() -> str:
+    """Return the stable note attached to the Figure 9 approximation."""
+    return (
+        "Approximation of DeepLog Figure 9 on the available OpenStack corpus; "
+        "highlighted anomaly points are injected overlays, and Gaussian "
+        "thresholds are calibrated from normal validation residuals only."
+    )
+
+
+def _event_label_for_sequence_point(
+    *,
+    sequence: TemplateSequence,
+    event_index: int,
+) -> int:
+    """Return the most specific available label for one scored event."""
+    event_labels = sequence.event_labels
+    if event_labels is not None and event_index < len(event_labels):
+        event_label = event_labels[event_index]
+        if event_label is not None:
+            return event_label
+    return sequence.label
+
+
+def _feature_squared_errors(
+    *,
+    observed: list[float | None],
+    predicted: list[float | None],
+) -> list[float | None]:
+    """Return per-feature squared errors for a scored parameter point."""
+    return [
+        None if obs is None or pred is None else (obs - pred) ** 2
+        for obs, pred in zip(observed, predicted, strict=True)
+    ]
 
 
 def _select_highlighted_series(

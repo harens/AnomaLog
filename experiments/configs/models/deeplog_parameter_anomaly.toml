@@ -3,6 +3,7 @@ detector = "deeplog"
 parameter_detection_enabled = true
 key_detection_enabled = false
 include_elapsed_time = true
+validation_fraction = 0.2
 parameter_ci_highlight_templates = [
   "VM Started (Lifecycle Event)",
   "VM Paused (Lifecycle Event)",
