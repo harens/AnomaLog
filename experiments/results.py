@@ -171,21 +171,26 @@ def write_run_outputs(
             context=context,
         ),
     )
-    _write_json(
-        result_paths.metrics_path,
-        build_run_metrics_report(
-            bundle=bundle,
-            sequences=sequences,
-            model_summary=model_summary,
-            debug_reporting=debug_reporting,
-        ),
+    metric_report = build_run_metrics_report(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+        debug_reporting=debug_reporting,
     )
-    parameter_ci_report = _parameter_ci_report(model_summary.metrics)
+    _write_json(result_paths.metrics_path, metric_report)
+    parameter_ci_report = _parameter_ci_report(metric_report)
     if parameter_ci_report is not None:
         _write_json(
             result_paths.run_dir / "figure9_parameter_ci.json",
             parameter_ci_report,
         )
+    if debug_reporting:
+        parameter_ci_trace = _parameter_ci_trace(model_summary.metrics)
+        if parameter_ci_trace is not None:
+            _write_json(
+                result_paths.run_dir / "figure9_parameter_ci_debug.json",
+                parameter_ci_trace,
+            )
     _write_json(
         result_paths.environment_path,
         build_environment_metadata(
@@ -558,10 +563,18 @@ def build_run_metrics_report(
 
 
 def _parameter_ci_report(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return the detector-owned parameter CI report, if present."""
+    """Return the detector-owned parameter CI summary, if present."""
     report = metrics.get("parameter_ci_report")
     if isinstance(report, dict):
         return report
+    return None
+
+
+def _parameter_ci_trace(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the detector-owned parameter CI debug trace, if present."""
+    trace = metrics.get("parameter_ci_trace")
+    if isinstance(trace, dict):
+        return trace
     return None
 
 

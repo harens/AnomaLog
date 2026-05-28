@@ -35,6 +35,7 @@ from experiments.models.deeplog.parameters import (
 )
 from experiments.models.deeplog.parameters.reporting import (
     DeepLogParameterCiReport,
+    DeepLogParameterCiTraceReport,
     ParameterCiState,
 )
 from experiments.models.deeplog.shared import (
@@ -110,8 +111,12 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
             remains meaningful for session-based runs, but is suppressed for
             continuous stream batches where sequence boundaries are internal.
         parameter_ci_report (DeepLogParameterCiReport | None): Parameter-value
-            confidence-interval report for the scored run. This is only
-            populated when the parameter branch is enabled.
+            confidence-interval report for the scored run. This is the
+            publication-facing summary and is only populated when the parameter
+            branch is enabled.
+        parameter_ci_trace (DeepLogParameterCiTraceReport | None): Verbose
+            per-point trace for explicit debugging. This is kept out of the
+            publication-facing metrics report.
     """
 
     next_event_prediction: NextEventPredictionDiagnostics | None
@@ -119,6 +124,7 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
     event_level_detection: DeepLogEventLevelDetectionDiagnostics | None
     sequence_trigger_breakdown: DeepLogSequenceTriggerBreakdown | None
     parameter_ci_report: DeepLogParameterCiReport | None
+    parameter_ci_trace: DeepLogParameterCiTraceReport | None
 
 
 class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
@@ -1148,7 +1154,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             DeepLogRunMetrics: DeepLog-owned metrics for the latest scoring
             run.
         """
-        parameter_ci_report = self._parameter_ci_report_snapshot(
+        parameter_ci_report, parameter_ci_trace = self._parameter_ci_snapshots(
             run_metrics=run_metrics,
         )
         if not self.config.key_detection_enabled:
@@ -1167,6 +1173,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 event_level_detection=event_level_detection,
                 sequence_trigger_breakdown=None,
                 parameter_ci_report=parameter_ci_report,
+                parameter_ci_trace=parameter_ci_trace,
             )
         segment_diagnostics = self._next_event_prediction_segment_snapshot()
         next_event_prediction = self._next_event_prediction_state_snapshot(
@@ -1193,6 +1200,7 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             event_level_detection=event_level_detection,
             sequence_trigger_breakdown=sequence_trigger_breakdown,
             parameter_ci_report=parameter_ci_report,
+            parameter_ci_trace=parameter_ci_trace,
         )
 
     def _record_next_event_predictions(
@@ -1412,23 +1420,30 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             return None
         return state.snapshot(top_g_values=self.config.top_g_values)
 
-    def _parameter_ci_report_snapshot(
+    def _parameter_ci_snapshots(
         self,
         *,
         run_metrics: dict[str, Any],
-    ) -> DeepLogParameterCiReport | None:
-        """Return the recorded parameter CI approximation report, if any."""
+    ) -> tuple[DeepLogParameterCiReport | None, DeepLogParameterCiTraceReport | None]:
+        """Return the recorded parameter CI summary and trace, if any."""
         state = self._parameter_ci_state
         if state is None:
             if not self.config.parameter_detection_enabled:
-                return None
+                return None, None
             state = ParameterCiState()
         train_sequence_count = int(run_metrics.get("train_sequence_count", 0) or 0)
         test_sequence_count = int(run_metrics.get("test_sequence_count", 0) or 0)
-        return state.snapshot(
-            train_sequence_count=train_sequence_count,
-            test_sequence_count=test_sequence_count,
-            include_empty=self.config.parameter_detection_enabled,
+        return (
+            state.snapshot_summary(
+                train_sequence_count=train_sequence_count,
+                test_sequence_count=test_sequence_count,
+                include_empty=self.config.parameter_detection_enabled,
+            ),
+            state.snapshot_trace(
+                train_sequence_count=train_sequence_count,
+                test_sequence_count=test_sequence_count,
+                include_empty=self.config.parameter_detection_enabled,
+            ),
         )
 
     def _event_level_state_snapshot(

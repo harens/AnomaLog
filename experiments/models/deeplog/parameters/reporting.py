@@ -1,8 +1,8 @@
 """DeepLog parameter-value CI reporting helpers.
 
-This module owns the Figure 9 style approximation report for the parameter
-branch. Keeping the data model here avoids making the detector a dumping
-ground for report-specific state.
+This module keeps the Figure 9 approximation report separate from detector
+runtime state. The published report is aggregate-first, while the detailed
+per-event trace stays available for explicit debugging artefacts.
 """
 
 from __future__ import annotations
@@ -29,8 +29,38 @@ class DeepLogParameterCiThresholds(msgspec.Struct, frozen=True):
     confidence_999: float
 
 
-class DeepLogParameterCiPoint(msgspec.Struct, frozen=True):
-    """One scored parameter-model point in the CI approximation report."""
+class DeepLogParameterCiThresholdSummary(msgspec.Struct, frozen=True):
+    """Aggregate threshold outcome for one template series."""
+
+    confidence: float
+    threshold: float
+    point_count: int
+    anomalous_point_count: int
+    detected_point_count: int
+    detected_anomalous_point_count: int
+    detected_normal_point_count: int
+    detection_rate: float
+    anomalous_detection_rate: float
+
+
+class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
+    """Aggregate per-template parameter residual series for the report."""
+
+    template: str
+    feature_names: list[str]
+    train_pair_count: int
+    validation_pair_count: int
+    point_count: int
+    anomalous_point_count: int
+    residual_mse_mean: float
+    residual_mse_min: float
+    residual_mse_max: float
+    thresholds: DeepLogParameterCiThresholds
+    threshold_summaries: list[DeepLogParameterCiThresholdSummary]
+
+
+class DeepLogParameterCiTracePoint(msgspec.Struct, frozen=True):
+    """One scored parameter-model point in the debug trace."""
 
     window_id: int
     split_label: str
@@ -44,8 +74,8 @@ class DeepLogParameterCiPoint(msgspec.Struct, frozen=True):
     most_anomalous_feature: str | None
 
 
-class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
-    """Per-template parameter residual series in the CI approximation report."""
+class DeepLogParameterCiTraceSeries(msgspec.Struct, frozen=True):
+    """Per-template parameter residual trace for debugging."""
 
     template: str
     feature_names: list[str]
@@ -54,7 +84,7 @@ class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
     point_count: int
     anomalous_point_count: int
     thresholds: DeepLogParameterCiThresholds
-    points: list[DeepLogParameterCiPoint]
+    points: list[DeepLogParameterCiTracePoint]
 
 
 class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
@@ -68,7 +98,22 @@ class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
     series_count: int
     highlighted_templates: list[str]
     series: list[DeepLogParameterCiSeries]
-    anomalous_points: list[DeepLogParameterCiPoint]
+    total_point_count: int
+    total_anomalous_point_count: int
+
+
+class DeepLogParameterCiTraceReport(msgspec.Struct, frozen=True):
+    """Verbose parameter-value trace for explicit debugging."""
+
+    task: str
+    paper_approximation: bool
+    paper_exact_reproduction: bool
+    train_sequence_count: int
+    test_sequence_count: int
+    series_count: int
+    highlighted_templates: list[str]
+    series: list[DeepLogParameterCiTraceSeries]
+    anomalous_points: list[DeepLogParameterCiTracePoint]
     total_point_count: int
     total_anomalous_point_count: int
 
@@ -82,7 +127,7 @@ class _ParameterCiSeriesState:
     validation_pair_count: int
     gaussian_mean: float
     gaussian_stddev: float
-    points: list[DeepLogParameterCiPoint] = field(default_factory=list)
+    points: list[DeepLogParameterCiTracePoint] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -100,7 +145,7 @@ class ParameterCiState:
         parameter_findings: dict[int, DeepLogParameterFinding],
         parameter_models: dict[str, ParameterModelState],
     ) -> None:
-        """Record one scored sequence into the parameter CI report."""
+        """Record one scored sequence into the parameter CI trace."""
         for event_index, finding in sorted(parameter_findings.items()):
             state = parameter_models.get(finding.template)
             if state is None:
@@ -120,7 +165,7 @@ class ParameterCiState:
                 stddev=series_state.gaussian_stddev,
             )
             series_state.points.append(
-                DeepLogParameterCiPoint(
+                DeepLogParameterCiTracePoint(
                     window_id=sequence.window_id,
                     split_label=sequence.split_label.value,
                     label=sequence.label,
@@ -134,14 +179,14 @@ class ParameterCiState:
                 ),
             )
 
-    def snapshot(
+    def snapshot_summary(
         self,
         *,
         train_sequence_count: int,
         test_sequence_count: int,
         include_empty: bool = False,
     ) -> DeepLogParameterCiReport | None:
-        """Return a serialisable view of the recorded CI series."""
+        """Return the aggregate publication-facing CI report."""
         if not self.series_by_template:
             if not include_empty:
                 return None
@@ -154,7 +199,6 @@ class ParameterCiState:
                 series_count=0,
                 highlighted_templates=[],
                 series=[],
-                anomalous_points=[],
                 total_point_count=0,
                 total_anomalous_point_count=0,
             )
@@ -167,29 +211,98 @@ class ParameterCiState:
                 mean=state.gaussian_mean,
                 stddev=state.gaussian_stddev,
             )
+            point_count = len(state.points)
+            anomalous_point_count = sum(1 for point in state.points if point.label != 0)
+            residual_mses = [point.residual_mse for point in state.points]
+            threshold_summary_items = _threshold_summaries(
+                points=state.points,
+                thresholds=thresholds,
+            )
             series.append(
                 DeepLogParameterCiSeries(
                     template=template,
                     feature_names=list(state.feature_names),
                     train_pair_count=state.train_pair_count,
                     validation_pair_count=state.validation_pair_count,
-                    point_count=len(state.points),
-                    anomalous_point_count=sum(
-                        1 for point in state.points if point.label != 0
-                    ),
+                    point_count=point_count,
+                    anomalous_point_count=anomalous_point_count,
+                    residual_mse_mean=_mean(residual_mses),
+                    residual_mse_min=min(residual_mses),
+                    residual_mse_max=max(residual_mses),
                     thresholds=thresholds,
-                    points=list(state.points),
+                    threshold_summaries=threshold_summary_items,
                 ),
             )
         highlighted_series = series[:4]
         highlighted_templates = [item.template for item in highlighted_series]
-        anomalous_points = [
-            point
-            for series_item in series
-            for point in series_item.points
-            if point.label != 0
-        ]
         return DeepLogParameterCiReport(
+            task="parameter_ci_approximation",
+            paper_approximation=True,
+            paper_exact_reproduction=False,
+            train_sequence_count=train_sequence_count,
+            test_sequence_count=test_sequence_count,
+            series_count=len(series),
+            highlighted_templates=highlighted_templates,
+            series=highlighted_series,
+            total_point_count=sum(series_item.point_count for series_item in series),
+            total_anomalous_point_count=sum(
+                series_item.anomalous_point_count for series_item in series
+            ),
+        )
+
+    def snapshot_trace(
+        self,
+        *,
+        train_sequence_count: int,
+        test_sequence_count: int,
+        include_empty: bool = False,
+    ) -> DeepLogParameterCiTraceReport | None:
+        """Return the verbose per-point trace for debugging."""
+        if not self.series_by_template:
+            if not include_empty:
+                return None
+            return DeepLogParameterCiTraceReport(
+                task="parameter_ci_approximation",
+                paper_approximation=True,
+                paper_exact_reproduction=False,
+                train_sequence_count=train_sequence_count,
+                test_sequence_count=test_sequence_count,
+                series_count=0,
+                highlighted_templates=[],
+                series=[],
+                anomalous_points=[],
+                total_point_count=0,
+                total_anomalous_point_count=0,
+            )
+        series: list[DeepLogParameterCiTraceSeries] = []
+        anomalous_points: list[DeepLogParameterCiTracePoint] = []
+        for template, state in sorted(
+            self.series_by_template.items(),
+            key=lambda item: (-len(item[1].points), item[0]),
+        ):
+            thresholds = parameter_ci_thresholds(
+                mean=state.gaussian_mean,
+                stddev=state.gaussian_stddev,
+            )
+            points = list(state.points)
+            anomalous_points.extend(point for point in points if point.label != 0)
+            series.append(
+                DeepLogParameterCiTraceSeries(
+                    template=template,
+                    feature_names=list(state.feature_names),
+                    train_pair_count=state.train_pair_count,
+                    validation_pair_count=state.validation_pair_count,
+                    point_count=len(points),
+                    anomalous_point_count=sum(
+                        1 for point in points if point.label != 0
+                    ),
+                    thresholds=thresholds,
+                    points=points,
+                ),
+            )
+        highlighted_series = series[:4]
+        highlighted_templates = [item.template for item in highlighted_series]
+        return DeepLogParameterCiTraceReport(
             task="parameter_ci_approximation",
             paper_approximation=True,
             paper_exact_reproduction=False,
@@ -225,3 +338,72 @@ def parameter_ci_thresholds(
         confidence_99=round(distribution.inv_cdf(0.99), 8),
         confidence_999=round(distribution.inv_cdf(0.999), 8),
     )
+
+
+def _threshold_summaries(
+    *,
+    points: list[DeepLogParameterCiTracePoint],
+    thresholds: DeepLogParameterCiThresholds,
+) -> list[DeepLogParameterCiThresholdSummary]:
+    """Build threshold summaries for the configured Figure 9 cut-offs.
+
+    Returns:
+        list[DeepLogParameterCiThresholdSummary]: Threshold-wise detection
+            aggregates for the configured confidence levels.
+    """
+    return [
+        _threshold_summary(
+            points=points,
+            confidence=0.98,
+            threshold=thresholds.confidence_98,
+        ),
+        _threshold_summary(
+            points=points,
+            confidence=0.99,
+            threshold=thresholds.confidence_99,
+        ),
+        _threshold_summary(
+            points=points,
+            confidence=0.999,
+            threshold=thresholds.confidence_999,
+        ),
+    ]
+
+
+def _threshold_summary(
+    *,
+    points: list[DeepLogParameterCiTracePoint],
+    confidence: float,
+    threshold: float,
+) -> DeepLogParameterCiThresholdSummary:
+    detected_points = [point for point in points if point.residual_mse > threshold]
+    anomalous_points = [point for point in points if point.label != 0]
+    detected_anomalous_point_count = sum(
+        1 for point in detected_points if point.label != 0
+    )
+    detected_normal_point_count = len(detected_points) - detected_anomalous_point_count
+    anomalous_point_count = len(anomalous_points)
+    point_count = len(points)
+    return DeepLogParameterCiThresholdSummary(
+        confidence=confidence,
+        threshold=threshold,
+        point_count=point_count,
+        anomalous_point_count=anomalous_point_count,
+        detected_point_count=len(detected_points),
+        detected_anomalous_point_count=detected_anomalous_point_count,
+        detected_normal_point_count=detected_normal_point_count,
+        detection_rate=(
+            0.0 if point_count == 0 else len(detected_points) / point_count
+        ),
+        anomalous_detection_rate=(
+            0.0
+            if anomalous_point_count == 0
+            else detected_anomalous_point_count / anomalous_point_count
+        ),
+    )
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 8)

@@ -406,6 +406,10 @@ Each concrete run writes a deterministic directory under
   record an exact-rank `top_g_replay` curve using the configured paper
   cut-offs, so you can inspect multiple top-`g` thresholds from one fitted
   model without re-running inference.
+- `figure9_parameter_ci.json`: concise publication-facing summary for the
+  parameter-value OpenStack approximation.
+- `figure9_parameter_ci_debug.json`: optional verbose DeepLog parameter trace
+  written only when `--debug-reporting` is enabled.
 - `predictions.jsonl`: optional test-sequence outputs, including detector
   scores and any emitted key phrases when `--write-predictions` is supplied
 - `environment.json`: Python, platform, package, git metadata, and the command

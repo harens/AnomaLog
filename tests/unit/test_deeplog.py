@@ -2530,11 +2530,20 @@ def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
     assert report.highlighted_templates == ["T"]
     assert report.total_point_count == 2
     assert report.total_anomalous_point_count == 2
+    assert report.series[0].point_count == 2
+    assert report.series[0].threshold_summaries[0].confidence == pytest.approx(0.98)
+    assert report.series[0].threshold_summaries[0].point_count == 2
+    assert report.series[0].threshold_summaries[0].anomalous_point_count == 2
+    assert metrics.parameter_ci_trace is not None
+    trace = metrics.parameter_ci_trace
+    assert trace is not None
+    assert trace.total_point_count == 2
+    assert trace.total_anomalous_point_count == 2
     assert (
         report.series[0].thresholds.confidence_99
         > report.series[0].thresholds.confidence_98
     )
-    assert report.anomalous_points[0].detected_at_98 in {True, False}
+    assert trace.anomalous_points[0].detected_at_98 in {True, False}
 
 
 def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points() -> (
@@ -2569,6 +2578,12 @@ def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points()
     assert report.highlighted_templates == []
     assert report.total_point_count == 0
     assert report.total_anomalous_point_count == 0
+    assert metrics.parameter_ci_trace is not None
+    trace = metrics.parameter_ci_trace
+    assert trace is not None
+    assert trace.series_count == 0
+    assert trace.total_point_count == 0
+    assert trace.total_anomalous_point_count == 0
 
 
 def test_parameter_only_scoring_carries_entity_history() -> None:
@@ -2641,6 +2656,12 @@ def test_parameter_only_scoring_carries_entity_history() -> None:
     assert report.total_anomalous_point_count == 4
     assert report.highlighted_templates == ["T"]
     assert report.series[0].point_count == 4
+    assert report.series[0].threshold_summaries[0].point_count == 4
+    assert metrics.parameter_ci_trace is not None
+    trace = metrics.parameter_ci_trace
+    assert trace is not None
+    assert trace.total_point_count == 4
+    assert trace.total_anomalous_point_count == 4
 
 
 def test_fit_trains_models_and_skips_non_numeric_templates() -> None:

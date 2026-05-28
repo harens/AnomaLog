@@ -192,7 +192,7 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parameter-only DeepLog results should be written as a dedicated artifact."""
+    """Parameter-only DeepLog results should write the concise report artefact."""
     bundle = next(
         bundle
         for bundle in load_experiment_bundles(
@@ -280,14 +280,125 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
 
     experiment_results.write_run_outputs(context=context)
 
-    assert json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))[
-        "parameter_ci_report"
-    ] == {"task": "parameter_ci_approximation"}
+    metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["parameter_ci_report"] == {"task": "parameter_ci_approximation"}
+    assert "parameter_ci_trace" not in metrics
     assert json.loads(
         (tmp_path / "figure9_parameter_ci.json").read_text(
             encoding="utf-8",
         ),
     ) == {"task": "parameter_ci_approximation"}
+    assert not (tmp_path / "figure9_parameter_ci_debug.json").exists()
+
+
+def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Debug reporting should persist the verbose parameter trace separately."""
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=tmp_path / "raw.log",
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=tmp_path / "data",
+            cache_root=tmp_path / "cache",
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    model_summary = ModelRunSummary(
+        metrics={
+            "sequence_count": 1,
+            "train_sequence_count": 0,
+            "test_sequence_count": 1,
+            "ignored_sequence_count": 0,
+            "parameter_ci_report": {"task": "parameter_ci_approximation"},
+            "parameter_ci_trace": {
+                "task": "parameter_ci_approximation",
+                "series_count": 1,
+            },
+        },
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={},
+            test_label_counts={1: 1},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=1,
+            train_sequence_count=0,
+            test_sequence_count=1,
+            train_label_counts={},
+            test_label_counts={1: 1},
+        ),
+    )
+    result_paths = experiment_results.ResultPaths(
+        run_fingerprint="fingerprint",
+        run_dir=tmp_path,
+        config_path=tmp_path / "experiment_config.json",
+        dataset_manifest_path=tmp_path / "dataset_manifest.json",
+        metrics_path=tmp_path / "metrics.json",
+        predictions_path=tmp_path / "predictions.jsonl",
+        environment_path=tmp_path / "environment.json",
+        run_log_path=tmp_path / "run.log",
+    )
+    context = experiment_results.ResultWriteContext(
+        bundle=bundle,
+        templated=templated,
+        sequences=sequences,
+        model_summary=model_summary,
+        result_paths=result_paths,
+        debug_reporting=True,
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "build_dataset_manifest",
+        lambda **_: {"dataset": "manifest"},
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "build_run_metrics_report",
+        lambda **kwargs: {
+            "sequence_count": kwargs["model_summary"].metrics["sequence_count"],
+            "parameter_ci_report": kwargs["model_summary"].metrics[
+                "parameter_ci_report"
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "build_environment_metadata",
+        lambda **_: {"environment": "metadata"},
+    )
+
+    experiment_results.write_run_outputs(context=context)
+
+    assert json.loads(
+        (tmp_path / "figure9_parameter_ci_debug.json").read_text(
+            encoding="utf-8",
+        ),
+    ) == {
+        "task": "parameter_ci_approximation",
+        "series_count": 1,
+    }
+    metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["parameter_ci_report"] == {"task": "parameter_ci_approximation"}
+    assert "parameter_ci_trace" not in metrics
 
 
 def test_build_environment_metadata_records_deepcase_version(
