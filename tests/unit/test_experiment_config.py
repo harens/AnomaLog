@@ -1193,6 +1193,20 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         / "datasets"
         / "hdfs/v1_deeplog_paper_entry100k_assign_first.toml",
     )
+    hdfs_drain3_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs/v1_deeplog_paper_entry100k_split_partial_drain3.toml",
+    )
+    hdfs_assign_first_drain3_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "hdfs/v1_deeplog_paper_entry100k_assign_first_drain3.toml",
+    )
 
     def bundle_named(
         bundles: list[ExperimentBundle],
@@ -1230,6 +1244,38 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     validate_bgl_how_far_are_we_2022_config(
         dataset_config=bundle_named(bgl_2022_bundles, "deeplog").dataset,
         model_config=bundle_named(bgl_2022_bundles, "deeplog").model,
+    )
+    assert (
+        bundle_named(
+            hdfs_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).dataset.template_parser
+        == "spell"
+    )
+    assert (
+        bundle_named(
+            hdfs_drain3_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).dataset.template_parser
+        == "drain3"
+    )
+    assert (
+        bundle_named(
+            hdfs_assign_first_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).dataset.template_parser
+        == "spell"
+    )
+    assert (
+        bundle_named(
+            hdfs_assign_first_drain3_bundles,
+            "deeplog",
+            run_group="deeplog_default",
+        ).dataset.template_parser
+        == "drain3"
     )
     assert bundle_named(bgl_2022_bundles, "deeplog").dataset.template_parser == "drain3"
     assert isinstance(

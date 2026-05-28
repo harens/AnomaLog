@@ -209,6 +209,20 @@ datasets = [
 [experiment_sets.hdfs_deeplog_paper.overrides.deeplog_default]
 "model.top_g_values" = [1, 3, 5, 7, 9]
 
+[experiment_sets.hdfs_deeplog_paper_drain3_ablation]
+# Drain3 ablation for the HDFS DeepLog paper matrix.
+# Mirrors the paper-facing registry entries that use Spell, but swaps the
+# template parser to Drain3 so the parser choice can be compared directly.
+model_sets = ["baselines_no_nb", "deeplog_short_session_padding_fidelity"]
+models = ["deeplog_default", "deepcase"]
+datasets = [
+  "hdfs/v1_deeplog_paper_entry100k_split_partial_drain3",
+  "hdfs/v1_deeplog_paper_entry100k_assign_first_drain3",
+]
+
+[experiment_sets.hdfs_deeplog_paper_drain3_ablation.overrides.deeplog_default]
+"model.top_g_values" = [1, 3, 5, 7, 9]
+
 [experiment_sets.hdfs_deepcase_table_iv_compat]
 # DeepCASE Table-IV compatibility configuration.
 # Mirrors the paper's next-event prediction framing rather than DeepLog-style

@@ -226,6 +226,32 @@ def test_hdfs_deeplog_paper_registry_includes_short_session_padding_variant() ->
     )
 
 
+def test_hdfs_deeplog_paper_registry_adds_drain3_ablation_group() -> None:
+    """The HDFS DeepLog paper registry should expose a Drain3 ablation group."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    selected = registry.select(groups=("hdfs_deeplog_paper_drain3_ablation",))
+
+    assert [experiment.name for experiment in selected] == [
+        "hdfs_v1_deeplog_paper_entry100k_split_partial_drain3",
+        "hdfs_v1_deeplog_paper_entry100k_assign_first_drain3",
+    ]
+    assert {experiment.dataset for experiment in selected} == {
+        "hdfs/v1_deeplog_paper_entry100k_split_partial_drain3",
+        "hdfs/v1_deeplog_paper_entry100k_assign_first_drain3",
+    }
+    assert {experiment.models for experiment in selected} == {
+        (
+            "deeplog_default",
+            "deepcase",
+        ),
+    }
+
+
 def test_registry_select_combines_names_and_groups() -> None:
     """Explicit names and group filters should both contribute to selection."""
     registry = ExperimentRegistry(
