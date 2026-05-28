@@ -351,6 +351,7 @@ def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outpu
 def test_spell_template_parser_omits_removed_persist_state_argument(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Spell parser training should match the installed LogParser signature.
 
@@ -358,6 +359,9 @@ def test_spell_template_parser_omits_removed_persist_state_argument(
         monkeypatch (pytest.MonkeyPatch): Redirect the `spellpy` import to a
             strict fake module that rejects removed keyword arguments.
         tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+        caplog (pytest.LogCaptureFixture): Captures the training summary so the
+            occurrence-count regression stays observable through the public log
+            output.
     """
     monkeypatch.chdir(tmp_path)
 
@@ -401,7 +405,8 @@ def test_spell_template_parser_omits_removed_persist_state_argument(
             self.logCluL = [
                 types.SimpleNamespace(
                     logTemplate=["Build", "<*>", "complete"],
-                    logIDL=[1, 2],
+                    logIDL=[],
+                    occurrence_count=2,
                 ),
             ]
 
@@ -418,8 +423,10 @@ def test_spell_template_parser_omits_removed_persist_state_argument(
     )
 
     parser = SpellTemplateParser(dataset_name="demo")
-    parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
+    with caplog.at_level("INFO"):
+        parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
 
+    assert "Spell parser training finished: templates=1 occurrences=2" in caplog.text
     assert parser.inference("Build vm-3 complete") == (
         "Build <*> complete",
         ["vm-3"],

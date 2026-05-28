@@ -36,8 +36,10 @@ from experiments.models.deeplog.parameters import (
     raw_parameter_vector_for_event,
     score_parameter_sequence,
 )
+from experiments.models.deeplog.parameters.reporting import ParameterCiState
 from experiments.models.deeplog.shared import (
     DeepLogManifest,
+    DeepLogParameterFinding,
     GaussianThreshold,
     KeyLSTM,
     NormalisationStats,
@@ -55,7 +57,17 @@ from experiments.models.next_event_metrics import (
 # DeepLog lives in `experiments/`, outside the configured `--cov=anomalog`
 # target. These tests still protect the experiment-layer detector contract.
 pytestmark = pytest.mark.allow_no_new_coverage
-ConfigValue = str | int | float | bool | None | tuple[int, ...] | list[int]
+ConfigValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | tuple[int, ...]
+    | tuple[str, ...]
+    | list[int]
+    | list[str]
+)
 
 
 def _deep_log_config(**values: ConfigValue) -> DeepLogModelConfig:
@@ -103,6 +115,22 @@ def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
 
     assert config.parameter_detection_enabled is False
     assert config.key_detection_enabled is True
+
+
+def test_deeplog_model_config_accepts_parameter_ci_highlight_templates() -> None:
+    """DeepLog should decode explicit Figure 9 highlight ordering."""
+    config = _deep_log_config(
+        name="deeplog",
+        parameter_ci_highlight_templates=(
+            "VM Started (Lifecycle Event)",
+            "During sync_power_state the instance has a pending task (spawning). Skip.",
+        ),
+    )
+
+    assert config.parameter_ci_highlight_templates == (
+        "VM Started (Lifecycle Event)",
+        "During sync_power_state the instance has a pending task (spawning). Skip.",
+    )
 
 
 def test_deeplog_model_config_accepts_parameter_only_mode() -> None:
@@ -2584,6 +2612,131 @@ def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points()
     assert trace.series_count == 0
     assert trace.total_point_count == 0
     assert trace.total_anomalous_point_count == 0
+
+
+def test_parameter_ci_summary_honours_explicit_highlight_order() -> None:
+    """Figure 9 summaries should foreground the configured analogue templates."""
+    state = ParameterCiState()
+    parameter_models = {
+        "A": ParameterModelState(
+            template="A",
+            schema=ParameterFeatureSchema(
+                feature_names=["dt_prev_ms"],
+                numeric_parameter_positions=[],
+                include_elapsed_time=True,
+                dropped_parameter_positions=[],
+            ),
+            normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+            gaussian=GaussianThreshold(
+                mean=0.1,
+                stddev=0.01,
+                lower_bound=0.0,
+                upper_bound=0.2,
+            ),
+            model=_StaticParameterModel(output_vector=[0.0]),
+            train_pair_count=4,
+            validation_pair_count=2,
+        ),
+        "B": ParameterModelState(
+            template="B",
+            schema=ParameterFeatureSchema(
+                feature_names=["dt_prev_ms"],
+                numeric_parameter_positions=[],
+                include_elapsed_time=True,
+                dropped_parameter_positions=[],
+            ),
+            normalisation=NormalisationStats(means=[0.0], stddevs=[1.0]),
+            gaussian=GaussianThreshold(
+                mean=0.1,
+                stddev=0.01,
+                lower_bound=0.0,
+                upper_bound=0.2,
+            ),
+            model=_StaticParameterModel(output_vector=[0.0]),
+            train_pair_count=4,
+            validation_pair_count=2,
+        ),
+    }
+    state.record_sequence(
+        sequence=_sequence(
+            templates=["A", "B"],
+            split_label=SplitLabel.TEST,
+        ),
+        parameter_findings={
+            0: DeepLogParameterFinding(
+                event_index=0,
+                template="A",
+                feature_names=["dt_prev_ms"],
+                observed_vector=[1.0],
+                predicted_vector=[0.5],
+                residual_mse=0.1,
+                gaussian_mean=0.1,
+                gaussian_stddev=0.01,
+                gaussian_lower_bound=0.0,
+                gaussian_upper_bound=0.2,
+                most_anomalous_feature="dt_prev_ms",
+                is_anomalous=False,
+            ),
+            1: DeepLogParameterFinding(
+                event_index=1,
+                template="B",
+                feature_names=["dt_prev_ms"],
+                observed_vector=[1.0],
+                predicted_vector=[0.5],
+                residual_mse=0.2,
+                gaussian_mean=0.1,
+                gaussian_stddev=0.01,
+                gaussian_lower_bound=0.0,
+                gaussian_upper_bound=0.2,
+                most_anomalous_feature="dt_prev_ms",
+                is_anomalous=False,
+            ),
+        },
+        parameter_models=parameter_models,
+    )
+    state.record_sequence(
+        sequence=_sequence(
+            templates=["A"],
+            split_label=SplitLabel.TEST,
+        ),
+        parameter_findings={
+            0: DeepLogParameterFinding(
+                event_index=0,
+                template="A",
+                feature_names=["dt_prev_ms"],
+                observed_vector=[1.0],
+                predicted_vector=[0.5],
+                residual_mse=0.3,
+                gaussian_mean=0.1,
+                gaussian_stddev=0.01,
+                gaussian_lower_bound=0.0,
+                gaussian_upper_bound=0.2,
+                most_anomalous_feature="dt_prev_ms",
+                is_anomalous=False,
+            ),
+        },
+        parameter_models=parameter_models,
+    )
+
+    report = state.snapshot_summary(
+        train_sequence_count=1,
+        test_sequence_count=2,
+        highlighted_templates=("B", "A"),
+    )
+    assert report is not None
+    assert report.series_count == 2
+    assert report.highlighted_templates == ["B", "A"]
+    assert [series.template for series in report.series] == ["B", "A"]
+    assert report.total_point_count == 3
+
+    trace = state.snapshot_trace(
+        train_sequence_count=1,
+        test_sequence_count=2,
+        highlighted_templates=("B", "A"),
+    )
+    assert trace is not None
+    assert trace.highlighted_templates == ["B", "A"]
+    assert [series.template for series in trace.series] == ["B", "A"]
 
 
 def test_parameter_only_scoring_carries_entity_history() -> None:

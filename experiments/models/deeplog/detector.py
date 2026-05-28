@@ -643,6 +643,17 @@ class DeepLogModelConfig(
             ),
         ),
     ] = False
+    parameter_ci_highlight_templates: Annotated[
+        tuple[str, ...],
+        msgspec.Meta(
+            description=(
+                "Ordered templates to foreground in the compact parameter CI "
+                "report. OpenStack Figure 9 approximations use this to keep "
+                "the published summary aligned with the paper's analogue log "
+                "keys rather than the most frequent observed series."
+            ),
+        ),
+    ] = ()
     key_detection_enabled: Annotated[
         bool,
         msgspec.Meta(
@@ -1437,11 +1448,13 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             state.snapshot_summary(
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
+                highlighted_templates=self.config.parameter_ci_highlight_templates,
                 include_empty=self.config.parameter_detection_enabled,
             ),
             state.snapshot_trace(
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
+                highlighted_templates=self.config.parameter_ci_highlight_templates,
                 include_empty=self.config.parameter_detection_enabled,
             ),
         )

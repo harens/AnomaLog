@@ -1231,7 +1231,7 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         dataset_config=bundle_named(bgl_2022_bundles, "deeplog").dataset,
         model_config=bundle_named(bgl_2022_bundles, "deeplog").model,
     )
-    assert bundle_named(bgl_2022_bundles, "deeplog").dataset.template_parser == "spell"
+    assert bundle_named(bgl_2022_bundles, "deeplog").dataset.template_parser == "drain3"
     assert isinstance(
         bundle_named(bgl_2022_bundles, "deeplog").dataset.sequence.split,
         RawEntryPrefixFractionSplitConfig,
@@ -1906,6 +1906,14 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
     openstack_parameter_sequence = openstack_parameter_bundles[0].dataset.sequence
     assert isinstance(openstack_parameter_sequence, EntitySequenceConfig)
     assert openstack_parameter_sequence.continuous_context is True
+    openstack_parameter_model = openstack_parameter_bundles[0].model
+    assert isinstance(openstack_parameter_model, DeepLogModelConfig)
+    assert openstack_parameter_model.parameter_ci_highlight_templates == (
+        "VM Started (Lifecycle Event)",
+        "VM Paused (Lifecycle Event)",
+        "During sync_power_state the instance has a pending task (spawning). Skip.",
+        "Took NUM seconds to build instance.",
+    )
     assert run_group_for(hdfs_bundles, "deeplog") == "deeplog_default"
 
     assert run_group_for(thunderbird_bundles, "template_frequency") == (

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from statistics import NormalDist
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import msgspec
 
@@ -19,6 +19,15 @@ if TYPE_CHECKING:
         DeepLogParameterFinding,
         ParameterModelState,
     )
+
+
+class _HasTemplate(Protocol):
+    """Minimal template-bearing series contract used by report selection."""
+
+    template: str
+
+
+TSeries = TypeVar("TSeries", bound=_HasTemplate)
 
 
 class DeepLogParameterCiThresholds(msgspec.Struct, frozen=True):
@@ -184,6 +193,7 @@ class ParameterCiState:
         *,
         train_sequence_count: int,
         test_sequence_count: int,
+        highlighted_templates: tuple[str, ...] | None = None,
         include_empty: bool = False,
     ) -> DeepLogParameterCiReport | None:
         """Return the aggregate publication-facing CI report."""
@@ -233,8 +243,11 @@ class ParameterCiState:
                     threshold_summaries=threshold_summary_items,
                 ),
             )
-        highlighted_series = series[:4]
-        highlighted_templates = [item.template for item in highlighted_series]
+        highlighted_series = _select_highlighted_series(
+            series,
+            requested_templates=highlighted_templates,
+        )
+        highlighted_template_names = [item.template for item in highlighted_series]
         return DeepLogParameterCiReport(
             task="parameter_ci_approximation",
             paper_approximation=True,
@@ -242,7 +255,7 @@ class ParameterCiState:
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
-            highlighted_templates=highlighted_templates,
+            highlighted_templates=highlighted_template_names,
             series=highlighted_series,
             total_point_count=sum(series_item.point_count for series_item in series),
             total_anomalous_point_count=sum(
@@ -255,6 +268,7 @@ class ParameterCiState:
         *,
         train_sequence_count: int,
         test_sequence_count: int,
+        highlighted_templates: tuple[str, ...] | None = None,
         include_empty: bool = False,
     ) -> DeepLogParameterCiTraceReport | None:
         """Return the verbose per-point trace for debugging."""
@@ -300,8 +314,11 @@ class ParameterCiState:
                     points=points,
                 ),
             )
-        highlighted_series = series[:4]
-        highlighted_templates = [item.template for item in highlighted_series]
+        highlighted_series = _select_highlighted_series(
+            series,
+            requested_templates=highlighted_templates,
+        )
+        highlighted_template_names = [item.template for item in highlighted_series]
         return DeepLogParameterCiTraceReport(
             task="parameter_ci_approximation",
             paper_approximation=True,
@@ -309,7 +326,7 @@ class ParameterCiState:
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
-            highlighted_templates=highlighted_templates,
+            highlighted_templates=highlighted_template_names,
             series=highlighted_series,
             anomalous_points=anomalous_points,
             total_point_count=sum(len(series_item.points) for series_item in series),
@@ -407,3 +424,26 @@ def _mean(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(sum(values) / len(values), 8)
+
+
+def _select_highlighted_series(
+    series: list[TSeries],
+    *,
+    requested_templates: tuple[str, ...] | None,
+) -> list[TSeries]:
+    """Return the compact report subset, honouring any explicit ordering."""
+    if requested_templates:
+        series_by_template = {item.template: item for item in series}
+        selected: list[TSeries] = []
+        seen_templates: set[str] = set()
+        for template in requested_templates:
+            if template in seen_templates:
+                continue
+            item = series_by_template.get(template)
+            if item is None:
+                continue
+            selected.append(item)
+            seen_templates.add(template)
+        if selected:
+            return selected
+    return series[:4]

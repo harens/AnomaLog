@@ -3,4 +3,10 @@ detector = "deeplog"
 parameter_detection_enabled = true
 key_detection_enabled = false
 include_elapsed_time = true
+parameter_ci_highlight_templates = [
+  "VM Started (Lifecycle Event)",
+  "VM Paused (Lifecycle Event)",
+  "During sync_power_state the instance has a pending task (spawning). Skip.",
+  "Took NUM seconds to build instance.",
+]
 description = "Parameter-only DeepLog configuration for OpenStack parameter-value anomaly experiments."

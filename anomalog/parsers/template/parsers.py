@@ -413,7 +413,9 @@ class SpellTemplateParser(TemplateParser):
             rows: list[tuple[str, re.Pattern[str], int]] = []
             for cluster in log_clust_l:
                 template = " ".join(getattr(cluster, "logTemplate", ()))
-                occurrences = len(getattr(cluster, "logIDL", ()))
+                occurrences = getattr(cluster, "occurrence_count", None)
+                if occurrences is None:
+                    occurrences = len(getattr(cluster, "logIDL", ()))
                 rows.append(
                     (
                         template,

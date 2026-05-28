@@ -746,6 +746,11 @@ def validate_bgl_how_far_are_we_2022_config(
 ) -> None:
     """Fail fast when the BGL 2022 benchmark config drifts from its protocol.
 
+    Args:
+        dataset_config (DatasetVariantConfig): Dataset config to validate.
+        model_config (ExperimentModelConfig | None): Optional model config
+            associated with the dataset bundle.
+
     Raises:
         ValueError: If the dataset name does not identify the 2022 BGL set or
             the split fractions do not match the benchmark protocol.
@@ -759,8 +764,8 @@ def validate_bgl_how_far_are_we_2022_config(
     if not isinstance(sequence, TimeSequenceConfig):
         msg = "BGL 2022 benchmark configs must use time grouping."
         raise TypeError(msg)
-    if dataset_config.template_parser != "spell":
-        msg = "BGL 2022 benchmark configs must use the Spell template parser."
+    if dataset_config.template_parser != "drain3":
+        msg = "BGL 2022 benchmark configs must use the Drain3 template parser."
         raise ValueError(msg)
     split = sequence.split
     if not isinstance(split, RawEntryPrefixFractionSplitConfig):

@@ -5,9 +5,9 @@ description = "BGL How Far Are We? benchmark reproduction with one-hour time win
 name = "bgl_how_far_are_we_2022"
 dataset_name = "BGL"
 preset = "bgl"
-template_parser = "spell"
 description = "How Far Are We? BGL benchmark reproduction using one-hour sliding time windows with a raw-entry split before grouping."
 evaluation_unit = "window"
+template_parser = "drain3"
 
 [dataset.sequence]
 grouping = "time"
