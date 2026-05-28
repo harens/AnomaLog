@@ -1136,6 +1136,41 @@ def test_build_parameter_datasets_uses_plain_normalized_history_vectors() -> Non
     assert validation_pairs[0].history_inputs[0] == [0.0, 1.0]
 
 
+def test_build_parameter_datasets_merges_continuous_context_series() -> None:
+    """Continuous-context sequences should feed one template time series."""
+    schema = ParameterFeatureSchema(
+        feature_names=["param_0"],
+        numeric_parameter_positions=[0],
+        include_elapsed_time=False,
+        dropped_parameter_positions=[],
+    )
+    train_pairs, validation_pairs, _ = build_parameter_datasets(
+        normal_sequences=[
+            _sequence(
+                templates=["T", "T", "T"],
+                params_by_event=[["1.0"], ["2.0"], ["3.0"]],
+                split_label=SplitLabel.TRAIN,
+                continuous_context=True,
+            ),
+            _sequence(
+                templates=["T", "T", "T"],
+                params_by_event=[["4.0"], ["5.0"], ["6.0"]],
+                split_label=SplitLabel.TRAIN,
+                continuous_context=True,
+            ),
+        ],
+        template="T",
+        schema=schema,
+        history_size=2,
+        validation_fraction=0.5,
+    )
+
+    assert len(train_pairs) == 2
+    assert len(validation_pairs) == 2
+    assert train_pairs[-1].raw_target == [4.0]
+    assert validation_pairs[0].raw_target == [5.0]
+
+
 def test_predict_flags_key_model_anomalies() -> None:
     """Sequence-level DeepLog output should fire when the key model fires."""
     detector = DeepLogDetector(

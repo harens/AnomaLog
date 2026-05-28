@@ -111,6 +111,17 @@ def build_parameter_datasets(
     """
     raw_series: list[list[RawParameterVector]] = []
     raw_series_target_masks: list[list[bool]] = []
+    current_series: list[RawParameterVector] = []
+    current_series_target_mask: list[bool] = []
+
+    def flush_current_series() -> None:
+        if not current_series:
+            return
+        raw_series.append(list(current_series))
+        raw_series_target_masks.append(list(current_series_target_mask))
+        current_series.clear()
+        current_series_target_mask.clear()
+
     for sequence in normal_sequences:
         sequence_target_mask = training_event_mask_for_sequence(sequence)
         vectors = [
@@ -128,8 +139,17 @@ def build_parameter_datasets(
                 for event_index, (event_template, _, _) in enumerate(sequence.events)
                 if event_template == template
             ]
+            if sequence.continuous_context:
+                current_series.extend(vectors)
+                current_series_target_mask.extend(eligible_target_mask)
+                continue
+            flush_current_series()
             raw_series.append(vectors)
             raw_series_target_masks.append(eligible_target_mask)
+            continue
+        if not sequence.continuous_context:
+            flush_current_series()
+    flush_current_series()
 
     (
         train_raw_series,
