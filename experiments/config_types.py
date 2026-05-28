@@ -596,9 +596,12 @@ class EntitySequenceConfig(
     Attributes:
         train_on_normal_entities_only (bool): Whether anomalous entities are
             excluded from the training split budget.
+        continuous_context (bool): Whether adjacent entity windows should
+            carry state across sequence boundaries.
     """
 
     train_on_normal_entities_only: bool = False
+    continuous_context: bool = False
 
     def apply(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Build a configured entity-grouped sequence view.
@@ -610,6 +613,8 @@ class EntitySequenceConfig(
             SequenceBuilder: Entity-grouped builder with split settings applied.
         """
         sequences = self._apply_split_settings(self._group_sequences(templated))
+        if self.continuous_context:
+            sequences = sequences.with_continuous_context()
         if self.train_on_normal_entities_only:
             return sequences.with_train_on_normal_entities_only()
         return sequences

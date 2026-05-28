@@ -1420,12 +1420,15 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         """Return the recorded parameter CI approximation report, if any."""
         state = self._parameter_ci_state
         if state is None:
-            return None
+            if not self.config.parameter_detection_enabled:
+                return None
+            state = ParameterCiState()
         train_sequence_count = int(run_metrics.get("train_sequence_count", 0) or 0)
         test_sequence_count = int(run_metrics.get("test_sequence_count", 0) or 0)
         return state.snapshot(
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
+            include_empty=self.config.parameter_detection_enabled,
         )
 
     def _event_level_state_snapshot(

@@ -16,7 +16,10 @@ from experiments import ConfigError
 from experiments.config import load_experiment_bundles
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
 from experiments.models.deeplog import key as deeplog_key
-from experiments.models.deeplog.detector import DeepLogDetector, DeepLogModelConfig
+from experiments.models.deeplog.detector import (
+    DeepLogDetector,
+    DeepLogModelConfig,
+)
 from experiments.models.deeplog.key import (
     KeyScoringContext,
     fit_key_model,
@@ -2497,6 +2500,112 @@ def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
         > report.series[0].thresholds.confidence_98
     )
     assert report.anomalous_points[0].detected_at_98 in {True, False}
+
+
+def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points() -> (
+    None
+):
+    """Enabled parameter runs should still serialise an explicit empty report."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=1,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=2,
+            parameter_detection_enabled=True,
+            key_detection_enabled=False,
+        ),
+    )
+    metrics = detector.run_metrics(
+        run_metrics={
+            "sequence_count": 1,
+            "train_sequence_count": 0,
+            "test_sequence_count": 1,
+            "ignored_sequence_count": 0,
+        },
+    )
+
+    assert metrics.parameter_ci_report is not None
+    report = metrics.parameter_ci_report
+    assert report.series_count == 0
+    assert report.highlighted_templates == []
+    assert report.total_point_count == 0
+    assert report.total_anomalous_point_count == 0
+
+
+def test_parameter_only_scoring_carries_entity_history() -> None:
+    """Continuous entity windows should carry parameter history between VM ids."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=2,
+            parameter_detection_enabled=True,
+            key_detection_enabled=False,
+        ),
+    )
+    with Progress(disable=True) as progress:
+        detector.fit(
+            [
+                _sequence(
+                    templates=["T", "T", "T", "T"],
+                    params_by_event=[
+                        ["1.0"],
+                        ["2.0"],
+                        ["3.0"],
+                        ["4.0"],
+                    ],
+                    dts_by_event=[None, 10, 11, 12],
+                    split_label=SplitLabel.TRAIN,
+                    continuous_context=True,
+                ),
+            ],
+            progress=progress,
+        )
+
+    detector.predict(
+        _sequence(
+            templates=["T", "T"],
+            params_by_event=[["5.0"], ["6.0"]],
+            dts_by_event=[None, 13],
+            label=1,
+            split_label=SplitLabel.TEST,
+            continuous_context=True,
+        ),
+    )
+    detector.predict(
+        _sequence(
+            templates=["T", "T"],
+            params_by_event=[["7.0"], ["8.0"]],
+            dts_by_event=[None, 14],
+            label=1,
+            split_label=SplitLabel.TEST,
+            continuous_context=True,
+        ),
+    )
+
+    metrics = detector.run_metrics(
+        run_metrics={
+            "sequence_count": 2,
+            "train_sequence_count": 0,
+            "test_sequence_count": 2,
+            "ignored_sequence_count": 0,
+        },
+    )
+
+    assert metrics.parameter_ci_report is not None
+    report = metrics.parameter_ci_report
+    assert report.total_point_count == 4
+    assert report.total_anomalous_point_count == 4
+    assert report.highlighted_templates == ["T"]
+    assert report.series[0].point_count == 4
 
 
 def test_fit_trains_models_and_skips_non_numeric_templates() -> None:

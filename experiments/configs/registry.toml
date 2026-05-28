@@ -87,7 +87,7 @@ models = [
 
 [experiments.openstack_deeplog_figure9_parameter_ci_approx]
 dataset = "openstack/deeplog_parameter_ci_approx"
-description = "Parameter-only DeepLog OpenStack approximation of Figure 9 that preserves raw numeric parameters and injects two synthetic anomalies into a Figure 9-sized held-out VM-creation slice."
+description = "Parameter-only DeepLog OpenStack approximation of Figure 9 that preserves raw numeric parameters, keeps VM-instance grouping, and carries parameter history across adjacent instances."
 models = ["deeplog_parameter_anomaly"]
 
 [experiments.thunderbird]

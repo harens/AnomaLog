@@ -1903,6 +1903,9 @@ def test_mixed_model_manifests_assign_run_groups_for_runner_batching() -> None:
     assert run_group_for(hdfs_bundles, "naive_bayes") == "baselines_with_nb"
     assert run_group_for(hdfs_bundles, "markov") == "baselines_with_nb"
     assert run_group_for(hdfs_bundles, "deepcase") == "deepcase"
+    openstack_parameter_sequence = openstack_parameter_bundles[0].dataset.sequence
+    assert isinstance(openstack_parameter_sequence, EntitySequenceConfig)
+    assert openstack_parameter_sequence.continuous_context is True
     assert run_group_for(hdfs_bundles, "deeplog") == "deeplog_default"
 
     assert run_group_for(thunderbird_bundles, "template_frequency") == (

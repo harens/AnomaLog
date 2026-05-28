@@ -1143,9 +1143,12 @@ class EntitySequenceBuilder(SequenceBuilder):
     Attributes:
         train_on_normal_entities_only (bool): Whether anomalous entities are
             excluded from the training split budget.
+        continuous_context (bool): Whether adjacent entity windows should
+            carry state across sequence boundaries.
     """
 
     train_on_normal_entities_only: bool = False
+    continuous_context: bool = False
 
     @classmethod
     def from_dataset(
@@ -1181,6 +1184,22 @@ class EntitySequenceBuilder(SequenceBuilder):
             Self: Copy with updated normal-only training behavior.
         """
         return replace(self, train_on_normal_entities_only=enabled)
+
+    def with_continuous_context(
+        self,
+        *,
+        enabled: bool = True,
+    ) -> Self:
+        """Treat consecutive entity windows as one continuous stream.
+
+        Args:
+            enabled (bool): Whether to carry model state across entity
+                boundaries.
+
+        Returns:
+            Self: Copy with updated continuity behaviour.
+        """
+        return replace(self, continuous_context=enabled)
 
     def _entity_split_counts(
         self,
@@ -1387,6 +1406,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                 infer_template,
                 label_for_group,
                 split_label,
+                continuous_context=self.continuous_context,
             )
             if seq is not None:
                 if (

@@ -139,10 +139,25 @@ class ParameterCiState:
         *,
         train_sequence_count: int,
         test_sequence_count: int,
+        include_empty: bool = False,
     ) -> DeepLogParameterCiReport | None:
         """Return a serialisable view of the recorded CI series."""
         if not self.series_by_template:
-            return None
+            if not include_empty:
+                return None
+            return DeepLogParameterCiReport(
+                task="parameter_ci_approximation",
+                paper_approximation=True,
+                paper_exact_reproduction=False,
+                train_sequence_count=train_sequence_count,
+                test_sequence_count=test_sequence_count,
+                series_count=0,
+                highlighted_templates=[],
+                series=[],
+                anomalous_points=[],
+                total_point_count=0,
+                total_anomalous_point_count=0,
+            )
         series: list[DeepLogParameterCiSeries] = []
         for template, state in sorted(
             self.series_by_template.items(),
