@@ -108,9 +108,11 @@ class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
     paper_approximation: bool
     paper_exact_reproduction: bool
     result_note: str
+    series_scope: str
     train_sequence_count: int
     test_sequence_count: int
     series_count: int
+    highlighted_series_count: int
     highlighted_templates: list[str]
     series: list[DeepLogParameterCiSeries]
     total_point_count: int
@@ -124,9 +126,11 @@ class DeepLogParameterCiTraceReport(msgspec.Struct, frozen=True):
     paper_approximation: bool
     paper_exact_reproduction: bool
     result_note: str
+    series_scope: str
     train_sequence_count: int
     test_sequence_count: int
     series_count: int
+    highlighted_series_count: int
     highlighted_templates: list[str]
     series: list[DeepLogParameterCiTraceSeries]
     anomalous_points: list[DeepLogParameterCiTracePoint]
@@ -219,9 +223,11 @@ class ParameterCiState:
                 paper_approximation=True,
                 paper_exact_reproduction=False,
                 result_note=_parameter_ci_result_note(),
+                series_scope="highlighted_subset",
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
                 series_count=0,
+                highlighted_series_count=0,
                 highlighted_templates=[],
                 series=[],
                 total_point_count=0,
@@ -271,9 +277,11 @@ class ParameterCiState:
             paper_approximation=True,
             paper_exact_reproduction=False,
             result_note=_parameter_ci_result_note(),
+            series_scope="highlighted_subset",
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
+            highlighted_series_count=len(highlighted_series),
             highlighted_templates=highlighted_template_names,
             series=highlighted_series,
             total_point_count=sum(series_item.point_count for series_item in series),
@@ -299,9 +307,11 @@ class ParameterCiState:
                 paper_approximation=True,
                 paper_exact_reproduction=False,
                 result_note=_parameter_ci_result_note(),
+                series_scope="highlighted_subset",
                 train_sequence_count=train_sequence_count,
                 test_sequence_count=test_sequence_count,
                 series_count=0,
+                highlighted_series_count=0,
                 highlighted_templates=[],
                 series=[],
                 anomalous_points=[],
@@ -347,9 +357,11 @@ class ParameterCiState:
             paper_approximation=True,
             paper_exact_reproduction=False,
             result_note=_parameter_ci_result_note(),
+            series_scope="highlighted_subset",
             train_sequence_count=train_sequence_count,
             test_sequence_count=test_sequence_count,
             series_count=len(series),
+            highlighted_series_count=len(highlighted_series),
             highlighted_templates=highlighted_template_names,
             series=highlighted_series,
             anomalous_points=anomalous_points,

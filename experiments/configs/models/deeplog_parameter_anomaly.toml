@@ -2,6 +2,9 @@ name = "deeplog_parameter_anomaly"
 detector = "deeplog"
 parameter_detection_enabled = true
 key_detection_enabled = false
+history_size = 3
+hidden_size = 256
+num_layers = 1
 include_elapsed_time = true
 validation_fraction = 0.2
 parameter_ci_highlight_templates = [
@@ -10,4 +13,4 @@ parameter_ci_highlight_templates = [
   "During sync_power_state the instance has a pending task (spawning). Skip.",
   "Took NUM seconds to build instance.",
 ]
-description = "Parameter-only DeepLog configuration for OpenStack parameter-value anomaly experiments."
+description = "Parameter-only DeepLog configuration for the OpenStack Figure 9 approximation using an explicit h=3, L=1, alpha=256 approximation."

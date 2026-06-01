@@ -118,7 +118,7 @@ def test_deeplog_model_config_defaults_parameter_detection_enabled() -> None:
 
 
 def test_deeplog_model_config_accepts_parameter_ci_highlight_templates() -> None:
-    """DeepLog should decode explicit Figure 9 highlight ordering."""
+    """DeepLog should decode the OpenStack Figure 9 highlight ordering."""
     config = _deep_log_config(
         name="deeplog",
         parameter_ci_highlight_templates=(
@@ -2556,6 +2556,8 @@ def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
     assert report.paper_approximation is True
     assert report.paper_exact_reproduction is False
     assert "Figure 9" in report.result_note
+    assert report.series_scope == "highlighted_subset"
+    assert report.highlighted_series_count == 1
     assert report.highlighted_templates == ["T"]
     assert report.total_point_count == 2
     assert report.total_anomalous_point_count == 2
@@ -2568,6 +2570,8 @@ def test_parameter_only_scoring_emits_parameter_ci_report() -> None:
     trace = metrics.parameter_ci_trace
     assert trace is not None
     assert "injected overlays" in trace.result_note
+    assert trace.series_scope == "highlighted_subset"
+    assert trace.highlighted_series_count == 1
     assert trace.total_point_count == 2
     assert trace.total_anomalous_point_count == 2
     assert (
@@ -2606,6 +2610,8 @@ def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points()
     assert metrics.parameter_ci_report is not None
     report = metrics.parameter_ci_report
     assert report.series_count == 0
+    assert report.highlighted_series_count == 0
+    assert report.series_scope == "highlighted_subset"
     assert report.highlighted_templates == []
     assert report.total_point_count == 0
     assert report.total_anomalous_point_count == 0
@@ -2613,6 +2619,8 @@ def test_parameter_only_scoring_emits_empty_parameter_ci_report_when_no_points()
     assert metrics.parameter_ci_trace is not None
     trace = metrics.parameter_ci_trace
     assert trace is not None
+    assert trace.series_scope == "highlighted_subset"
+    assert trace.highlighted_series_count == 0
     assert trace.series_count == 0
     assert trace.total_point_count == 0
     assert trace.total_anomalous_point_count == 0
@@ -2730,6 +2738,8 @@ def test_parameter_ci_summary_honours_explicit_highlight_order() -> None:
     )
     assert report is not None
     assert report.series_count == 2
+    assert report.highlighted_series_count == 2
+    assert report.series_scope == "highlighted_subset"
     assert report.highlighted_templates == ["B", "A"]
     assert [series.template for series in report.series] == ["B", "A"]
     assert report.total_point_count == 3
@@ -2815,6 +2825,7 @@ def test_parameter_ci_summary_prefers_event_labels_when_available() -> None:
     assert report is not None
     assert report.series[0].anomalous_point_count == 1
     assert report.total_anomalous_point_count == 1
+    assert report.series_scope == "highlighted_subset"
 
     trace = state.snapshot_trace(
         train_sequence_count=1,

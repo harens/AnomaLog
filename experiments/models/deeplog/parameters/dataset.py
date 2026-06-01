@@ -6,6 +6,8 @@ This module turns the raw per-template time series into the exact
 The important ideas live here:
 
 - each template is modeled as its own ordered time series
+- entity windows marked with `continuous_context` are stitched into that
+  per-template chronology in source order
 - validation uses the temporal tail, not a random split
 - history windows overlap exactly as they do at deployment time
 - missing target positions are carried forward in `target_mask` so later

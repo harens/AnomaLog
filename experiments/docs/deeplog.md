@@ -178,6 +178,9 @@ This section keeps the short version in the main DeepLog note:
   boundary survives grouping, strips the leading session tag before Spell, and
   canonicalises volatile UUID, IP, instance-storage filename, path-segment,
   hex, and numeric tokens in the current OpenStack preset;
+  the Figure 9 approximation config now uses an explicit `h = 3`, `L = 1`,
+  and `alpha = 256` approximation without claiming those values are stated as
+  the Section 5.2 OpenStack defaults;
   the archive's `pending task (...)` states are kept visible for audit and
   future parameter modelling rather than being merged away;
 - `sequence.split.mode` supports `raw_entry_prefix_count`,
