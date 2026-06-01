@@ -234,6 +234,118 @@ def test_materialise_openstack_deeplog_parameter_ci_subset_injects_two_shared_po
     )
 
 
+def test_openstack_helpers_preserve_numeric_values_when_requested() -> None:
+    """OpenStack normalisation should keep numeric path segments when asked."""
+    assert (
+        openstack_source.normalise_openstack_message(
+            "[instance: vm-0001] keep /tmp/42/cache",
+            preserve_numeric_values=True,
+        )
+        == "keep /tmp/42/cache"
+    )
+    assert (
+        openstack_source.normalise_openstack_message(
+            "[instance: vm-0001] keep /tmp/42/cache",
+            preserve_numeric_values=False,
+        )
+        == "keep /tmp/NUM/cache"
+    )
+
+
+def test_parse_openstack_payload_accepts_for_instance_syntax() -> None:
+    """OpenStack payload parsing should recognise alternate instance syntax."""
+    parsed = openstack_source.parse_openstack_payload(
+        "nova.compute 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[addr] Build complete for instance vm-alpha",
+    )
+
+    assert parsed is not None
+    assert parsed.instance_id == "vm-alpha"
+    assert parsed.content == "Build complete for instance vm-alpha"
+    assert parsed.raw_parameters == []
+
+
+def test_materialise_openstack_deeplog_parameter_ci_subset_requires_duration_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenStack Figure 9 materialisation should fail without the duration row.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to shrink the
+            OpenStack fixture to the smallest failing slice.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    sync_power_state_content = (
+        "During sync_power_state the instance has a pending task (spawning). Skip."
+    )
+    normal_lines: list[str] = []
+    for instance_index in range(5):
+        instance_id = f"instance-{instance_index:02d}"
+        base_event_index = instance_index * 2
+        normal_lines.extend(
+            (
+                _openstack_parameter_line(
+                    base_event_index,
+                    instance_id=instance_id,
+                    content="VM Started (Lifecycle Event)",
+                ),
+                _openstack_parameter_line(
+                    base_event_index + 1,
+                    instance_id=instance_id,
+                    content=sync_power_state_content,
+                ),
+            ),
+        )
+    (source_root / "openstack_normal1.log").write_text(
+        "\n".join(normal_lines) + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "openstack_normal2.log").write_text("", encoding="utf-8")
+    (source_root / "openstack_abnormal.log").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_SUBSET_INSTANCES",
+        5,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_TRAIN_INSTANCES",
+        1,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_VALIDATION_INSTANCES",
+        1,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_PERFORMANCE_OFFSET",
+        1,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS",
+        (1, 2),
+    )
+
+    raw_logs_path = tmp_path / "preprocessed" / "openstack_parameter_subset.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(
+        ValueError,
+        match="Could not find the build-duration template on held-out OpenStack",
+    ):
+        openstack_source.materialise_openstack_deeplog_parameter_ci_subset(
+            source_root,
+            raw_logs_path,
+        )
+
+
 def _openstack_parameter_line(
     event_index: int,
     *,

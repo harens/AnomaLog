@@ -127,6 +127,12 @@ class DeepLogRunMetrics(msgspec.Struct, frozen=True):
     parameter_ci_trace: DeepLogParameterCiTraceReport | None
 
 
+DeepLogParameterCiSnapshots = tuple[
+    DeepLogParameterCiReport | None,
+    DeepLogParameterCiTraceReport | None,
+]
+
+
 class DeepLogEventLevelDetectionDiagnostics(msgspec.Struct, frozen=True):
     """Event-level DeepLog metrics derived from labelled log entries.
 
@@ -1435,19 +1441,15 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         self,
         *,
         run_metrics: dict[str, Any],
-    ) -> tuple[DeepLogParameterCiReport | None, DeepLogParameterCiTraceReport | None]:
+    ) -> DeepLogParameterCiSnapshots:
         """Return the recorded parameter CI summary and trace, if any.
 
         Args:
             run_metrics (dict[str, Any]): Run metrics collected during scoring.
 
         Returns:
-            tuple[
-                DeepLogParameterCiReport | None,
-                DeepLogParameterCiTraceReport | None,
-            ]:
-                Summary and trace payloads, or `(None, None)` when parameter reporting
-                is disabled.
+            DeepLogParameterCiSnapshots: Summary and trace payloads, or
+                `(None, None)` when parameter reporting is disabled.
         """
         state = self._parameter_ci_state
         if state is None:
