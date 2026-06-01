@@ -10,12 +10,12 @@ import msgspec
 import numpy as np
 import scipy.sparse as sp
 import torch
+from deepcase import DeepCASE
 from deepcase.context_builder.loss import LabelSmoothing
 from deepcase.interpreter.utils import group_by, sp_unique
 from sklearn.neighbors import KDTree
 from typing_extensions import override
 
-from deepcase import DeepCASE
 from experiments.models.base import (
     AbstainAwarePredictionOutcome,
     ExperimentDetector,

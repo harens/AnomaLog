@@ -391,15 +391,19 @@ def materialize(
     """
 
     def _decorate(func: Callable[P, R]) -> Callable[P, R]:
-        resolved_task_kwargs = dict(task_kwargs)
-        result_storage = resolved_task_kwargs.pop("result_storage", _RESULT_STORAGE)
+        resolved_task_kwargs: dict[str, Any] = dict(task_kwargs)
+        result_storage: _ResultStorageLike | Path | str = resolved_task_kwargs.pop(
+            "result_storage",
+            _RESULT_STORAGE,
+        )
         cache_policy = _cache_policy_for_result_storage(result_storage)
+        resolved_result_storage = _resolve_result_storage_basepath(result_storage)
         materialized = _prefect_materialize(
             asset_from_local_path(output_path),
             persist_result=True,
             cache_policy=cache_policy,
             asset_deps=list(asset_deps) if asset_deps is not None else None,
-            result_storage=result_storage,
+            result_storage=resolved_result_storage,
             **resolved_task_kwargs,
         )(func)
 

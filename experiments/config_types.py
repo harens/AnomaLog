@@ -35,14 +35,13 @@ from anomalog.sources import (
 )
 from anomalog.split_validation import validate_split_fractions
 from experiments import ConfigError
-from experiments.models.metric_schema import EvaluationUnit
+from experiments.models.metric_schema import EvaluationUnit  # noqa: TC001
 
 if TYPE_CHECKING:
     from anomalog.labels import AnomalyLabelReader
     from anomalog.parsers.template import TemplatedDataset
     from anomalog.sequences import EntitySequenceBuilder, SequenceBuilder
     from experiments.models import ExperimentModelConfig
-    from experiments.models.metric_schema import EvaluationUnit
 
 
 class DatasetSourceConfig(msgspec.Struct, frozen=True, tag_field="type"):

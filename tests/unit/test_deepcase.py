@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 import torch
+from deepcase import DeepCASE
 from deepcase.context_builder.context_builder import ContextBuilder
 from deepcase.interpreter.cluster import Cluster
 from deepcase.interpreter.interpreter import Interpreter
 from rich.progress import Progress
 
 from anomalog.sequences import SplitLabel, TemplateSequence
-from deepcase import DeepCASE
 from experiments import ConfigError
 from experiments.models import resolve_model_config_type
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
