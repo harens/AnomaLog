@@ -34,4 +34,3 @@ would otherwise exceed device memory.
 - `uv run ruff format anomalog tests experiments`
 - `uv run ruff check --fix anomalog experiments tests`
 - `uv run ty check anomalog tests experiments`
-
