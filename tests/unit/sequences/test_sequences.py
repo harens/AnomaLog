@@ -29,6 +29,7 @@ from anomalog.sequences import (
     StraddlingGroupPolicy,
     TemplateSequence,
     TimeSequenceBuilder,
+    _split_label_from_prefixed_entity_id,
 )
 from experiments.models.base import SequenceSummary
 from tests.unit.helpers import (
@@ -1908,6 +1909,130 @@ def test_template_sequence_validates_event_label_length() -> None:
         )
 
 
+def test_template_sequence_validates_mask_lengths_independently() -> None:
+    """TemplateSequence should reject mismatched training and evaluation masks."""
+    with pytest.raises(
+        ValueError,
+        match="training_event_mask must match the number of events",
+    ):
+        TemplateSequence(
+            events=[("ONE", ["one"], None), ("TWO", ["two"], None)],
+            label=0,
+            entity_ids=["node-a"],
+            window_id=10,
+            split_label=SplitLabel.TEST,
+            training_event_mask=(True,),
+        )
+    with pytest.raises(
+        ValueError,
+        match="evaluation_event_mask must match the number of events",
+    ):
+        TemplateSequence(
+            events=[("ONE", ["one"], None), ("TWO", ["two"], None)],
+            label=0,
+            entity_ids=["node-a"],
+            window_id=11,
+            split_label=SplitLabel.TEST,
+            evaluation_event_mask=(True,),
+        )
+
+
+def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
+    """Raw-entry split configuration should fail on invalid combinations."""
+    sink = _sink()
+    with pytest.raises(ValueError, match="train_entry_count must be a non-negative"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_COUNT,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            train_entry_count=-1,
+        )
+    with pytest.raises(ValueError, match="raw-entry count splits must use"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_COUNT,
+            train_entry_count=1,
+        )
+    with pytest.raises(ValueError, match="train_entry_fraction must be provided"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        )
+    with pytest.raises(ValueError, match="raw-entry fraction splits must use"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+            train_entry_fraction=0.5,
+        )
+    with pytest.raises(ValueError, match="train_entry_fraction must be between 0 and 1"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            train_entry_fraction=2.0,
+        )
+    with pytest.raises(ValueError, match="train_normal_entry_fraction must be provided"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        )
+    with pytest.raises(ValueError, match="raw-entry normal-fraction splits must use"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+            train_normal_entry_fraction=0.5,
+        )
+    with pytest.raises(ValueError, match="train_normal_entry_fraction must be between 0 and 1"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            train_normal_entry_fraction=2.0,
+        )
+    with pytest.raises(ValueError, match="raw-entry normal-fraction splits only support"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            train_normal_entry_fraction=0.5,
+            straddling_group_policy=StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+        )
+    with pytest.raises(ValueError, match="stream_chunk_size must be a positive integer"):
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            stream_chunk_size=0,
+        )
+    with pytest.raises(ValueError, match="chunk_size must be a positive integer"):
+        ChronologicalStreamSequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            chunk_size=0,
+        )
+
+
 def test_sequence_builder_base_methods_cover_default_helper_paths() -> None:
     """Base builder helpers should expose their default contracts clearly."""
     updated_train_fraction = 0.25
@@ -2282,6 +2407,120 @@ def test_time_sequence_builder_can_drop_straddling_windows_before_grouping() -> 
     )
 
     assert list(builder) == []
+
+
+def test_entity_sequences_before_grouping_respect_prefixed_split_labels_and_normal_only_filter() -> (
+    None
+):
+    """Prefixed entity ids should drive split labels before grouping."""
+    train_sequences = list(
+        EntitySequenceBuilder(
+            sink=_sink(
+                structured_line(
+                    line_order=0,
+                    timestamp_unix_ms=100,
+                    entity_id="train:one",
+                    untemplated_message_text="train-first",
+                    anomalous=0,
+                ),
+            ),
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        ),
+    )
+    test_sequences = list(
+        EntitySequenceBuilder(
+            sink=_sink(
+                structured_line(
+                    line_order=0,
+                    timestamp_unix_ms=100,
+                    entity_id="test:two",
+                    untemplated_message_text="test-first",
+                    anomalous=0,
+                ),
+            ),
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        ),
+    )
+    ignored_sequences = list(
+        EntitySequenceBuilder(
+            sink=_sink(
+                structured_line(
+                    line_order=0,
+                    timestamp_unix_ms=100,
+                    entity_id="plain:three",
+                    untemplated_message_text="plain-third",
+                    anomalous=1,
+                ),
+            ),
+            infer_template=_upper_template,
+            label_for_group=lambda _: 1,
+            split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+            train_on_normal_entities_only=True,
+        ),
+    )
+
+    assert train_sequences[0].split_label is SplitLabel.TRAIN
+    assert test_sequences[0].split_label is SplitLabel.TRAIN
+    assert ignored_sequences[0].split_label is SplitLabel.IGNORED
+    assert _split_label_from_prefixed_entity_id("train:one") is SplitLabel.TRAIN
+    assert _split_label_from_prefixed_entity_id("test:two") is SplitLabel.TEST
+    assert _split_label_from_prefixed_entity_id("") is None
+
+
+def test_chronological_stream_builder_reports_raw_entry_masks() -> None:
+    """Chronological stream builders should keep chunk boundaries intact."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="b",
+            untemplated_message_text="three",
+            anomalous=0,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=2,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        train_entry_fraction=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert sequences[0].training_event_mask == (True, False)
+    assert sequences[0].evaluation_event_mask == (False, False)
+    assert sequences[1].training_event_mask == (False,)
+    assert sequences[1].evaluation_event_mask == (True,)
+    assert builder.build_raw_entry_split_summary() is not None
+    assert builder._split_label_for_chronological_chunk(
+        [SplitLabel.IGNORED, SplitLabel.IGNORED],
+    ) is SplitLabel.IGNORED
 
 
 def test_fixed_sequence_builder_drops_incomplete_trailing_windows() -> None:
