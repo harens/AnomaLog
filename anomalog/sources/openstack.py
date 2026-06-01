@@ -81,8 +81,11 @@ _OPENSTACK_PARAMETER_SUBSET_INSTANCES = 301
 _OPENSTACK_PARAMETER_TRAIN_INSTANCES = 120
 _OPENSTACK_PARAMETER_VALIDATION_INSTANCES = 20
 _OPENSTACK_PARAMETER_PERFORMANCE_OFFSET = 7
+_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS = (
+    _OPENSTACK_PARAMETER_PERFORMANCE_OFFSET,
+    _OPENSTACK_PARAMETER_PERFORMANCE_OFFSET + 1,
+)
 _OPENSTACK_PARAMETER_PERFORMANCE_DELAY_MS = 600_000
-_OPENSTACK_PARAMETER_DURATION_OFFSET = 12
 _OPENSTACK_PARAMETER_DURATION_MULTIPLIER = 6.0
 
 
@@ -259,6 +262,41 @@ def _resolve_anomaly_instance_index(
     raise ValueError(msg)
 
 
+def _resolve_anomaly_instance_indexes(
+    instances: list[_OpenStackParameterInstance],
+    *,
+    start_index: int,
+    offsets: tuple[int, int],
+    target_template: str,
+) -> tuple[int, int]:
+    """Return two held-out instance indexes that expose the target template.
+
+    DeepLog Figure 9 shows two injected time points, and each affected key
+    should observe both of them.
+
+    Raises:
+        ValueError: If the two requested anomaly instances collapse to the same
+            held-out index.
+    """
+    first_offset, second_offset = offsets
+    first_index = _resolve_anomaly_instance_index(
+        instances,
+        start_index=start_index,
+        offset=first_offset,
+        target_template=target_template,
+    )
+    second_index = _resolve_anomaly_instance_index(
+        instances,
+        start_index=start_index,
+        offset=second_offset,
+        target_template=target_template,
+    )
+    if second_index == first_index:
+        msg = f"Expected two distinct OpenStack instances for {target_template!r}."
+        raise ValueError(msg)
+    return first_index, second_index
+
+
 def _split_name_for_instance(
     *,
     instance_index: int,
@@ -328,10 +366,7 @@ def materialise_openstack_deeplog_parameter_ci_subset(
     required_instance_count = (
         _OPENSTACK_PARAMETER_TRAIN_INSTANCES
         + _OPENSTACK_PARAMETER_VALIDATION_INSTANCES
-        + max(
-            _OPENSTACK_PARAMETER_PERFORMANCE_OFFSET,
-            _OPENSTACK_PARAMETER_DURATION_OFFSET,
-        )
+        + max(_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS)
         + 1
     )
     min_instances = max(
@@ -346,18 +381,25 @@ def materialise_openstack_deeplog_parameter_ci_subset(
     test_start = (
         _OPENSTACK_PARAMETER_TRAIN_INSTANCES + _OPENSTACK_PARAMETER_VALIDATION_INSTANCES
     )
-    performance_index = _resolve_anomaly_instance_index(
+    anomaly_indexes = _resolve_anomaly_instance_indexes(
         selected_instances,
         start_index=test_start,
-        offset=_OPENSTACK_PARAMETER_PERFORMANCE_OFFSET,
+        offsets=_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS,
         target_template=_PERFORMANCE_TARGET_TEMPLATE,
     )
-    duration_index = _resolve_anomaly_instance_index(
-        selected_instances,
-        start_index=test_start,
-        offset=_OPENSTACK_PARAMETER_DURATION_OFFSET,
-        target_template=_DURATION_TARGET_TEMPLATE,
-    )
+    for anomaly_index in anomaly_indexes:
+        if (
+            _find_event_index(
+                selected_instances[anomaly_index].events,
+                _DURATION_TARGET_TEMPLATE,
+            )
+            < 0
+        ):
+            msg = (
+                "Could not find the build-duration template on held-out OpenStack "
+                f"instance index {anomaly_index}."
+            )
+            raise ValueError(msg)
 
     with raw_logs_path.open("w", encoding="utf-8") as output:
         for instance_index, instance in enumerate(selected_instances):
@@ -366,19 +408,14 @@ def materialise_openstack_deeplog_parameter_ci_subset(
                 train_instances=_OPENSTACK_PARAMETER_TRAIN_INSTANCES,
                 validation_instances=_OPENSTACK_PARAMETER_VALIDATION_INSTANCES,
             )
-            anomaly_kind = None
-            if instance_index == performance_index:
-                anomaly_kind = "performance"
-            elif instance_index == duration_index:
-                anomaly_kind = "duration"
             performance_target_index = (
                 _find_event_index(instance.events, _PERFORMANCE_TARGET_TEMPLATE)
-                if anomaly_kind == "performance"
+                if instance_index in anomaly_indexes
                 else -1
             )
             duration_target_index = (
                 _find_event_index(instance.events, _DURATION_TARGET_TEMPLATE)
-                if anomaly_kind == "duration"
+                if instance_index in anomaly_indexes
                 else -1
             )
             for event_index, event in enumerate(instance.events):
@@ -386,15 +423,13 @@ def materialise_openstack_deeplog_parameter_ci_subset(
                 timestamp_ms = event.timestamp_ms
                 content = event.content
                 if (
-                    anomaly_kind == "performance"
+                    performance_target_index >= 0
                     and event_index >= performance_target_index
                 ):
                     timestamp_ms += _OPENSTACK_PARAMETER_PERFORMANCE_DELAY_MS
                     if event_index == performance_target_index:
                         label = 1
-                elif (
-                    anomaly_kind == "duration" and event_index == duration_target_index
-                ):
+                if event_index == duration_target_index and duration_target_index >= 0:
                     content = _multiply_build_seconds(
                         content,
                         _OPENSTACK_PARAMETER_DURATION_MULTIPLIER,
