@@ -159,6 +159,32 @@ def test_openstack_deeplog_parser_preserves_pending_task_state() -> None:
     )
 
 
+def test_openstack_deeplog_parser_accepts_for_instance_instance_ids() -> None:
+    """OpenStack parser should recognise alternate instance-id phrasing."""
+    parser = OpenStackDeepLogParser()
+    parsed = parser.parse_line(
+        "openstack_train\t0\t100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+        "[addr] Build complete for instance vm-alpha",
+    )
+
+    assert parsed is not None
+    assert parsed.entity_id == "openstack_train:vm-alpha"
+    assert parsed.untemplated_message_text == "Build complete for instance vm-alpha"
+
+
+def test_openstack_deeplog_parser_skips_rows_with_invalid_timestamps() -> None:
+    """OpenStack parser should skip rows that fail timestamp parsing."""
+    parser = OpenStackDeepLogParser()
+
+    assert (
+        parser.parse_line(
+            "openstack_train\t0\t100 2017-99-01 00:00:30.000 1 INFO nova.compute "
+            "[instance: vm-alpha] Build complete",
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "raw_line",
     [
@@ -286,6 +312,25 @@ def test_ait_ads_parser_reads_canonical_alert_rows() -> None:
     assert parsed.anomalous == 1
     assert parsed.untemplated_message_text.startswith(
         "aminer|type=NewMatchPathDetector",
+    )
+
+
+def test_ait_ads_parser_coerces_invalid_numeric_fields_to_none() -> None:
+    """AIT-ADS parser should ignore malformed optional numeric payload fields."""
+    parser = AITADSParser()
+    parsed = parser.parse_line(
+        '{"entity_id":"fox:aminer:172.17.129.140",'
+        '"anomalous":"not-a-number",'
+        '"template_key":"aminer|type=NewMatchPathDetector|key=nmpd",'
+        '"timestamp_unix_ms":"also-not-a-number"}',
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms is None
+    assert parsed.anomalous is None
+    assert parsed.entity_id == "fox:aminer:172.17.129.140"
+    assert parsed.untemplated_message_text == (
+        "aminer|type=NewMatchPathDetector|key=nmpd"
     )
 
 

@@ -14,201 +14,12 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
 )
+from anomalog.parsers.structured.openstack import (
+    _normalise_openstack_message,
+    _parse_openstack_labelled_row,
+)
 
 UTC = timezone.utc
-_OPENSTACK_LABELLED_ROW_RE = re.compile(
-    r"^(?P<split>[^\t]+)\t(?P<label>[01])\t(?P<raw>.*)$",
-)
-_OPENSTACK_RE = re.compile(
-    r"""
-    ^\s*
-    (?P<logrecord>\S+)\s+
-    (?P<date>\d{4}-\d{2}-\d{2})\s+
-    (?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+
-    (?P<pid>\S+)\s+
-    (?P<level>[A-Z]+)\s+
-    (?P<component>\S+)
-    \s+\[(?P<addr>[^\]]+)\]
-    \s+(?P<content>.*\S)
-    \s*$
-    """,
-    re.VERBOSE,
-)
-_INSTANCE_PREFIX_RE = re.compile(
-    r"^\[instance:\s*(?P<instance_id>[^\]]+?)\]\s*",
-    re.IGNORECASE,
-)
-_INSTANCE_ID_PATTERNS = (
-    re.compile(r"\[instance:\s*(?P<instance_id>[^\]]+?)\]"),
-    re.compile(r"\bfor instance (?P<instance_id>\S+)"),
-)
-_UUID_RE = re.compile(
-    r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
-    re.IGNORECASE,
-)
-_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_PATH_RE = re.compile(r"(?<!\S)/(?:[\w.-]+/)*[\w.-]+")
-_INSTANCE_STORAGE_PATH_RE = re.compile(r"(?<!\S)/var/lib/nova/instances/[^)\s,.;:]+")
-_HEX_RE = re.compile(r"\b[0-9a-f]{12,}\b", re.IGNORECASE)
-_NUM_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
-
-
-def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
-    """Convert OpenStack date and time fragments to Unix milliseconds.
-
-    Args:
-        date_s (str): Date fragment in `YYYY-MM-DD` format.
-        time_s (str): Time fragment in `HH:MM:SS[.ffffff]` format.
-
-    Returns:
-        int | None: Parsed timestamp in milliseconds, or `None` when parsing
-            fails.
-    """
-    value = f"{date_s} {time_s}"
-    try:
-        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
-        return int(dt.timestamp() * 1000)
-    except ValueError:
-        pass
-    try:
-        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        return int(dt.timestamp() * 1000)
-    except ValueError:
-        return None
-
-
-def _extract_openstack_instance_id(raw_payload: str) -> str | None:
-    """Return the OpenStack instance identifier, if present.
-
-    Args:
-        raw_payload (str): Raw OpenStack payload text to inspect.
-
-    Returns:
-        str | None: Normalised instance identifier, or `None` when the payload
-            does not expose one.
-    """
-    for pattern in _INSTANCE_ID_PATTERNS:
-        match = pattern.search(raw_payload)
-        if match is None:
-            continue
-        instance_id = match.group("instance_id").strip()
-        if instance_id:
-            return instance_id
-    return None
-
-
-def _normalise_openstack_path_tokens(
-    text: str,
-    *,
-    preserve_numeric_values: bool,
-) -> str:
-    def _normalise_path(match: re.Match[str]) -> str:
-        token = match.group(0)
-        suffix = ""
-        while token and token[-1] in ",.;:)]":
-            suffix = token[-1] + suffix
-            token = token[:-1]
-        segments = token.split("/")
-        normalised_segments = []
-        for segment in segments:
-            if not segment:
-                normalised_segments.append(segment)
-                continue
-            if _UUID_RE.fullmatch(segment):
-                normalised_segments.append("UUID")
-                continue
-            if _IP_RE.fullmatch(segment):
-                normalised_segments.append("IP")
-                continue
-            if _HEX_RE.fullmatch(segment):
-                normalised_segments.append("HEX")
-                continue
-            if not preserve_numeric_values and re.fullmatch(r"\d+(?:\.\d+)?", segment):
-                normalised_segments.append("NUM")
-                continue
-            normalised_segments.append(segment)
-        return "/".join(normalised_segments) + suffix
-
-    return _PATH_RE.sub(_normalise_path, text)
-
-
-def _normalise_openstack_message(
-    content: str,
-    *,
-    preserve_numeric_values: bool,
-) -> str:
-    """Canonicalise OpenStack message text before template mining.
-
-    Args:
-        content (str): Raw OpenStack message body.
-        preserve_numeric_values (bool): Whether numeric tokens should be kept rather
-            than replaced with `NUM`.
-
-    Returns:
-        str: Canonicalised OpenStack message text.
-    """
-    text = _INSTANCE_PREFIX_RE.sub("", content).strip()
-    text = _UUID_RE.sub("UUID", text)
-    text = _IP_RE.sub("IP", text)
-    text = _normalise_openstack_path_tokens(
-        text,
-        preserve_numeric_values=preserve_numeric_values,
-    )
-    text = _INSTANCE_STORAGE_PATH_RE.sub("INSTANCE_PATH", text)
-    text = _HEX_RE.sub("HEX", text)
-    if preserve_numeric_values:
-        return text
-    return _NUM_RE.sub("NUM", text)
-
-
-def _parse_openstack_labelled_row(
-    raw_line: str,
-) -> tuple[str, int, int, str, str, list[str]] | None:
-    """Parse a labelled OpenStack row into split, label, and payload fields.
-
-    Args:
-        raw_line (str): Raw labelled OpenStack line from the preprocessed stream.
-
-    Returns:
-        tuple[str, int, int, str, str, list[str]] | None: Split name, label,
-            timestamp, instance id, canonical content, and raw parameters, or
-            `None` when the row is malformed.
-    """
-    row_match = _OPENSTACK_LABELLED_ROW_RE.match(raw_line.rstrip("\n"))
-    if row_match is None:
-        return None
-    raw_payload = row_match.group("raw")
-    payload_match = _OPENSTACK_RE.match(raw_payload)
-    if payload_match is None:
-        return None
-    data = payload_match.groupdict()
-    timestamp_ms = _openstack_datetime_to_unix_ms(data["date"], data["time"])
-    if timestamp_ms is None:
-        return None
-    instance_id = _extract_openstack_instance_id(raw_payload)
-    if instance_id is None:
-        return None
-    return (
-        row_match.group("split").strip(),
-        int(row_match.group("label")),
-        timestamp_ms,
-        instance_id,
-        data["content"].strip(),
-        _extract_openstack_parameters(data["content"] or ""),
-    )
-
-
-def _extract_openstack_parameters(content: str) -> list[str]:
-    """Extract numeric OpenStack parameters from the message body.
-
-    Args:
-        content (str): Raw OpenStack message body.
-
-    Returns:
-        list[str]: Raw numeric tokens in encounter order.
-    """
-    text = _INSTANCE_PREFIX_RE.sub("", content).strip()
-    return _NUM_RE.findall(text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,7 +158,7 @@ class BGLParser(StructuredParser):
     # with optional leading "-" that indicates "normal" in BGL.
     # e.g. - 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 2005-06-03-15.42.50.363779
     # R02-M1-N0-C:J12-U11 RAS KERNEL INFO instruction cache parity error corrected
-    _BGL_RE = re.compile(
+    _BGL_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"""
         ^\s*
         (?P<dash>-)?\s*
@@ -574,50 +385,6 @@ class ThunderbirdParser(StructuredParser):
 
 
 @dataclass(frozen=True, slots=True)
-class OpenStackDeepLogParser(StructuredParser):
-    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
-
-    Attributes:
-        name (ClassVar[str]): Registry/config name for the built-in parser.
-    """
-
-    name: ClassVar[str] = "openstack_deeplog"
-
-    @override
-    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
-        """Parse one labelled OpenStack row into the shared structured schema.
-
-        Args:
-            raw_line (str): Raw labelled OpenStack row from the preprocessed stream.
-
-        Returns:
-            BaseStructuredLine | None: Structured row, or `None` when the
-                labelled OpenStack row is malformed.
-        """
-        logger = get_logger()
-        parsed = _parse_openstack_labelled_row(raw_line)
-        if parsed is None:
-            logger.warning(
-                "Cannot parse OpenStack labelled row: %r",
-                raw_line.rstrip("\n"),
-            )
-            return None
-        split_name, label, timestamp_ms, instance_id, content, raw_parameters = parsed
-        entity_id = f"{split_name}:{instance_id}"
-        return StructuredLine(
-            timestamp_unix_ms=timestamp_ms,
-            entity_id=entity_id,
-            untemplated_message_text=_normalise_openstack_message(
-                content,
-                preserve_numeric_values=False,
-            ),
-            anomalous=label,
-            line_order=0,
-            raw_parameters=raw_parameters,
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class AITADSParser(StructuredParser):
     """Parse the canonical JSONL alert stream derived from AIT-ADS.
 
@@ -658,20 +425,8 @@ class AITADSParser(StructuredParser):
             logger.warning("AIT-ADS canonical row is missing template_key: %r", s)
             return None
 
-        try:
-            timestamp_unix_ms = (
-                None
-                if payload.get("timestamp_unix_ms") is None
-                else int(payload["timestamp_unix_ms"])
-            )
-        except (TypeError, ValueError):
-            timestamp_unix_ms = None
-        try:
-            anomalous = (
-                None if payload.get("anomalous") is None else int(payload["anomalous"])
-            )
-        except (TypeError, ValueError):
-            anomalous = None
+        timestamp_unix_ms = _coerce_optional_int(payload.get("timestamp_unix_ms"))
+        anomalous = _coerce_optional_int(payload.get("anomalous"))
 
         return BaseStructuredLine(
             timestamp_unix_ms=timestamp_unix_ms,
@@ -681,3 +436,67 @@ class AITADSParser(StructuredParser):
             untemplated_message_text=str(template_key),
             anomalous=anomalous,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenStackDeepLogParser(StructuredParser):
+    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "openstack_deeplog"
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse one labelled OpenStack row into the shared structured schema.
+
+        Args:
+            raw_line (str): Raw labelled OpenStack row from the preprocessed
+                stream.
+
+        Returns:
+            BaseStructuredLine | None: Structured row, or `None` when the
+                labelled OpenStack row is malformed.
+        """
+        logger = get_logger()
+        parsed = _parse_openstack_labelled_row(raw_line)
+        if parsed is None:
+            logger.warning(
+                "Cannot parse OpenStack labelled row: %r",
+                raw_line.rstrip("\n"),
+            )
+            return None
+        entity_id = f"{parsed.split_name}:{parsed.instance_id}"
+        return StructuredLine(
+            timestamp_unix_ms=parsed.timestamp_unix_ms,
+            entity_id=entity_id,
+            untemplated_message_text=_normalise_openstack_message(
+                parsed.content,
+                preserve_numeric_values=False,
+            ),
+            anomalous=parsed.label,
+            line_order=0,
+            raw_parameters=parsed.raw_parameters,
+        )
+
+
+OptionalIntLike = int | float | str | None
+
+
+def _coerce_optional_int(value: OptionalIntLike) -> int | None:
+    """Convert a possibly-null payload field to an integer.
+
+    Args:
+        value (OptionalIntLike): Payload field to coerce.
+
+    Returns:
+        int | None: Parsed integer, or `None` when absent or malformed.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
