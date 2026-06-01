@@ -14,9 +14,10 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
 )
-from anomalog.parsers.structured.openstack import (
-    _normalise_openstack_message,
-    _parse_openstack_labelled_row,
+from anomalog.sources.openstack import (
+    extract_openstack_parameters,
+    normalise_openstack_message,
+    parse_openstack_payload,
 )
 
 UTC = timezone.utc
@@ -439,6 +440,61 @@ class AITADSParser(StructuredParser):
 
 
 @dataclass(frozen=True, slots=True)
+class _OpenStackLabelledRow:
+    """Parsed labelled OpenStack row used by the DeepLog parser.
+
+    Attributes:
+        split_name (str): Split prefix attached to the row in the preprocessed
+            stream.
+        label (int): Inline anomaly label from the labelled OpenStack stream.
+        timestamp_unix_ms (int): Parsed event timestamp in Unix milliseconds.
+        instance_id (str): Instance identifier extracted from the payload.
+        content (str): Raw message body after removing the OpenStack envelope.
+        raw_parameters (list[str]): Numeric payload tokens preserved for
+            parameter-aware downstream stages.
+    """
+
+    split_name: str
+    label: int
+    timestamp_unix_ms: int
+    instance_id: str
+    content: str
+    raw_parameters: list[str]
+
+
+def _parse_openstack_labelled_row(
+    raw_line: str,
+) -> _OpenStackLabelledRow | None:
+    """Parse a labelled OpenStack row into its canonical fields.
+
+    Args:
+        raw_line (str): Raw labelled OpenStack line from the preprocessed
+            stream.
+
+    Returns:
+        _OpenStackLabelledRow | None: Parsed row data, or `None` when the row
+            is malformed.
+    """
+    if "\t" not in raw_line:
+        return None
+    split_name, label_text, raw_payload = raw_line.rstrip("\n").split("\t", 2)
+    if label_text not in {"0", "1"}:
+        return None
+
+    parsed = parse_openstack_payload(raw_payload)
+    if parsed is None:
+        return None
+    return _OpenStackLabelledRow(
+        split_name=split_name.strip(),
+        label=int(label_text),
+        timestamp_unix_ms=parsed.timestamp_unix_ms,
+        instance_id=parsed.instance_id,
+        content=parsed.content,
+        raw_parameters=extract_openstack_parameters(parsed.content or ""),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class OpenStackDeepLogParser(StructuredParser):
     r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
 
@@ -472,7 +528,7 @@ class OpenStackDeepLogParser(StructuredParser):
         return StructuredLine(
             timestamp_unix_ms=parsed.timestamp_unix_ms,
             entity_id=entity_id,
-            untemplated_message_text=_normalise_openstack_message(
+            untemplated_message_text=normalise_openstack_message(
                 parsed.content,
                 preserve_numeric_values=False,
             ),
