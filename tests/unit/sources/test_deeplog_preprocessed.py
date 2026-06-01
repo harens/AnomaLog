@@ -29,7 +29,25 @@ _OPENSTACK_EXTRACT_INSTANCE_ID = vars(openstack_source)[
 ]
 _OPENSTACK_MULTIPLY_BUILD_SECONDS = vars(openstack_source)["_multiply_build_seconds"]
 _OPENSTACK_PARAMETER_EVENT = vars(openstack_source)["_OpenStackParameterEvent"]
+_OPENSTACK_PARAMETER_INSTANCE = vars(openstack_source)["_OpenStackParameterInstance"]
 _OPENSTACK_REBUILD_LINE = vars(openstack_source)["_rebuild_openstack_line"]
+_OPENSTACK_NORMALISE_PATH_TOKENS = vars(openstack_source)[
+    "_normalise_openstack_path_tokens"
+]
+_OPENSTACK_PARSE_PARAMETER_LINE = vars(openstack_source)[
+    "_parse_openstack_parameter_line"
+]
+_OPENSTACK_RESOLVE_ANOMALY_INDEX = vars(openstack_source)[
+    "_resolve_anomaly_instance_index"
+]
+_OPENSTACK_RESOLVE_ANOMALY_INDEXES = vars(openstack_source)[
+    "_resolve_anomaly_instance_indexes"
+]
+_OPENSTACK_SPLIT_NAME_FOR_INSTANCE = vars(openstack_source)["_split_name_for_instance"]
+_OPENSTACK_FIND_SOURCE_FILE = vars(openstack_source)["_find_source_file"]
+_OPENSTACK_LOAD_INSTANCES = vars(openstack_source)[
+    "_load_openstack_parameter_instances"
+]
 _OPENSTACK_DATETIME_WITH_MICROS_MS = 1_577_836_830_123
 _OPENSTACK_DATETIME_SECONDS_ONLY_MS = 1_577_836_830_000
 
@@ -560,6 +578,154 @@ def test_openstack_parameter_helpers_cover_rebuild_and_duration_scaling() -> Non
     )
 
 
+def test_openstack_helper_branches_cover_path_normalisation_and_index_resolution(
+    tmp_path: Path,
+) -> None:
+    """OpenStack helper branches should handle suffixes, lookups, and failures.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
+    assert (
+        _OPENSTACK_NORMALISE_PATH_TOKENS(
+            "/root/123/550e8400-e29b-41d4-a716-446655440000/10.0.0.1/abc123def4567890",
+            preserve_numeric_values=False,
+        )
+        == "/root/NUM/UUID/IP/HEX"
+    )
+    assert (
+        _OPENSTACK_NORMALISE_PATH_TOKENS(
+            "/root/123/550e8400-e29b-41d4-a716-446655440000/10.0.0.1/abc123def4567890",
+            preserve_numeric_values=True,
+        )
+        == "/root/123/UUID/IP/HEX"
+    )
+    assert _OPENSTACK_PARSE_PARAMETER_LINE("not an openstack row") is None
+    assert (
+        _OPENSTACK_SPLIT_NAME_FOR_INSTANCE(
+            instance_index=0,
+            train_instances=1,
+            validation_instances=1,
+        )
+        == "openstack_train"
+    )
+    assert (
+        _OPENSTACK_SPLIT_NAME_FOR_INSTANCE(
+            instance_index=1,
+            train_instances=1,
+            validation_instances=1,
+        )
+        == "openstack_validation"
+    )
+    assert (
+        _OPENSTACK_SPLIT_NAME_FOR_INSTANCE(
+            instance_index=2,
+            train_instances=1,
+            validation_instances=1,
+        )
+        == "openstack_test"
+    )
+
+    parameter_line = _openstack_parameter_line(
+        0,
+        instance_id="instance-a",
+        content="Build complete",
+    )
+    parsed = _OPENSTACK_PARSE_PARAMETER_LINE(parameter_line)
+    assert parsed is not None
+    assert parsed[0] == "instance-a"
+
+    instances = [
+        _OPENSTACK_PARAMETER_INSTANCE(
+            instance_id="instance-a",
+            timestamp_ms=1,
+            events=(
+                _OPENSTACK_PARAMETER_EVENT(
+                    raw_payload=parameter_line,
+                    timestamp_ms=1,
+                    content="Build complete",
+                ),
+            ),
+        ),
+        _OPENSTACK_PARAMETER_INSTANCE(
+            instance_id="instance-b",
+            timestamp_ms=2,
+            events=(
+                _OPENSTACK_PARAMETER_EVENT(
+                    raw_payload=parameter_line,
+                    timestamp_ms=2,
+                    content="Other event",
+                ),
+            ),
+        ),
+    ]
+    assert (
+        _OPENSTACK_RESOLVE_ANOMALY_INDEX(
+            instances,
+            start_index=0,
+            offset=0,
+            target_template="Build complete",
+        )
+        == 0
+    )
+    with pytest.raises(ValueError, match="Could not find a held-out OpenStack"):
+        _OPENSTACK_RESOLVE_ANOMALY_INDEX(
+            instances,
+            start_index=1,
+            offset=0,
+            target_template="missing",
+        )
+    with pytest.raises(ValueError, match="Expected two distinct OpenStack"):
+        _OPENSTACK_RESOLVE_ANOMALY_INDEXES(
+            instances,
+            start_index=0,
+            offsets=(0, 0),
+            target_template="Build complete",
+        )
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "nested").mkdir()
+    nested_file = source_root / "nested" / "openstack_normal1.log"
+    nested_file.write_text("bad row\n", encoding="utf-8")
+    assert _OPENSTACK_FIND_SOURCE_FILE(source_root, "openstack_normal1.log") == (
+        nested_file
+    )
+    assert _OPENSTACK_FIND_SOURCE_FILE(source_root, "missing.log") is None
+
+
+def test_openstack_parameter_instance_loading_skips_bad_rows_and_validates_input(
+    tmp_path: Path,
+) -> None:
+    """OpenStack parameter loading should reject missing files and bad inputs.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "openstack_normal1.log").write_text(
+        "bad row\n"
+        + _openstack_parameter_line(
+            0,
+            instance_id="instance-a",
+            content="Build complete",
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "openstack_normal2.log").write_text("", encoding="utf-8")
+
+    instances = _OPENSTACK_LOAD_INSTANCES(source_root=source_root)
+    assert len(instances) == 1
+    assert instances[0].instance_id == "instance-a"
+
+    with pytest.raises(FileNotFoundError, match=r"Missing openstack_normal1\.log"):
+        _OPENSTACK_LOAD_INSTANCES(source_root=tmp_path / "missing")
+
+
 def test_materialise_openstack_deeplog_parameter_ci_subset_requires_duration_template(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -634,6 +800,68 @@ def test_materialise_openstack_deeplog_parameter_ci_subset_requires_duration_tem
     with pytest.raises(
         ValueError,
         match="Could not find the build-duration template on held-out OpenStack",
+    ):
+        openstack_source.materialise_openstack_deeplog_parameter_ci_subset(
+            source_root,
+            raw_logs_path,
+        )
+
+
+def test_materialise_openstack_deeplog_parameter_ci_subset_validates_instance_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenStack Figure 9 materialisation should reject impossible instance counts.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to adjust the
+            OpenStack fixture size.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "openstack_normal1.log").write_text("", encoding="utf-8")
+    (source_root / "openstack_normal2.log").write_text("", encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "openstack_parameter_subset.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_TRAIN_INSTANCES",
+        0,
+    )
+    with pytest.raises(ValueError, match="train_instances must be positive"):
+        openstack_source.materialise_openstack_deeplog_parameter_ci_subset(
+            source_root,
+            raw_logs_path,
+        )
+
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_TRAIN_INSTANCES",
+        1,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_VALIDATION_INSTANCES",
+        1,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_SUBSET_INSTANCES",
+        4,
+    )
+    monkeypatch.setattr(
+        openstack_source,
+        "_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS",
+        (1, 2),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Expected at least 5 normal OpenStack instances",
     ):
         openstack_source.materialise_openstack_deeplog_parameter_ci_subset(
             source_root,

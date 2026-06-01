@@ -1,7 +1,10 @@
 """Tests for concrete structured parsers."""
 
+import re
+
 import pytest
 
+from anomalog.parsers.structured import parsers as structured_parsers
 from anomalog.parsers.structured import (
     resolve_structured_parser,
     structured_parser_names,
@@ -17,6 +20,12 @@ from anomalog.parsers.structured.parsers import (
     OpenStackDeepLogParser,
     ThunderbirdParser,
 )
+
+_PARSE_OPENSTACK_LABELLED_ROW = vars(structured_parsers)[
+    "_parse_openstack_labelled_row"
+]
+_COERCE_OPTIONAL_INT = vars(structured_parsers)["_coerce_optional_int"]
+_COERCE_OPTIONAL_INT_EXPECTED = 12
 
 HDFS_SAMPLE_TS_MS = 1_226_262_918_000
 BGL_FALLBACK_TS_MS = 1_117_838_570_000
@@ -42,6 +51,17 @@ def test_hdfs_parser_returns_none_for_unparseable_lines() -> None:
     assert HDFSV1Parser().parse_line("not a real hdfs line") is None
 
 
+def test_hdfs_parser_keeps_timestamp_none_when_header_timestamp_is_invalid() -> None:
+    """HDFSV1Parser should continue parsing when the timestamp field is bad."""
+    parsed = HDFSV1Parser().parse_line(
+        "081109 999999 143 INFO dfs.NameNode: Completed checkpoint successfully",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms is None
+    assert parsed.entity_id == "dfs.NameNode"
+
+
 def test_bgl_parser_falls_back_to_epoch_seconds_when_hires_timestamp_is_invalid() -> (
     None
 ):
@@ -55,6 +75,45 @@ def test_bgl_parser_falls_back_to_epoch_seconds_when_hires_timestamp_is_invalid(
     assert parsed is not None
     assert parsed.timestamp_unix_ms == BGL_FALLBACK_TS_MS
     assert parsed.anomalous == 1
+
+
+def test_bgl_parser_keeps_row_when_epoch_fallback_is_unparseable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BGLParser should preserve the row even when the epoch fallback fails.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the BGL regex so the epoch
+            fallback branch can be exercised deterministically.
+    """
+    monkeypatch.setattr(
+        BGLParser,
+        "_BGL_RE",
+        re.compile(
+            r"""
+            ^\s*
+            (?P<dash>-)?\s*
+            (?:(?P<prefix>\d+:\S+)\s+)?(?:\S+\s+)?
+            (?P<epoch>\S+)\s+
+            (?P<date>\d{4}\.\d{2}\.\d{2})\s+
+            (?P<entity>\S+)\s+
+            (?P<hires_ts>\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.\d+)\s+
+            (?P<entity2>\S+)\s+
+            (?P<tail>\S+\s+\S+\s+\S+.*)
+            \s*$
+            """,
+            re.VERBOSE,
+        ),
+    )
+
+    parsed = BGLParser().parse_line(
+        "not-an-epoch 2005.06.03 R02-M1-N0-C:J12-U11 "
+        "2005-99-03-15.42.50.363779 R02-M1-N0-C:J12-U11 "
+        "RAS KERNEL INFO cache parity corrected",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms is None
 
 
 def test_structured_parser_registry_resolves_builtins() -> None:
@@ -183,6 +242,25 @@ def test_openstack_deeplog_parser_skips_rows_with_invalid_timestamps() -> None:
         )
         is None
     )
+
+
+def test_openstack_deeplog_parser_skips_rows_with_invalid_label_or_payload() -> None:
+    """Malformed labelled OpenStack rows should be rejected early."""
+    assert _PARSE_OPENSTACK_LABELLED_ROW("missing tabs") is None
+    assert (
+        _PARSE_OPENSTACK_LABELLED_ROW(
+            "openstack_train\t2\t100 2017-01-01 00:00:30.000 1 INFO nova.compute "
+            "[instance: vm-alpha] Build complete",
+        )
+        is None
+    )
+
+
+def test_coerce_optional_int_handles_non_numeric_values() -> None:
+    """Optional integer coercion should accept ints and reject bad payloads."""
+    assert _COERCE_OPTIONAL_INT(None) is None
+    assert _COERCE_OPTIONAL_INT("12") == _COERCE_OPTIONAL_INT_EXPECTED
+    assert _COERCE_OPTIONAL_INT("bad") is None
 
 
 @pytest.mark.parametrize(

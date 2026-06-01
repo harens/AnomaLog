@@ -297,6 +297,42 @@ def test_materialize_reruns_function_when_prefect_cached_result_is_stale_in_grou
     assert output_path.read_text(encoding="utf-8") == "hello"
 
 
+def test_materialize_propagates_non_stale_cache_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialize should only recover from the specific stale-cache failure.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that emits a non-stale failure.
+    """
+    error_message = "different failure"
+
+    def _raise_other_error(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                raise RuntimeError(error_message)
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr("anomalog.cache.core._prefect_materialize", _raise_other_error)
+
+    @materialize(output_path)
+    def _build() -> str:
+        return "rebuilt"
+
+    with disable_run_logger(), pytest.raises(RuntimeError, match=error_message):
+        _build()
+
+
 def test_materialize_and_task_use_shared_result_storage_base(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -363,6 +399,48 @@ def test_cache_paths_config_uses_cluster_root_overrides(
     assert cache_paths.cache_root == tmp_path / "cache"
 
 
+def test_clear_dataset_cache_removes_file_and_directory_roots(
+    tmp_path: Path,
+) -> None:
+    """Dataset cache cleanup should unlink files and remove directories.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache roots.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+    file_root = cache_paths.data_root / "demo"
+    dir_root = cache_paths.cache_root / "demo"
+    file_root.parent.mkdir(parents=True, exist_ok=True)
+    file_root.write_text("demo", encoding="utf-8")
+    dir_root.mkdir(parents=True, exist_ok=True)
+    (dir_root / "artifact.txt").write_text("demo", encoding="utf-8")
+
+    cache_core.clear_dataset_cache("demo", cache_paths=cache_paths)
+
+    assert not file_root.exists()
+    assert not dir_root.exists()
+
+
+def test_clear_dataset_cache_rejects_empty_dataset_name(
+    tmp_path: Path,
+) -> None:
+    """Cache cleanup should reject empty dataset names.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache roots.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+
+    with pytest.raises(ValueError, match="non-empty dataset name"):
+        cache_core.clear_dataset_cache("", cache_paths=cache_paths)
+
+
 def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> None:
     """Result storage moves should force Prefect to miss stale cached states.
 
@@ -380,6 +458,18 @@ def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> No
     assert first_key is not None
     assert second_key is not None
     assert first_key != second_key
+
+
+def test_is_stale_materialize_cache_error_recurses_through_context_and_cause() -> None:
+    """Stale-cache detection should follow chained exceptions."""
+    is_stale = vars(cache_core)["_is_stale_materialize_cache_error"]
+
+    cause = RuntimeError("Provided path /old/storage is outside of the base path")
+    context = RuntimeError("wrapped")
+    context.__cause__ = cause
+
+    assert is_stale(context) is True
+    assert is_stale(RuntimeError("different failure")) is False
 
 
 def test_resolve_result_storage_basepath_prefers_explicit_basepath(

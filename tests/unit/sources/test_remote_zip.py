@@ -15,6 +15,7 @@ from anomalog.sources.remote_zip import RemoteZipSource
 
 _REMOTE_ZIP_ARCHIVE_IS_TARBALL = vars(RemoteZipSource)["_archive_is_tarball"]
 _REMOTE_ZIP_VALIDATE_REMOTE_URL = vars(RemoteZipSource)["_validate_remote_url"]
+_REMOTE_ZIP_DOWNLOAD_DATASET = vars(RemoteZipSource)["_download_dataset"]
 
 
 def test_remote_zip_source_materialise_short_circuits_existing_directory(
@@ -237,10 +238,7 @@ def test_remote_zip_source_download_cleans_up_partial_archive_on_http_error(
     monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
 
     with disable_run_logger(), pytest.raises(HTTPError):
-        source._download_dataset(  # noqa: SLF001 - direct regression coverage
-            zip_path,
-            progress_factory=Progress,
-        )
+        _REMOTE_ZIP_DOWNLOAD_DATASET(source, zip_path, progress_factory=Progress)
 
     assert not zip_path.exists()
     assert not zip_path.with_name(f"{zip_path.name}.part").exists()
@@ -313,3 +311,113 @@ def test_remote_zip_source_rejects_missing_resolved_raw_log(
 
     with pytest.raises(FileNotFoundError):
         source.raw_logs_path(dataset_name="demo", dataset_root=dataset_root)
+
+
+def test_remote_zip_source_warns_and_retries_on_service_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTP 503 failures should be treated as retryable download failures.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network helpers so the
+            retryable failure path can be exercised deterministically.
+    """
+    dst_dir = tmp_path / "dataset"
+    zip_path = dst_dir.with_suffix(".zip")
+    source = RemoteZipSource(url="https://example.com/data.zip")
+
+    def _fake_urlretrieve(
+        _url: str,
+        target: Path,
+        reporthook: Callable[[int, int, int], None] | None = None,
+    ) -> None:
+        del reporthook
+        target.write_text("partial-zip-bytes", encoding="utf-8")
+        headers = Message()
+        raise HTTPError(
+            url=source.url,
+            code=503,
+            msg="Service Unavailable",
+            hdrs=headers,
+            fp=None,
+        )
+
+    monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
+
+    with disable_run_logger(), pytest.raises(HTTPError):
+        _REMOTE_ZIP_DOWNLOAD_DATASET(source, zip_path, progress_factory=Progress)
+
+    assert not zip_path.exists()
+    assert not zip_path.with_name(f"{zip_path.name}.part").exists()
+
+
+def test_remote_zip_source_cleans_up_on_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interrupted downloads should not leave partial archives behind.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network helpers so the
+            cancellation path can be exercised deterministically.
+    """
+    dst_dir = tmp_path / "dataset"
+    zip_path = dst_dir.with_suffix(".zip")
+    source = RemoteZipSource(url="https://example.com/data.zip")
+
+    def _fake_urlretrieve(
+        _url: str,
+        target: Path,
+        reporthook: Callable[[int, int, int], None] | None = None,
+    ) -> None:
+        del reporthook
+        target.write_text("partial-zip-bytes", encoding="utf-8")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
+
+    with disable_run_logger(), pytest.raises(KeyboardInterrupt):
+        _REMOTE_ZIP_DOWNLOAD_DATASET(source, zip_path, progress_factory=Progress)
+
+    assert not zip_path.exists()
+    assert not zip_path.with_name(f"{zip_path.name}.part").exists()
+
+
+def test_remote_zip_source_cleans_up_on_archive_promotion_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed archive promotion should remove the temporary download.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network helpers so the
+            promotion-failure path can be exercised deterministically.
+    """
+    dst_dir = tmp_path / "dataset"
+    zip_path = dst_dir.with_suffix(".zip")
+    source = RemoteZipSource(url="https://example.com/data.zip")
+
+    def _fake_urlretrieve(
+        _url: str,
+        target: Path,
+        reporthook: Callable[[int, int, int], None] | None = None,
+    ) -> None:
+        del reporthook
+        target.write_text("zip-bytes", encoding="utf-8")
+
+    monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr(
+        Path,
+        "replace",
+        lambda _self, _target: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with disable_run_logger(), pytest.raises(OSError, match="replace failed"):
+        _REMOTE_ZIP_DOWNLOAD_DATASET(source, zip_path, progress_factory=Progress)
+
+    assert not zip_path.exists()
+    assert not zip_path.with_name(f"{zip_path.name}.part").exists()
