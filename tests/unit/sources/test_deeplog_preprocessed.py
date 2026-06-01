@@ -11,12 +11,27 @@ from anomalog.sources import PostProcessedSource
 from anomalog.sources import openstack as openstack_source
 from anomalog.sources.contracts import DatasetSource
 from anomalog.sources.deeplog_preprocessed import (
+    FileBoundarySplitProvenance,
+    NormalOnlySessionPrefixProvenance,
+    build_labelled_raw_file_boundary_provenance,
+    build_normal_only_session_prefix_provenance,
+    build_session_file_boundary_provenance,
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
 )
-from anomalog.sources.openstack import (
-    materialise_openstack_deeplog_parameter_ci_subset,
-)
+from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
+
+_OPENSTACK_DATETIME_TO_UNIX_MS = vars(openstack_source)[
+    "_openstack_datetime_to_unix_ms"
+]
+_OPENSTACK_EXTRACT_INSTANCE_ID = vars(openstack_source)[
+    "_extract_openstack_instance_id"
+]
+_OPENSTACK_MULTIPLY_BUILD_SECONDS = vars(openstack_source)["_multiply_build_seconds"]
+_OPENSTACK_PARAMETER_EVENT = vars(openstack_source)["_OpenStackParameterEvent"]
+_OPENSTACK_REBUILD_LINE = vars(openstack_source)["_rebuild_openstack_line"]
+_OPENSTACK_DATETIME_WITH_MICROS_MS = 1_577_836_830_123
+_OPENSTACK_DATETIME_SECONDS_ONLY_MS = 1_577_836_830_000
 
 
 def test_post_processed_source_invokes_keyword_only_post_processor(
@@ -129,6 +144,171 @@ def test_materialise_labelled_raw_stream_preserves_split_order_and_labels(
         "openstack_test_normal\t0\tn2 line 1\n"
         "openstack_test_abnormal\t1\tab line 1\n"
     )
+
+
+def test_post_processed_source_reports_known_split_provenance(
+    tmp_path: Path,
+) -> None:
+    """Recognised post-processors should surface their split provenance.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    labelled_raw_source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=partial(
+            materialise_labelled_raw_stream,
+            split_files=(
+                ("train.log", "train", 0),
+                ("normal.log", "test_normal", 0),
+                ("abnormal.log", "test_abnormal", 1),
+            ),
+        ),
+    )
+    assert labelled_raw_source.split_provenance == FileBoundarySplitProvenance(
+        split_source="predefined_file_boundary",
+        train_source_files=("train.log",),
+        test_normal_source_files=("normal.log",),
+        test_anomalous_source_files=("abnormal.log",),
+    )
+
+    labelled_session_source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=partial(
+            materialise_labelled_session_stream,
+            split_files=(
+                ("train.log", 0),
+                ("normal.log", 0),
+                ("abnormal.log", 1),
+            ),
+        ),
+    )
+    assert labelled_session_source.split_provenance == FileBoundarySplitProvenance(
+        split_source="predefined_file_boundary",
+        train_source_files=("train.log",),
+        test_normal_source_files=("normal.log",),
+        test_anomalous_source_files=("abnormal.log",),
+    )
+
+    normal_only_source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=partial(
+            materialise_labelled_session_stream,
+            split_files=(("train.log", 0),),
+            excluded_source_files=("normal.log",),
+            excluded_anomalous_source_files=("abnormal.log",),
+        ),
+    )
+    assert normal_only_source.split_provenance == NormalOnlySessionPrefixProvenance(
+        split_source="normal_only_event_prefix",
+        included_source_files=("train.log",),
+        excluded_source_files=("normal.log",),
+        excluded_anomalous_source_files=("abnormal.log",),
+    )
+
+    unrelated_source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=lambda _source_root, _raw_logs_path: None,
+    )
+    assert unrelated_source.split_provenance is None
+
+
+def test_post_processed_source_materialise_reports_missing_output_file(
+    tmp_path: Path,
+) -> None:
+    """Post-processing should fail if the derived raw log was not written.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=lambda _source_root, _raw_logs_path: None,
+        raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
+    )
+
+    with pytest.raises(FileNotFoundError, match=r"preprocessed/hdfs_events\.log"):
+        source.materialise(dst_dir=tmp_path / "dataset")
+
+
+def test_post_processed_source_materialise_uses_default_raw_log_name(
+    tmp_path: Path,
+) -> None:
+    """Sources without an explicit raw-log path should use `<dataset>.log`.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    def _write_default_raw_log(dataset_root: Path, raw_logs_path: Path) -> None:
+        assert raw_logs_path == dataset_root / "dataset.log"
+        raw_logs_path.write_text("hello\n", encoding="utf-8")
+
+    source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=_write_default_raw_log,
+    )
+
+    dataset_root = source.materialise(dst_dir=tmp_path / "dataset")
+
+    assert dataset_root == source_root
+    assert (source_root / "dataset.log").read_text(encoding="utf-8") == "hello\n"
+
+
+@pytest.mark.parametrize(
+    ("raw_logs_relpath", "expected"),
+    [
+        (Path("outside.log").resolve(), "must be relative to the dataset root"),
+        (Path("../outside.log"), "must stay within the dataset root"),
+    ],
+)
+def test_post_processed_source_rejects_invalid_raw_log_paths(
+    tmp_path: Path,
+    raw_logs_relpath: Path,
+    expected: str,
+) -> None:
+    """Derived raw-log paths should stay inside the materialised dataset root.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree.
+        raw_logs_relpath (Path): Invalid raw-log path under test.
+        expected (str): Expected validation message for the invalid path.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=lambda _source_root, _raw_logs_path: None,
+        raw_logs_relpath=raw_logs_relpath,
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        source.materialise(dst_dir=tmp_path / "dataset")
+
+
+def test_build_provenance_helpers_reject_incomplete_split_specs() -> None:
+    """Split provenance builders should validate the expected split arity."""
+    with pytest.raises(ValueError, match="three source files"):
+        build_session_file_boundary_provenance((("train.log", 0),))
+    with pytest.raises(ValueError, match="at least one source file"):
+        build_normal_only_session_prefix_provenance(
+            (),
+            excluded_source_files=(),
+            excluded_anomalous_source_files=(),
+        )
+    with pytest.raises(ValueError, match="three source files"):
+        build_labelled_raw_file_boundary_provenance((("train.log", "train", 0),))
 
 
 def test_materialise_openstack_deeplog_parameter_ci_subset_injects_two_shared_points(
@@ -263,6 +443,121 @@ def test_parse_openstack_payload_accepts_for_instance_syntax() -> None:
     assert parsed.instance_id == "vm-alpha"
     assert parsed.content == "Build complete for instance vm-alpha"
     assert parsed.raw_parameters == []
+
+
+def test_openstack_helpers_cover_timestamp_and_message_edge_cases() -> None:
+    """OpenStack helpers should handle alternate timestamps and path tokens."""
+    assert (
+        _OPENSTACK_DATETIME_TO_UNIX_MS(
+            "2020-01-01",
+            "00:00:30.123456",
+        )
+        == _OPENSTACK_DATETIME_WITH_MICROS_MS
+    )
+    assert (
+        _OPENSTACK_DATETIME_TO_UNIX_MS(
+            "2020-01-01",
+            "00:00:30",
+        )
+        == _OPENSTACK_DATETIME_SECONDS_ONLY_MS
+    )
+    assert (
+        _OPENSTACK_DATETIME_TO_UNIX_MS(
+            "2020-99-01",
+            "00:00:30",
+        )
+        is None
+    )
+    assert (
+        _OPENSTACK_EXTRACT_INSTANCE_ID(
+            "[instance: vm-alpha] build complete",
+        )
+        == "vm-alpha"
+    )
+    assert (
+        _OPENSTACK_EXTRACT_INSTANCE_ID(
+            "build complete without an instance id",
+        )
+        is None
+    )
+    assert (
+        openstack_source.normalise_openstack_message(
+            "[instance: vm-0001] "
+            "/var/lib/nova/instances/_base/"
+            "a489c868f0c37da93b76227c91bb03908ac0e742 "
+            "10.0.0.1 /tmp/42/cache, 2048",
+            preserve_numeric_values=False,
+        )
+        == "INSTANCE_PATH IP /tmp/NUM/cache, NUM"
+    )
+    assert (
+        openstack_source.normalise_openstack_message(
+            "[instance: vm-0001] "
+            "/var/lib/nova/instances/_base/"
+            "a489c868f0c37da93b76227c91bb03908ac0e742 "
+            "10.0.0.1 /tmp/42/cache, 2048",
+            preserve_numeric_values=True,
+        )
+        == "INSTANCE_PATH IP /tmp/42/cache, 2048"
+    )
+
+
+def test_parse_openstack_payload_rejects_invalid_timestamp_and_missing_instance() -> (
+    None
+):
+    """OpenStack payload parsing should reject malformed or unscoped rows."""
+    assert (
+        openstack_source.parse_openstack_payload(
+            "nova.compute 2017-99-01 00:00:30.000 1 INFO nova.compute "
+            "[instance: vm-alpha] Build complete",
+        )
+        is None
+    )
+    assert (
+        openstack_source.parse_openstack_payload(
+            "nova.compute 2017-01-01 00:00:30.000 1 INFO nova.compute "
+            "[addr] Build complete",
+        )
+        is None
+    )
+
+
+def test_openstack_parameter_helpers_cover_rebuild_and_duration_scaling() -> None:
+    """OpenStack parameter helpers should keep fallbacks and scaling stable."""
+    event = _OPENSTACK_PARAMETER_EVENT(
+        raw_payload="not-an-openstack-row",
+        timestamp_ms=123,
+        content="Took 1.5 seconds to build instance.",
+    )
+    assert (
+        _OPENSTACK_REBUILD_LINE(
+            event,
+            timestamp_ms=456,
+            content="Took 3 seconds to build instance.",
+        )
+        == "not-an-openstack-row"
+    )
+    assert (
+        _OPENSTACK_MULTIPLY_BUILD_SECONDS(
+            "[instance: vm-alpha] Took 1.5 seconds to build instance.",
+            2.0,
+        )
+        == "[instance: vm-alpha] Took 3 seconds to build instance."
+    )
+    assert (
+        _OPENSTACK_MULTIPLY_BUILD_SECONDS(
+            "Took 1 seconds to build instance.",
+            2.0,
+        )
+        == "Took 2 seconds to build instance."
+    )
+    assert (
+        _OPENSTACK_MULTIPLY_BUILD_SECONDS(
+            "unrelated",
+            2.0,
+        )
+        == "unrelated"
+    )
 
 
 def test_materialise_openstack_deeplog_parameter_ci_subset_requires_duration_template(

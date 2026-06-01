@@ -54,6 +54,11 @@ class _MissingUrlAsset(Asset):
     url: str | None = None
 
 
+@dataclass(frozen=True)
+class _BasepathResultStorage:
+    basepath: str | Path | None
+
+
 def _skip_materialize(*_args: object, **_kwargs: object) -> MaterializeDecorator:
     def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
         def _skip() -> str:
@@ -375,6 +380,23 @@ def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> No
     assert first_key is not None
     assert second_key is not None
     assert first_key != second_key
+
+
+def test_resolve_result_storage_basepath_prefers_explicit_basepath(
+    tmp_path: Path,
+) -> None:
+    """Result-storage objects with a basepath should resolve that path directly.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox used to fabricate the
+            storage base path.
+    """
+    resolve_result_storage_basepath = vars(cache_core)[
+        "_resolve_result_storage_basepath"
+    ]
+    storage = _BasepathResultStorage(basepath=tmp_path / "storage")
+
+    assert resolve_result_storage_basepath(storage) == (tmp_path / "storage").resolve()
 
 
 def test_dataset_build_lock_path_changes_with_cache_namespace(tmp_path: Path) -> None:

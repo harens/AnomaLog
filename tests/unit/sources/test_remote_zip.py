@@ -13,6 +13,9 @@ from rich.progress import Progress
 
 from anomalog.sources.remote_zip import RemoteZipSource
 
+_REMOTE_ZIP_ARCHIVE_IS_TARBALL = vars(RemoteZipSource)["_archive_is_tarball"]
+_REMOTE_ZIP_VALIDATE_REMOTE_URL = vars(RemoteZipSource)["_validate_remote_url"]
+
 
 def test_remote_zip_source_materialise_short_circuits_existing_directory(
     tmp_path: Path,
@@ -50,6 +53,21 @@ def test_remote_zip_source_materialise_short_circuits_existing_directory(
     assert source.raw_logs_path(dataset_name="demo", dataset_root=dataset_root) == (
         dst_dir / "demo.log"
     )
+
+
+def test_remote_zip_source_validates_remote_urls_and_tarball_suffix() -> None:
+    """Remote ZIP sources should reject unsupported URLs and detect tarballs."""
+    zip_source = RemoteZipSource(url="https://example.com/data.zip")
+    tar_source = RemoteZipSource(url="https://example.com/OpenStack.tar.gz")
+
+    assert _REMOTE_ZIP_ARCHIVE_IS_TARBALL(zip_source) is False
+    assert _REMOTE_ZIP_ARCHIVE_IS_TARBALL(tar_source) is True
+
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        _REMOTE_ZIP_VALIDATE_REMOTE_URL("ftp://example.com/data.zip")
+
+    with pytest.raises(ValueError, match="URL must be absolute"):
+        _REMOTE_ZIP_VALIDATE_REMOTE_URL("https:///data.zip")
 
 
 def test_remote_zip_source_materialise_downloads_and_extracts_archive(
