@@ -349,6 +349,21 @@ def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
     assert parser.analyse_line("not a thunderbird line") == (None, "malformed")
 
 
+def test_thunderbird_parser_logs_malformed_rows(caplog: pytest.LogCaptureFixture) -> None:
+    """ThunderbirdParser should warn when malformed rows are skipped."""
+    parser = ThunderbirdParser()
+
+    with caplog.at_level("WARNING"):
+        assert parser.parse_line("not a thunderbird line") is None
+
+    assert "Cannot parse Thunderbird line (malformed)" in caplog.text
+
+
+def test_thunderbird_timestamp_coercion_rejects_bad_values() -> None:
+    """Thunderbird timestamps should fall back to `None` when malformed."""
+    assert ThunderbirdParser._timestamp_seconds_to_unix_ms("not-an-int") is None
+
+
 def test_thunderbird_parser_skips_empty_message_lines_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -410,6 +425,21 @@ def test_ait_ads_parser_coerces_invalid_numeric_fields_to_none() -> None:
     assert parsed.untemplated_message_text == (
         "aminer|type=NewMatchPathDetector|key=nmpd"
     )
+
+
+def test_ait_ads_parser_rejects_blank_and_malformed_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AIT-ADS parser should skip blank, non-object, and incomplete rows."""
+    parser = AITADSParser()
+
+    with caplog.at_level("WARNING"):
+        assert parser.parse_line("   ") is None
+        assert parser.parse_line("not-json") is None
+        assert parser.parse_line("1") is None
+        assert parser.parse_line('{"entity_id":"demo"}') is None
+
+    assert "template_key" in caplog.text
 
 
 def test_structured_parser_registry_rejects_unknown_names() -> None:

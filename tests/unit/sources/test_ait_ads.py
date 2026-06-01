@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
+from anomalog.sources import ait_ads as ait_ads_source
 from anomalog.sources.ait_ads import (
     AITADSScenarioSource,
     load_ait_ads_label_windows,
@@ -528,3 +532,197 @@ def test_ait_ads_source_uses_local_dir_sources_for_tests(tmp_path: Path) -> None
         dataset_root=materialised_root,
     )
     assert raw_logs_path.exists()
+
+
+def test_ait_ads_source_validates_label_download_and_raw_log_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AIT-ADS sources should validate label downloads and derived paths."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "fox_aminer.json").write_text(
+        json.dumps(
+            {
+                "AnalysisComponent": {
+                    "AnalysisComponentIdentifier": 3,
+                    "AnalysisComponentType": "NewMatchPathDetector",
+                    "AnalysisComponentName": "AMiner: New event type.",
+                    "Message": "New path(es) detected",
+                    "PersistenceFileName": "nmpd",
+                },
+                "LogData": {
+                    "RawLogData": ["first"],
+                    "Timestamps": [1642410287.0],
+                    "DetectionTimestamp": [1642410287.0],
+                    "LogLinesCount": 1,
+                    "LogResources": ["/var/log/audit/audit.log"],
+                },
+                "AMiner": {"ID": "172.17.129.140"},
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (source_root / "fox_wazuh.json").write_text(
+        json.dumps(
+            {
+                "agent": {"ip": "172.17.131.81", "name": "wazuh-client", "id": "18"},
+                "manager": {"name": "wazuh.manager"},
+                "rule": {
+                    "id": "52507",
+                    "level": 3,
+                    "description": "ClamAV database update",
+                    "groups": ["clamd", "freshclam", "virus", "suricata"],
+                },
+                "decoder": {"name": "freshclam"},
+                "full_log": "line",
+                "input": {"type": "log"},
+                "@timestamp": "2022-01-18T02:39:00.000000Z",
+                "location": "/var/log/suricata/eve.json",
+                "id": "1686147193.86593",
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    source = AITADSScenarioSource(
+        scenario_names=("fox",),
+        base_source=LocalDirSource(path=source_root),
+        labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
+    )
+
+    assert source._derived_raw_logs_path(  # noqa: SLF001
+        dataset_name="demo",
+        dataset_root=source_root,
+    ) == (source_root / "preprocessed" / "ait_ads_alerts.jsonl")
+
+    source_absolute = AITADSScenarioSource(
+        scenario_names=("fox",),
+        base_source=LocalDirSource(path=source_root),
+        raw_logs_relpath=Path("/tmp/outside.jsonl"),
+        labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
+    )
+    with pytest.raises(ValueError, match="must be relative to the dataset root"):
+        source_absolute._derived_raw_logs_path(  # noqa: SLF001
+            dataset_name="demo",
+            dataset_root=source_root,
+        )
+
+    source_with_escape = AITADSScenarioSource(
+        scenario_names=("fox",),
+        base_source=LocalDirSource(path=source_root),
+        raw_logs_relpath=Path("../outside.jsonl"),
+        labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
+    )
+    with pytest.raises(ValueError, match="must stay within the dataset root"):
+        source_with_escape._derived_raw_logs_path(  # noqa: SLF001
+            dataset_name="demo",
+            dataset_root=source_root,
+        )
+
+    downloaded_labels = []
+    labels_csv = (
+        "scenario,attack,start,end\n"
+        "fox,service_stop,1642410286.0,1642410288.0\n"
+    )
+
+    def _fake_urlretrieve(url: str, target: Path) -> None:
+        downloaded_labels.append(url)
+        target.write_text(labels_csv, encoding="utf-8")
+
+    monkeypatch.setattr(ait_ads_source, "urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr(
+        ait_ads_source,
+        "verify_md5",
+        lambda path, checksum: (path, checksum),
+    )
+
+    materialised_root = source.materialise(dst_dir=tmp_path / "dataset")
+    assert materialised_root == source_root
+    assert downloaded_labels == [source.labels_url]
+    assert (source_root / "preprocessed" / "ait_ads_alerts.jsonl").exists()
+
+
+def test_ait_ads_helper_branches_cover_validation_and_canonicalisation(
+    tmp_path: Path,
+) -> None:
+    """AIT-ADS helper branches should stay stable for malformed inputs."""
+    with pytest.raises(ValueError, match="Unsupported AIT-ADS scenarios"):
+        materialise_ait_ads_alert_stream(
+            source_root=tmp_path,
+            labels_path=tmp_path / "labels.csv",
+            raw_logs_path=tmp_path / "out.jsonl",
+            scenarios=("fox", "bogus"),
+        )
+
+    overlap_labels = tmp_path / "overlap.csv"
+    overlap_labels.write_text(
+        (
+            "scenario,attack,start,end\n"
+            "fox,first,0.0,2.0\n"
+            "fox,second,1.0,3.0\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Overlapping label windows"):
+        load_ait_ads_label_windows(overlap_labels)
+
+    with pytest.raises(FileNotFoundError, match="Missing AIT-ADS source file"):
+        ait_ads_source.find_scenario_file(tmp_path, "fox", "aminer")
+
+    assigner = ait_ads_source._IntervalLabelAssigner(())  # noqa: SLF001
+    assert assigner.assign(None) == (0, None)
+
+    blank_source = tmp_path / "fox_aminer.json"
+    blank_source.write_text(
+        "\n"
+        + json.dumps(
+            {
+                "AnalysisComponent": {
+                    "AnalysisComponentIdentifier": 3,
+                    "AnalysisComponentType": "NewMatchPathDetector",
+                    "AnalysisComponentName": "AMiner: New event type.",
+                    "Message": "New path(es) detected",
+                    "PersistenceFileName": "nmpd",
+                },
+                "LogData": {
+                    "RawLogData": ["first"],
+                    "Timestamps": ["not-a-number"],
+                    "DetectionTimestamp": [1642410287.0],
+                    "LogLinesCount": 1,
+                    "LogResources": ["/var/log/audit/audit.log"],
+                },
+                "AMiner": {"ID": "172.17.129.140"},
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    alerts = ait_ads_source.iter_canonical_alerts(
+        scenario="fox",
+        source_name="aminer",
+        source_file=blank_source,
+        assigner=assigner,
+    )
+    assert len(alerts) == 1
+    assert alerts[0].timestamp_unix_ms is None
+    assert ait_ads_source._first_epoch_us_from_list(["bad"]) is None  # noqa: SLF001
+    assert ait_ads_source._parse_iso_timestamp_us("bad") is None  # noqa: SLF001
+    assert (
+        ait_ads_source.classify_wazuh_ids_source(
+            {
+                "location": "/var/log/suricata/eve.json",
+                "rule": {"groups": ["ids", "suricata"]},
+            },
+        )
+        == "suricata"
+    )
+    assert (
+        ait_ads_source.classify_wazuh_ids_source(
+            {"rule": {"groups": ["ids", "suricata"]}},
+        )
+        == "suricata"
+    )

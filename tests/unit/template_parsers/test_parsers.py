@@ -359,6 +359,39 @@ def test_spell_template_parser_requires_optional_dependency(
         SpellTemplateParser(dataset_name="demo").train(lambda: iter(["one"]))
 
 
+def test_spell_template_parser_handles_empty_training_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Spell parser training should tolerate an empty cluster set."""
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.logCluL = []
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    with caplog.at_level("WARNING"):
+        parser.train(lambda: iter(["Build vm-1 complete"]))
+
+    assert "No logs were parsed during training" in caplog.text
+    assert parser.inference("Build vm-2 complete") == ("Build vm-2 complete", [])
+
+
 def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

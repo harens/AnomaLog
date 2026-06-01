@@ -472,6 +472,18 @@ def test_is_stale_materialize_cache_error_recurses_through_context_and_cause() -
     assert is_stale(RuntimeError("different failure")) is False
 
 
+def test_is_stale_materialize_cache_error_handles_context_cycles() -> None:
+    """Stale-cache detection should stop traversing already-seen exceptions."""
+    is_stale = vars(cache_core)["_is_stale_materialize_cache_error"]
+
+    left = RuntimeError("left")
+    right = RuntimeError("right")
+    left.__context__ = right
+    right.__context__ = left
+
+    assert is_stale(left) is False
+
+
 def test_resolve_result_storage_basepath_prefers_explicit_basepath(
     tmp_path: Path,
 ) -> None:

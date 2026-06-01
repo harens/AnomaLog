@@ -204,6 +204,26 @@ def test_remote_zip_source_materialise_downloads_and_extracts_tarball(
     assert not zip_path.exists()
 
 
+def test_remote_zip_source_extracts_real_tarball_members(
+    tmp_path: Path,
+) -> None:
+    """Tarball extraction should unpack real archive members to disk."""
+    archive_path = tmp_path / "OpenStack.tar.gz"
+    extracted_payload = tmp_path / "payload" / "preprocessed" / "demo.log"
+    extracted_payload.parent.mkdir(parents=True, exist_ok=True)
+    extracted_payload.write_text("hello\n", encoding="utf-8")
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(extracted_payload, arcname="preprocessed/demo.log")
+
+    source = RemoteZipSource(url="https://example.com/OpenStack.tar.gz")
+    with disable_run_logger():
+        source._extract_tarball(archive_path)  # noqa: SLF001 - regression coverage
+
+    assert (archive_path.with_suffix("") / "preprocessed/demo.log").read_text(
+        encoding="utf-8",
+    ) == "hello\n"
+
+
 def test_remote_zip_source_download_cleans_up_partial_archive_on_http_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

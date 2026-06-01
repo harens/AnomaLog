@@ -164,6 +164,85 @@ def test_materialise_labelled_raw_stream_preserves_split_order_and_labels(
     )
 
 
+def test_materialise_labelled_session_stream_skips_blank_lines(
+    tmp_path: Path,
+) -> None:
+    """Session materialisation should ignore empty rows in split files."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "train.log").write_text("a b\n\nc\n", encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "events.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    materialise_labelled_session_stream(
+        source_root,
+        raw_logs_path,
+        (("train.log", 0),),
+    )
+
+    assert raw_logs_path.read_text(encoding="utf-8") == (
+        "train.log:0\t0\ta\n"
+        "train.log:0\t0\tb\n"
+        "train.log:1\t0\tc\n"
+    )
+
+
+def test_materialise_labelled_raw_stream_skips_blank_lines(
+    tmp_path: Path,
+) -> None:
+    """Raw materialisation should ignore blank rows while preserving labels."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "train.log").write_text("line one\n\nline two\n", encoding="utf-8")
+
+    raw_logs_path = tmp_path / "preprocessed" / "events.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    materialise_labelled_raw_stream(
+        source_root,
+        raw_logs_path,
+        (("train.log", "train", 0),),
+    )
+
+    assert raw_logs_path.read_text(encoding="utf-8") == (
+        "train\t0\tline one\n"
+        "train\t0\tline two\n"
+    )
+
+
+def test_materialise_labelled_session_stream_rejects_missing_split_files(
+    tmp_path: Path,
+) -> None:
+    """Session materialisation should fail fast when an input split is absent."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    raw_logs_path = tmp_path / "preprocessed" / "events.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(FileNotFoundError, match=r"Missing missing\.log in extracted archive"):
+        materialise_labelled_session_stream(
+            source_root,
+            raw_logs_path,
+            (("missing.log", 0),),
+        )
+
+
+def test_materialise_labelled_raw_stream_rejects_missing_split_files(
+    tmp_path: Path,
+) -> None:
+    """Raw materialisation should fail fast when an input split is absent."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    raw_logs_path = tmp_path / "preprocessed" / "events.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(FileNotFoundError, match=r"Missing missing\.log in extracted archive"):
+        materialise_labelled_raw_stream(
+            source_root,
+            raw_logs_path,
+            (("missing.log", "train", 0),),
+        )
+
+
 def test_post_processed_source_reports_known_split_provenance(
     tmp_path: Path,
 ) -> None:
@@ -593,6 +672,13 @@ def test_openstack_helper_branches_cover_path_normalisation_and_index_resolution
             preserve_numeric_values=False,
         )
         == "/root/NUM/UUID/IP/HEX"
+    )
+    assert (
+        _OPENSTACK_NORMALISE_PATH_TOKENS(
+            "/root/123/550e8400-e29b-41d4-a716-446655440000/10.0.0.1/abc123def4567890,",
+            preserve_numeric_values=False,
+        )
+        == "/root/NUM/UUID/IP/HEX,"
     )
     assert (
         _OPENSTACK_NORMALISE_PATH_TOKENS(
