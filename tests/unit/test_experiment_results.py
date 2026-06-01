@@ -192,7 +192,14 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parameter-only DeepLog results should write the concise report artefact."""
+    """Parameter-only DeepLog results should write the concise report artefact.
+
+    Args:
+        tmp_path (Path): Temporary directory used to hold the synthetic run
+            outputs.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub the report
+            builders.
+    """
     bundle = next(
         bundle
         for bundle in load_experiment_bundles(
@@ -295,7 +302,14 @@ def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Debug reporting should persist the verbose parameter trace separately."""
+    """Debug reporting should persist the verbose parameter trace separately.
+
+    Args:
+        tmp_path (Path): Temporary directory used to hold the synthetic run
+            outputs.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub the report
+            builders.
+    """
     bundle = next(
         bundle
         for bundle in load_experiment_bundles(
@@ -404,7 +418,12 @@ def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
 def test_build_environment_metadata_records_deepcase_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run provenance should record the pinned DeepCASE dependency version."""
+    """Run provenance should record the pinned DeepCASE dependency version.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to substitute
+            package version lookups.
+    """
     captured_dist_names: list[str] = []
 
     def _fake_package_version(dist_name: str) -> str:

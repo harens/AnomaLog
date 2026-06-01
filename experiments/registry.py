@@ -1234,6 +1234,15 @@ def _select_model_overrides(
 ) -> dict[str, object]:
     """Return the concrete override table for one model reference.
 
+    Args:
+        overrides (dict[str, object]): Model-set override mapping from the
+            registry entry.
+        model_ref (str): Model reference name used to select a nested override
+            table.
+
+    Returns:
+        dict[str, object]: Concrete override table for the requested model.
+
     Model-set overrides may be declared as a flat table or as a nested table
     keyed by model reference. The latter is the shape used by the checked-in
     DeepCASE ablations, so the builder needs to select the correct per-model

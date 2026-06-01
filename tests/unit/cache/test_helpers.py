@@ -341,7 +341,14 @@ def test_cache_paths_config_uses_cluster_root_overrides(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Environment overrides should redirect the default cache roots."""
+    """Environment overrides should redirect the default cache roots.
+
+    Args:
+        tmp_path (Path): Temporary directory used to host the synthetic root
+            paths.
+        monkeypatch (pytest.MonkeyPatch): Environment helper used to inject
+            cluster roots.
+    """
     monkeypatch.setenv("ANOMALOG_DATA_ROOT", (tmp_path / "data").as_posix())
     monkeypatch.setenv("ANOMALOG_CACHE_ROOT", (tmp_path / "cache").as_posix())
 

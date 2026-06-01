@@ -297,6 +297,10 @@ def test_bgl_fixture_groups_into_one_hour_window(tmp_path: Path) -> None:
     This is a bounded smoke test for the later BGL benchmark protocol: the
     checked-in fixture spans only a few seconds, so a one-hour window should
     emit exactly one sequence and preserve the anomalous label.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            archive.
     """
     archive_path = tmp_path / "tiny-bgl.zip"
     _build_local_bgl_archive(archive_path)

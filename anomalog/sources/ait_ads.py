@@ -35,7 +35,13 @@ _WAZUH_SOURCE = "wazuh"
 
 @dataclass(frozen=True, slots=True)
 class _LabelWindow:
-    """One labelled attack interval from the AIT-ADS labels file."""
+    """One labelled attack interval from the AIT-ADS labels file.
+
+    Attributes:
+        attack (str): Attack phase name assigned to the interval.
+        start_unix_s (float): Inclusive interval start in Unix seconds.
+        end_unix_s (float): Exclusive interval end in Unix seconds.
+    """
 
     attack: str
     start_unix_s: float
@@ -44,7 +50,30 @@ class _LabelWindow:
 
 @dataclass(frozen=True, slots=True)
 class _CanonicalAlert:
-    """Normalised alert used to build the canonical AIT-ADS raw stream."""
+    """Normalised alert used to build the canonical AIT-ADS raw stream.
+
+    Attributes:
+        scenario (str): Scenario name the alert belongs to.
+        ids_source (str): Alert family, such as `aminer`, `suricata`, or `wazuh`.
+        timestamp_unix_us (int | None): Original timestamp in Unix microseconds,
+            if present.
+        timestamp_unix_ms (int | None): Original timestamp in Unix milliseconds,
+            if present.
+        source_line_order (int): Zero-based order within the source file.
+        source_file (str): Source filename that contributed the alert.
+        entity_id (str): Canonical entity identifier used for grouping.
+        template_key (str): Canonical template key emitted into the raw stream.
+        anomalous (int): Binary anomaly label derived from the label windows.
+        attack_phase (str | None): Named attack phase for labelled anomaly
+            intervals.
+        original_timestamp (str | None): Timestamp text preserved from the source
+            alert.
+        alert_uid (str): Stable unique identifier for the emitted record.
+        alert_signature (str | None): Source-specific signature text, when
+            available.
+        metadata (dict[str, object]): Additional source metadata preserved for
+            auditing.
+    """
 
     scenario: str
     ids_source: str
@@ -68,6 +97,10 @@ class _CanonicalAlert:
         are already internally timestamp-ordered. We therefore merge primarily
         by timestamp, then fall back to source file name plus per-file line
         order only when the dataset provides no finer cross-file order.
+
+        Returns:
+            tuple[int, int, str, str, int]: Ordering key used when merging the
+                canonical alerts across files.
         """
         return (
             1 if self.timestamp_unix_us is None else 0,
@@ -78,7 +111,12 @@ class _CanonicalAlert:
         )
 
     def as_record(self) -> dict[str, object]:
-        """Return the JSON-serialisable canonical alert representation."""
+        """Return the JSON-serialisable canonical alert representation.
+
+        Returns:
+            dict[str, object]: Canonical alert payload written to the JSONL
+                stream.
+        """
         return {
             "scenario": self.scenario,
             "ids_source": self.ids_source,
@@ -98,7 +136,20 @@ class _CanonicalAlert:
 
 @dataclass(frozen=True, slots=True)
 class AITADSScenarioSource(DatasetSource):
-    """Materialise one or more AIT-ADS scenarios into a canonical alert stream."""
+    """Materialise one or more AIT-ADS scenarios into a canonical alert stream.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in source.
+        scenario_names (tuple[str, ...]): Ordered scenario names selected for
+            materialisation.
+        base_source (DatasetSource): Archive source that provides the extracted
+            AIT-ADS files.
+        labels_relpath (Path): Relative path to the published scenario label CSV.
+        labels_url (str): Download URL for the label CSV when it is missing.
+        labels_md5_checksum (str): Expected MD5 checksum for the label CSV.
+        raw_logs_relpath (Path | None): Optional relative path for the derived
+            JSONL stream.
+    """
 
     name: ClassVar[str] = "ait_ads"
     scenario_names: tuple[str, ...] = AIT_ADS_SCENARIOS
@@ -304,17 +355,22 @@ def find_scenario_file(source_root: Path, scenario: str, source_name: str) -> Pa
     raise FileNotFoundError(msg)
 
 
+@dataclass(frozen=True, slots=True)
 class _IntervalLabelAssigner:
-    """Apply half-open `[start, end)` interval labels to alert timestamps."""
+    """Apply half-open `[start, end)` interval labels to alert timestamps.
 
-    def __init__(self, windows: tuple[_LabelWindow, ...]) -> None:
-        self._windows = windows
+    Attributes:
+        windows (tuple[_LabelWindow, ...]): Ordered half-open label windows
+            used for timestamp assignment.
+    """
+
+    windows: tuple[_LabelWindow, ...]
 
     def assign(self, timestamp_unix_ms: int | None) -> tuple[int, str | None]:
         if timestamp_unix_ms is None:
             return 0, None
         timestamp_unix_s = timestamp_unix_ms / 1000.0
-        for window in self._windows:
+        for window in self.windows:
             if window.start_unix_s <= timestamp_unix_s < window.end_unix_s:
                 return 1, window.attack
         return 0, None
@@ -520,7 +576,21 @@ def _wazuh_template_fields(
     data: dict[str, object],
     ids_source: str,
 ) -> tuple[str, str | None]:
-    """Return the canonical alert key and signature for one Wazuh-family row."""
+    """Return the canonical alert key and signature for one Wazuh-family row.
+
+    Args:
+        obj (dict[str, object]): Full parsed alert object.
+        rule (dict[str, object]): Normalised rule sub-document extracted from
+            `obj`.
+        decoder (dict[str, object]): Normalised decoder sub-document extracted
+            from `obj`.
+        data (dict[str, object]): Normalised data sub-document extracted from
+            `obj`.
+        ids_source (str): Resolved IDS source family for the alert.
+
+    Returns:
+        tuple[str, str | None]: Canonical template key and signature text.
+    """
     if ids_source == _SURICATA_SOURCE:
         alert = _dict(data.get("alert"))
         signature_id = _text(
@@ -558,7 +628,15 @@ def _wazuh_template_fields(
 
 
 def classify_wazuh_ids_source(obj: dict[str, object]) -> str:
-    """Return whether a Wazuh-file alert should be treated as Wazuh or Suricata."""
+    """Return whether a Wazuh-file alert should be treated as Wazuh or Suricata.
+
+    Args:
+        obj (dict[str, object]): Parsed JSON alert row from the Wazuh-family
+            source files.
+
+    Returns:
+        str: Either `wazuh` or `suricata` depending on the alert shape.
+    """
     location = _text(obj.get("location"))
     if location is not None and "/suricata/" in location:
         return _SURICATA_SOURCE

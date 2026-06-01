@@ -38,6 +38,9 @@ class StructuredDataset:
     def _iter_untemplated_text(self) -> Iterator[str]:
         """Yield the canonical message body for template mining.
 
+        Yields:
+            str: Untemplated structured message text in sink order.
+
         The template parser must only see the structured message body, not the
         raw source line or any parser-specific envelope fields. Keeping this
         boundary in one place makes the contract easy to audit in tests.

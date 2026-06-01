@@ -319,7 +319,15 @@ def _assert_deeplog_run_artifacts(
     deeplog_model: DeepLogModelConfig,
     bundle: ExperimentBundle,
 ) -> None:
-    """Check the run directory written by DeepLog."""
+    """Check the run directory written by DeepLog.
+
+    Args:
+        run_dir (Path): Directory containing the completed DeepLog run
+            artefacts.
+        deeplog_model (DeepLogModelConfig): Model config used to interpret the
+            run metrics.
+        bundle (ExperimentBundle): Resolved experiment bundle for the run.
+    """
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     manifest = json.loads(
         (run_dir / "dataset_manifest.json").read_text(encoding="utf-8"),
@@ -357,7 +365,12 @@ def _assert_deeplog_run_artifacts(
 
 
 def _assert_baseline_run_artifacts(run_dir: Path) -> None:
-    """Check the template-frequency baseline run directory."""
+    """Check the template-frequency baseline run directory.
+
+    Args:
+        run_dir (Path): Directory containing the completed baseline run
+            artefacts.
+    """
     baseline_metrics = json.loads(
         (run_dir / "metrics.json").read_text(encoding="utf-8"),
     )

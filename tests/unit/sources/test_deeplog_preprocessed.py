@@ -135,7 +135,14 @@ def test_materialise_openstack_deeplog_parameter_ci_subset_injects_two_shared_po
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Figure 9-style OpenStack materialisation should inject two shared points."""
+    """Figure 9-style OpenStack materialisation should inject two shared points.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to tune the
+            OpenStack fixture size.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     sync_power_state_content = (

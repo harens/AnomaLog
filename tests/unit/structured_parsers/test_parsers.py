@@ -248,7 +248,12 @@ def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
 def test_thunderbird_parser_skips_empty_message_lines_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """ThunderbirdParser should treat header-only records as expected skips."""
+    """ThunderbirdParser should treat header-only records as expected skips.
+
+    Args:
+        caplog (pytest.LogCaptureFixture): Log capture fixture used to verify
+            the warning suppression.
+    """
     parser = ThunderbirdParser()
 
     with caplog.at_level("WARNING"):

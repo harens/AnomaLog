@@ -119,7 +119,12 @@ def _write_registry_tree(tmp_path: Path) -> Path:
 def test_load_experiment_registry_exposes_metadata(
     tmp_path: Path,
 ) -> None:
-    """Registry entries should decode into stable logical experiment metadata."""
+    """Registry entries should decode into stable logical experiment metadata.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     registry_path = _write_registry_tree(tmp_path)
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
 
@@ -292,7 +297,12 @@ def test_registry_select_combines_names_and_groups() -> None:
 def test_experiment_set_uses_set_name_as_group(
     tmp_path: Path,
 ) -> None:
-    """Experiment sets should stay selectable even without a wrapper layer."""
+    """Experiment sets should stay selectable even without a wrapper layer.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     experiments_root = tmp_path / "experiments"
     datasets_dir = experiments_root / "configs" / "datasets"
     models_dir = experiments_root / "configs" / "models"
@@ -337,7 +347,12 @@ def test_experiment_set_uses_set_name_as_group(
 def test_load_experiment_registry_rejects_missing_model_config(
     tmp_path: Path,
 ) -> None:
-    """Registry loading should fail when a referenced model config is absent."""
+    """Registry loading should fail when a referenced model config is absent.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     experiments_root = tmp_path / "experiments"
     datasets_dir = experiments_root / "configs" / "datasets"
     models_dir = experiments_root / "configs" / "models"
@@ -369,7 +384,12 @@ def test_load_experiment_registry_rejects_missing_model_config(
 def test_load_experiment_registry_rejects_missing_dataset_config(
     tmp_path: Path,
 ) -> None:
-    """Registry loading should fail when a referenced dataset config is absent."""
+    """Registry loading should fail when a referenced dataset config is absent.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     experiments_root = tmp_path / "experiments"
     models_dir = experiments_root / "configs" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -398,7 +418,12 @@ def test_load_experiment_registry_rejects_missing_dataset_config(
 def test_load_experiment_registry_rejects_unknown_model_set(
     tmp_path: Path,
 ) -> None:
-    """Registry loading should fail when a referenced model set is absent."""
+    """Registry loading should fail when a referenced model set is absent.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     experiments_root = tmp_path / "experiments"
     datasets_dir = experiments_root / "configs" / "datasets"
     models_dir = experiments_root / "configs" / "models"
@@ -427,7 +452,12 @@ def test_load_experiment_registry_rejects_unknown_model_set(
 def test_load_experiment_registry_rejects_malformed_entries(
     tmp_path: Path,
 ) -> None:
-    """Malformed registry fields should fail during decoding."""
+    """Malformed registry fields should fail during decoding.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     experiments_root = tmp_path / "experiments"
     models_dir = experiments_root / "configs" / "models"
     datasets_dir = experiments_root / "configs" / "datasets"
@@ -458,7 +488,12 @@ def test_load_experiment_registry_rejects_malformed_entries(
 def test_resolve_registry_experiment_attaches_metadata(
     tmp_path: Path,
 ) -> None:
-    """Named experiments should resolve to metadata-annotated bundles."""
+    """Named experiments should resolve to metadata-annotated bundles.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     registry_path = _write_registry_tree(tmp_path)
     resolved = resolve_registry_experiment(
         "demo",
@@ -490,7 +525,12 @@ def test_resolve_registry_experiment_attaches_metadata(
 def test_resolve_registry_experiment_applies_model_overrides(
     tmp_path: Path,
 ) -> None:
-    """Model overrides should flow into the resolved DeepLog bundle."""
+    """Model overrides should flow into the resolved DeepLog bundle.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+    """
     registry_path = _write_registry_tree(tmp_path)
     resolved = resolve_registry_experiment(
         "demo_deeplog",
@@ -577,7 +617,14 @@ def test_load_dataset_experiment_config_is_cached(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Repeated dataset resolution should not re-read the dataset TOML file."""
+    """Repeated dataset resolution should not re-read the dataset TOML file.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+        monkeypatch (pytest.MonkeyPatch): File-read spy used to confirm the
+            cache is reused.
+    """
     registry_path = _write_registry_tree(tmp_path)
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
     dataset_path = tmp_path / "experiments" / "configs" / "datasets" / "demo.toml"
@@ -610,7 +657,14 @@ def test_load_model_config_reference_is_cached(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Repeated model references should not re-read the model TOML file."""
+    """Repeated model references should not re-read the model TOML file.
+
+    Args:
+        tmp_path (Path): Temporary directory used to build a synthetic registry
+            tree.
+        monkeypatch (pytest.MonkeyPatch): File-read spy used to confirm the
+            cache is reused.
+    """
     registry_path = _write_registry_tree(tmp_path)
     registry = load_experiment_registry(registry_path, repo_root=tmp_path)
     model_path = tmp_path / "experiments" / "configs" / "models" / "deepcase.toml"

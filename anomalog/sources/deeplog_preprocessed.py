@@ -23,7 +23,19 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class FileBoundarySplitProvenance:
-    """Describe a predefined file-boundary split used during materialisation."""
+    """Describe a predefined file-boundary split used during materialisation.
+
+    Attributes:
+        split_source (Literal["predefined_file_boundary"]): Literal provenance tag
+            for file-boundary splits.
+        train_source_files (tuple[str, ...]): Source files assigned to the
+            training split.
+        test_normal_source_files (tuple[str, ...]): Normal test files kept in the
+            evaluation split.
+        test_anomalous_source_files (tuple[str, ...]): Anomalous test files kept
+            in the evaluation
+            split.
+    """
 
     split_source: Literal["predefined_file_boundary"]
     train_source_files: tuple[str, ...]
@@ -31,7 +43,12 @@ class FileBoundarySplitProvenance:
     test_anomalous_source_files: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
-        """Return a JSON-friendly provenance summary."""
+        """Return a JSON-friendly provenance summary.
+
+        Returns:
+            dict[str, object]: Provenance payload used in manifests and audit
+                reports.
+        """
         return {
             "split_source": self.split_source,
             "train_source_files": list(self.train_source_files),
@@ -64,7 +81,18 @@ class FileBoundarySplitProvenance:
 
 @dataclass(frozen=True, slots=True)
 class NormalOnlySessionPrefixProvenance:
-    """Describe a normal-only event prefix with excluded archive files."""
+    """Describe a normal-only event prefix with excluded archive files.
+
+    Attributes:
+        split_source (Literal["normal_only_event_prefix"]): Literal provenance
+            tag for normal-only prefixes.
+        included_source_files (tuple[str, ...]): Source files that remain in the
+            train pool.
+        excluded_source_files (tuple[str, ...]): Source files dropped from the
+            split entirely.
+        excluded_anomalous_source_files (tuple[str, ...]): Excluded files that
+            were anomalous.
+    """
 
     split_source: Literal["normal_only_event_prefix"]
     included_source_files: tuple[str, ...]
@@ -72,7 +100,12 @@ class NormalOnlySessionPrefixProvenance:
     excluded_anomalous_source_files: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
-        """Return a JSON-friendly provenance summary."""
+        """Return a JSON-friendly provenance summary.
+
+        Returns:
+            dict[str, object]: Provenance payload used in manifests and audit
+                reports.
+        """
         return {
             "split_source": self.split_source,
             "included_source_files": list(self.included_source_files),
@@ -97,6 +130,10 @@ def build_session_file_boundary_provenance(
     split_files: SplitFileSpecs,
 ) -> FileBoundarySplitProvenance:
     """Build provenance metadata for a labelled-session file-boundary split.
+
+    Args:
+        split_files (SplitFileSpecs): Ordered file specs for the train, normal test, and
+            anomalous test splits.
 
     Returns:
         FileBoundarySplitProvenance: Source-file provenance for the split.
@@ -124,6 +161,14 @@ def build_normal_only_session_prefix_provenance(
 ) -> NormalOnlySessionPrefixProvenance:
     """Build provenance metadata for a normal-only session prefix split.
 
+    Args:
+        split_files (SplitFileSpecs): Ordered file specs for the retained
+            training prefix.
+        excluded_source_files (tuple[str, ...]): Source files excluded from
+            the resulting split.
+        excluded_anomalous_source_files (tuple[str, ...]): Excluded source
+            files that were anomalous.
+
     Returns:
         NormalOnlySessionPrefixProvenance: Source-file provenance for the
             normal-only compatibility split.
@@ -147,6 +192,10 @@ def build_labelled_raw_file_boundary_provenance(
     split_files: LabelledRawSplitFileSpecs,
 ) -> FileBoundarySplitProvenance:
     """Build provenance metadata for a labelled-raw file-boundary split.
+
+    Args:
+        split_files (LabelledRawSplitFileSpecs): Ordered file specs for the
+            train, normal test, and anomalous test splits.
 
     Returns:
         FileBoundarySplitProvenance: Source-file provenance for the split.

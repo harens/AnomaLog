@@ -803,7 +803,14 @@ def test_run_experiment_skips_completed_bundle_and_rebuilds_stale_bundle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Completed bundles should be skipped while stale ones are rebuilt."""
+    """Completed bundles should be skipped while stale ones are rebuilt.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub run
+            orchestration.
+        tmp_path (Path): Temporary directory used to host the synthetic run
+            state.
+    """
     sequence_config = _SequenceConfig()
     completed_bundle = SimpleNamespace(
         sweep_path=tmp_path / "completed.toml",

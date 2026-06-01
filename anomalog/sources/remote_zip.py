@@ -262,7 +262,7 @@ class RemoteZipSource(DatasetSource):
             OSError: If the archive cannot be cleaned up.
             ValueError: If checksum verification fails.
             zipfile.BadZipFile: If the archive is not a valid zip file and the
-            remote URL does not identify a tarball.
+                remote URL does not identify a tarball.
             tarfile.TarError: If tarball extraction fails.
         """
         try:
@@ -280,6 +280,9 @@ class RemoteZipSource(DatasetSource):
 
     def _extract_archive(self, zip_path: Path) -> None:
         """Extract a downloaded archive, falling back to tarball handling.
+
+        Args:
+            zip_path (Path): Local path of the downloaded archive.
 
         Raises:
             zipfile.BadZipFile: If the archive is neither a zip nor a tarball.

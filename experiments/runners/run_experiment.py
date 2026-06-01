@@ -59,7 +59,11 @@ class _BundleGroupRequest:
 
 class _FutureWithResult(Protocol):
     def result(self) -> Path:
-        """Return the future result when the worker completes."""
+        """Return the future result when the worker completes.
+
+        Returns:
+            Path: Result path produced by the worker.
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,7 +464,12 @@ def _finalise_bundle_run(
     *,
     context: _BundleFinaliseContext,
 ) -> None:
-    """Build the post-model summaries and persist the final artefacts."""
+    """Build the post-model summaries and persist the final artefacts.
+
+    Args:
+        context (_BundleFinaliseContext): Fully materialised bundle run state
+            and output locations.
+    """
     split_summary = _build_bundle_split_summary(context=context)
     _log_bundle_split_summary(context=context, split_summary=split_summary)
     metric_report = _build_bundle_metric_report(context=context)

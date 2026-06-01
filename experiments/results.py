@@ -563,7 +563,16 @@ def build_run_metrics_report(
 
 
 def _parameter_ci_report(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return the detector-owned parameter CI summary, if present."""
+    """Return the detector-owned parameter CI summary, if present.
+
+    Args:
+        metrics (Mapping[str, Any]): Canonical run metrics emitted by the
+            detector.
+
+    Returns:
+        dict[str, Any] | None: Parameter CI summary payload when present,
+            otherwise `None`.
+    """
     report = metrics.get("parameter_ci_report")
     if isinstance(report, dict):
         return report
@@ -571,7 +580,16 @@ def _parameter_ci_report(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _parameter_ci_trace(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return the detector-owned parameter CI debug trace, if present."""
+    """Return the detector-owned parameter CI debug trace, if present.
+
+    Args:
+        metrics (Mapping[str, Any]): Canonical run metrics emitted by the
+            detector.
+
+    Returns:
+        dict[str, Any] | None: Parameter CI debug payload when present,
+            otherwise `None`.
+    """
     trace = metrics.get("parameter_ci_trace")
     if isinstance(trace, dict):
         return trace
@@ -648,9 +666,16 @@ def _build_metric_blocks(
 def _should_emit_sequence_level_detection(dataset: DatasetVariantConfig) -> bool:
     """Return whether the run should surface sequence-level headline metrics.
 
+    Args:
+        dataset (DatasetVariantConfig): Dataset configuration for the current
+            run.
+
     AIT-ADS is evaluated at the alert level in the paper, so we keep the
     sequence label internally for container semantics but suppress the
     sequence-level headline block in the report.
+
+    Returns:
+        bool: `True` when sequence-level headline metrics should be emitted.
     """
     return dataset.preset != "ait_ads"
 

@@ -39,8 +39,9 @@ def structured_line(
 
     Args:
         line_order (int): Stable line order to assign to the fixture row.
-        **fields: Field values used to construct the fixture row. Expected
-            keys are `timestamp_unix_ms`, `entity_id`,
+        **fields (Unpack[_StructuredLineFields]): Field values used to
+            construct the fixture row. Expected keys are `timestamp_unix_ms`,
+            `entity_id`,
             `untemplated_message_text`, `anomalous`, and optionally
             `raw_parameters`.
 

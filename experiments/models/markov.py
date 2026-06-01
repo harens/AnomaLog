@@ -417,7 +417,18 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         sequence: TemplateSequence,
         stream_context_templates: list[str],
     ) -> tuple[_PreparedMarkovCalibrationSequence | None, list[str]]:
-        """Return the training payload for one sequence and the next stream tail."""
+        """Return the training payload for one sequence and the next stream tail.
+
+        Args:
+            sequence (TemplateSequence): Sequence to prepare for Markov
+                calibration.
+            stream_context_templates (list[str]): Carry-over templates from the
+                previous sequence chunk.
+
+        Returns:
+            tuple[_PreparedMarkovCalibrationSequence | None, list[str]]: Prepared
+                calibration payload and the next stream tail.
+        """
         eligible_target_indexes = set(training_event_index_mask(sequence))
         prefix_templates = (
             stream_context_templates if sequence.continuous_context else []
@@ -599,7 +610,15 @@ class MarkovManifest(ModelManifest, frozen=True):
 
 @dataclass(slots=True)
 class _PreparedMarkovCalibrationSequence:
-    """Cached training payload for one Markov calibration sequence."""
+    """Cached training payload for one Markov calibration sequence.
+
+    Attributes:
+        sequence (TemplateSequence): Sequence being prepared for calibration.
+        prefix_templates (list[str] | None): Carry-over templates from the
+            previous chronological chunk.
+        eligible_target_indexes (set[int]): Target indexes that can contribute
+            to calibration counts.
+    """
 
     sequence: TemplateSequence
     prefix_templates: list[str] | None

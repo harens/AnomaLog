@@ -48,7 +48,16 @@ NUM_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 
 @dataclass(frozen=True, slots=True)
 class OpenStackParsedPayload:
-    """Parsed OpenStack payload fields used by the parameter materialiser."""
+    """Parsed OpenStack payload fields used by the parameter materialiser.
+
+    Attributes:
+        timestamp_unix_ms (int): Parsed event timestamp in milliseconds.
+        instance_id (str): Canonical instance identifier extracted from the
+            payload.
+        content (str): Message content with the OpenStack envelope removed.
+        raw_parameters (list[str]): Numeric tokens preserved from the message
+            body.
+    """
 
     timestamp_unix_ms: int
     instance_id: str
@@ -92,6 +101,10 @@ _OPENSTACK_PARAMETER_DURATION_MULTIPLIER = 6.0
 def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
     """Convert OpenStack date and time fragments to Unix milliseconds.
 
+    Args:
+        date_s (str): Date fragment in `YYYY-MM-DD` format.
+        time_s (str): Time fragment in `HH:MM:SS[.ffffff]` format.
+
     Returns:
         int | None: Parsed timestamp in milliseconds, or `None` when parsing
             fails.
@@ -110,7 +123,15 @@ def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
 
 
 def _extract_openstack_instance_id(raw_payload: str) -> str | None:
-    """Return the OpenStack instance identifier, if present."""
+    """Return the OpenStack instance identifier, if present.
+
+    Args:
+        raw_payload (str): Raw OpenStack payload text to inspect.
+
+    Returns:
+        str | None: Normalised instance identifier, or `None` when the payload
+            does not expose one.
+    """
     for pattern in INSTANCE_ID_PATTERNS:
         match = pattern.search(raw_payload)
         if match is None:
@@ -163,6 +184,11 @@ def normalise_openstack_message(
 ) -> str:
     """Canonicalise OpenStack message text before template mining.
 
+    Args:
+        content (str): Raw OpenStack message body.
+        preserve_numeric_values (bool): Whether numeric tokens should be kept rather
+            than replaced with `NUM`.
+
     Returns:
         str: Canonicalised OpenStack message text.
     """
@@ -183,6 +209,9 @@ def normalise_openstack_message(
 def extract_openstack_parameters(content: str) -> list[str]:
     """Extract raw numeric parameter tokens from an OpenStack message body.
 
+    Args:
+        content (str): Raw OpenStack message body.
+
     Returns:
         list[str]: Raw numeric tokens in encounter order.
     """
@@ -192,6 +221,9 @@ def extract_openstack_parameters(content: str) -> list[str]:
 
 def parse_openstack_payload(raw_payload: str) -> OpenStackParsedPayload | None:
     """Parse a raw OpenStack payload into timestamp, instance, and content.
+
+    Args:
+        raw_payload (str): Raw OpenStack log payload to parse.
 
     Returns:
         OpenStackParsedPayload | None: Parsed payload fields, or `None` when
@@ -271,8 +303,21 @@ def _resolve_anomaly_instance_indexes(
 ) -> tuple[int, int]:
     """Return two held-out instance indexes that expose the target template.
 
+    Args:
+        instances (list[_OpenStackParameterInstance]): Ordered instance batches
+            to search.
+        start_index (int): First held-out instance index to consider.
+        offsets (tuple[int, int]): Offsets from `start_index` for the two
+            anomaly instances.
+        target_template (str): Template that must appear in both selected
+            instances.
+
     DeepLog Figure 9 shows two injected time points, and each affected key
     should observe both of them.
+
+    Returns:
+        tuple[int, int]: Distinct held-out instance indexes that expose the
+            target template.
 
     Raises:
         ValueError: If the two requested anomaly instances collapse to the same
@@ -354,6 +399,10 @@ def materialise_openstack_deeplog_parameter_ci_subset(
     raw_logs_path: Path,
 ) -> None:
     """Materialise a Figure 9-sized OpenStack VM-creation slice with anomalies.
+
+    Args:
+        source_root (Path): Extracted OpenStack source tree.
+        raw_logs_path (Path): Output path for the canonical labelled stream.
 
     Raises:
         ValueError: If the archive does not expose enough normal VM instances

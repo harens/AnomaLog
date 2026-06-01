@@ -1436,7 +1436,19 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
         *,
         run_metrics: dict[str, Any],
     ) -> tuple[DeepLogParameterCiReport | None, DeepLogParameterCiTraceReport | None]:
-        """Return the recorded parameter CI summary and trace, if any."""
+        """Return the recorded parameter CI summary and trace, if any.
+
+        Args:
+            run_metrics (dict[str, Any]): Run metrics collected during scoring.
+
+        Returns:
+            tuple[
+                DeepLogParameterCiReport | None,
+                DeepLogParameterCiTraceReport | None,
+            ]:
+                Summary and trace payloads, or `(None, None)` when parameter reporting
+                is disabled.
+        """
         state = self._parameter_ci_state
         if state is None:
             if not self.config.parameter_detection_enabled:

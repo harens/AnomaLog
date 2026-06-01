@@ -30,7 +30,26 @@ STRADDLING_GROUP_POLICY_DROP_STRADDLERS = "drop_straddlers"
 
 @dataclass(frozen=True, slots=True)
 class RawEntrySplitSummaryData:
-    """Primitive raw-entry split summary fields."""
+    """Primitive raw-entry split summary fields.
+
+    Attributes:
+        split_mode (str): Raw-entry split strategy used to produce the plan.
+        application_order (str): Whether the split was applied before or after
+            grouping.
+        cutoff_entry_index (int): Zero-based raw-entry index where the test suffix
+            begins.
+        train_raw_entry_count (int): Raw entries assigned to the training prefix.
+        train_normal_entry_count (int): Normal training rows included in the prefix.
+        train_anomalous_entry_count (int): Anomalous training rows included in the
+            prefix.
+        test_raw_entry_count (int): Raw entries assigned to the test suffix.
+        test_normal_entry_count (int): Normal rows assigned to the test suffix.
+        test_anomalous_entry_count (int): Anomalous rows assigned to the test suffix.
+        ignored_raw_entry_count (int): Raw entries excluded from both splits.
+        ignored_normal_entry_count (int): Normal rows excluded from both splits.
+        ignored_anomalous_entry_count (int): Anomalous rows excluded from both
+            splits.
+    """
 
     split_mode: str
     application_order: str
@@ -48,7 +67,13 @@ class RawEntrySplitSummaryData:
 
 @dataclass(frozen=True, slots=True)
 class RawEntrySplitPlan:
-    """Computed labels and summary data for a raw-entry split."""
+    """Computed labels and summary data for a raw-entry split.
+
+    Attributes:
+        row_labels (dict[int, str]): Per-line split labels keyed by `line_order`.
+        summary (RawEntrySplitSummaryData): Primitive counts describing the
+            realised split.
+    """
 
     row_labels: dict[int, str]
     summary: RawEntrySplitSummaryData
@@ -56,7 +81,19 @@ class RawEntrySplitPlan:
 
 @dataclass(frozen=True, slots=True)
 class RawEntrySplitRequest:
-    """Inputs required to build a raw-entry split plan."""
+    """Inputs required to build a raw-entry split plan.
+
+    Attributes:
+        split_mode (str): Requested chronological raw-entry split strategy.
+        application_order (str): Whether the split should happen before or after
+            grouping.
+        train_entry_count (int | None): Fixed training prefix size for
+            count-based splits.
+        train_entry_fraction (float | None): Fraction of raw entries to keep
+            in training for fraction-based splits.
+        train_normal_entry_fraction (float | None): Fraction of normal entries
+            to keep in the training prefix for normal-only prefix splits.
+    """
 
     split_mode: str
     application_order: str
@@ -71,6 +108,12 @@ def build_raw_entry_split_plan(
     request: RawEntrySplitRequest,
 ) -> RawEntrySplitPlan:
     """Build raw-entry split labels and summary data for one chronology.
+
+    Args:
+        ordered_rows (Sequence[StructuredLine]): Structured rows already sorted
+            into source chronology.
+        request (RawEntrySplitRequest): Split request describing the desired
+            raw-entry policy.
 
     Returns:
         RawEntrySplitPlan: Computed row labels and primitive summary fields.
@@ -295,7 +338,18 @@ def split_rows_by_label(
     *,
     default_label: str = RAW_ENTRY_SPLIT_TRAIN,
 ) -> Iterator[tuple[str, list[StructuredLine]]]:
-    """Yield contiguous row segments that share the same split label."""
+    """Yield contiguous row segments that share the same split label.
+
+    Args:
+        rows (Collection[StructuredLine]): Structured rows to group into
+            contiguous label runs.
+        row_labels (dict[int, str]): Explicit split labels keyed by `line_order`.
+        default_label (str): Label used when a row is missing from `row_labels`.
+
+    Yields:
+        tuple[str, list[StructuredLine]]: One label and the contiguous rows
+            carrying that label.
+    """
     current_label: str | None = None
     current_rows: list[StructuredLine] = []
     for row in rows:
@@ -319,6 +373,12 @@ def count_straddling_groups(
 ) -> int:
     """Count grouped windows that cross the raw-entry split boundary.
 
+    Args:
+        grouped_rows (Iterable[Collection[StructuredLine]]): Grouped row
+            windows to inspect.
+        row_labels (dict[int, str]): Explicit split labels keyed by `line_order`.
+        default_label (str): Label used when a row is missing from `row_labels`.
+
     Returns:
         int: Number of grouped windows that contain rows from both sides of the
             raw-entry split boundary.
@@ -336,6 +396,11 @@ def resolve_straddling_group_label(
     segments: Sequence[tuple[str, list[StructuredLine]]],
 ) -> str | None:
     """Return the split label assigned to a straddling group, if any.
+
+    Args:
+        policy (str): Policy name controlling how straddlers are resolved.
+        segments (Sequence[tuple[str, list[StructuredLine]]]): Contiguous label
+            segments that compose the grouped rows.
 
     Returns:
         str | None: Assigned split label, or `None` when the group should be

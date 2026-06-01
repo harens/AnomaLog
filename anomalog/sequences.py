@@ -509,7 +509,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """Build raw-entry split labels keyed by line order.
 
         Returns:
-            tuple[dict[int, str], RawEntrySplitSummary | None]: Row-level
+            tuple[dict[int, SplitLabel], RawEntrySplitSummary | None]: Row-level
                 split labels and an audit summary when a raw-entry split is
                 active.
         """

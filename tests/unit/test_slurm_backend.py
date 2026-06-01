@@ -164,6 +164,10 @@ def test_build_wrap_script_runs_under_posix_shell_and_exports_experiment(
     """The generated wrapper should execute under `/bin/sh`.
 
     It must keep the selected experiment visible to the nested command.
+
+    Args:
+        tmp_path (pathlib.Path): Temporary directory used to host the synthetic
+            repository.
     """
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -385,7 +389,14 @@ def test_submit_experiments_uses_relative_cluster_roots_from_request(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Request-level SLURM roots should resolve relative to the repo root."""
+    """Request-level SLURM roots should resolve relative to the repo root.
+
+    Args:
+        tmp_path (pathlib.Path): Temporary directory used to host the synthetic
+            repository.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to intercept the
+            subprocess call.
+    """
     registry_path, defaults_path = _write_slurm_tree(tmp_path)
     completed = SimpleNamespace(stdout="Submitted batch job 456\n", stderr="")
     captured: dict[str, list[str]] = {}
@@ -423,7 +434,14 @@ def test_submit_experiments_surfaces_sbatch_failure_message(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Failed Slurm submissions should raise a concise scheduler error."""
+    """Failed Slurm submissions should raise a concise scheduler error.
+
+    Args:
+        tmp_path (pathlib.Path): Temporary directory used to host the synthetic
+            repository.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to intercept the
+            subprocess call.
+    """
     registry_path, defaults_path = _write_slurm_tree(tmp_path)
 
     def _raise(

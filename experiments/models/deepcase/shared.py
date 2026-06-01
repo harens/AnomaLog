@@ -286,7 +286,7 @@ class DeepCaseEventIdMap:
 
     Attributes:
         template_to_event_id (dict[str, int]): Mapping from train template to
-            contiguous DeepCase event id.
+            contiguous DeepCASE event id.
         event_id_to_template (dict[int, str]): Reverse mapping used for
             manifest/reporting purposes, including the no-event sentinel id.
         no_event_id (int): Contiguous event id reserved for missing or stale
@@ -294,11 +294,8 @@ class DeepCaseEventIdMap:
     """
 
     template_to_event_id: dict[str, int]
-    """Mapping from event template to contiguous event id."""
     event_id_to_template: dict[int, str]
-    """Mapping from contiguous event id to event template, including no-event id."""
     no_event_id: int
-    """Contiguous event id used for no-event contexts, equal to vocabulary size."""
 
     @classmethod
     def from_sequences(
@@ -788,6 +785,14 @@ def build_training_batch_from_map(
     progress: Progress | None = None,
 ) -> DeepCaseSampleBatch:
     """Build a training batch using a precomputed DeepCASE event map.
+
+    Args:
+        sequences (Iterable[TemplateSequence]): Training sequences to encode.
+        event_id_map (DeepCaseEventIdMap): Precomputed template-to-event map.
+        context_length (int): Number of prior events to retain per sample.
+        timeout_seconds (float): Maximum target-to-context age in seconds.
+        progress (Progress | None): Optional progress reporter used to track
+            training-sequence preparation.
 
     Returns:
         DeepCaseSampleBatch: Immutable batch aligned to the provided event map.

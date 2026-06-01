@@ -492,7 +492,14 @@ def test_cache_paths_namespace_uses_cluster_base_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Namespace expansion should honour the configured cluster base roots."""
+    """Namespace expansion should honour the configured cluster base roots.
+
+    Args:
+        tmp_path (Path): Temporary directory used to isolate the synthetic
+            roots.
+        monkeypatch (pytest.MonkeyPatch): Environment override helper used to
+            inject cluster roots.
+    """
     monkeypatch.setenv("ANOMALOG_DATA_ROOT", (tmp_path / "data-base").as_posix())
     monkeypatch.setenv("ANOMALOG_CACHE_ROOT", (tmp_path / "cache-base").as_posix())
 

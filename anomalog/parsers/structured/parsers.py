@@ -56,6 +56,10 @@ _NUM_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
     """Convert OpenStack date and time fragments to Unix milliseconds.
 
+    Args:
+        date_s (str): Date fragment in `YYYY-MM-DD` format.
+        time_s (str): Time fragment in `HH:MM:SS[.ffffff]` format.
+
     Returns:
         int | None: Parsed timestamp in milliseconds, or `None` when parsing
             fails.
@@ -74,7 +78,15 @@ def _openstack_datetime_to_unix_ms(date_s: str, time_s: str) -> int | None:
 
 
 def _extract_openstack_instance_id(raw_payload: str) -> str | None:
-    """Return the OpenStack instance identifier, if present."""
+    """Return the OpenStack instance identifier, if present.
+
+    Args:
+        raw_payload (str): Raw OpenStack payload text to inspect.
+
+    Returns:
+        str | None: Normalised instance identifier, or `None` when the payload
+            does not expose one.
+    """
     for pattern in _INSTANCE_ID_PATTERNS:
         match = pattern.search(raw_payload)
         if match is None:
@@ -127,6 +139,11 @@ def _normalise_openstack_message(
 ) -> str:
     """Canonicalise OpenStack message text before template mining.
 
+    Args:
+        content (str): Raw OpenStack message body.
+        preserve_numeric_values (bool): Whether numeric tokens should be kept rather
+            than replaced with `NUM`.
+
     Returns:
         str: Canonicalised OpenStack message text.
     """
@@ -148,6 +165,9 @@ def _parse_openstack_labelled_row(
     raw_line: str,
 ) -> tuple[str, int, int, str, str, list[str]] | None:
     """Parse a labelled OpenStack row into split, label, and payload fields.
+
+    Args:
+        raw_line (str): Raw labelled OpenStack line from the preprocessed stream.
 
     Returns:
         tuple[str, int, int, str, str, list[str]] | None: Split name, label,
@@ -180,6 +200,9 @@ def _parse_openstack_labelled_row(
 
 def _extract_openstack_parameters(content: str) -> list[str]:
     """Extract numeric OpenStack parameters from the message body.
+
+    Args:
+        content (str): Raw OpenStack message body.
 
     Returns:
         list[str]: Raw numeric tokens in encounter order.
@@ -552,13 +575,20 @@ class ThunderbirdParser(StructuredParser):
 
 @dataclass(frozen=True, slots=True)
 class OpenStackDeepLogParser(StructuredParser):
-    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset."""
+    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
 
     name: ClassVar[str] = "openstack_deeplog"
 
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         """Parse one labelled OpenStack row into the shared structured schema.
+
+        Args:
+            raw_line (str): Raw labelled OpenStack row from the preprocessed stream.
 
         Returns:
             BaseStructuredLine | None: Structured row, or `None` when the
@@ -589,7 +619,11 @@ class OpenStackDeepLogParser(StructuredParser):
 
 @dataclass(frozen=True, slots=True)
 class AITADSParser(StructuredParser):
-    """Parse the canonical JSONL alert stream derived from AIT-ADS."""
+    """Parse the canonical JSONL alert stream derived from AIT-ADS.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
 
     name: ClassVar[str] = "ait_ads"
 

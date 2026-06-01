@@ -12,7 +12,12 @@ from anomalog.sources.remote_zip import RemoteZipSource
 def test_thunderbird_source_uses_the_canonical_raw_log_path(
     tmp_path: Path,
 ) -> None:
-    """Thunderbird should target the exact archive member declared in config."""
+    """Thunderbird should target the exact archive member declared in config.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            archive.
+    """
     dataset_root = tmp_path / "Thunderbird"
     dataset_root.mkdir()
     preferred = dataset_root / "Thunderbird.log"
@@ -33,7 +38,12 @@ def test_thunderbird_source_uses_the_canonical_raw_log_path(
 def test_materialise_raw_log_prefix_copies_the_explicit_archive_log(
     tmp_path: Path,
 ) -> None:
-    """The Thunderbird smoke helper should retain the first N raw lines only."""
+    """The Thunderbird smoke helper should retain the first N raw lines only.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            archive.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     source_log = source_root / "Thunderbird.log"
@@ -54,7 +64,12 @@ def test_materialise_raw_log_prefix_copies_the_explicit_archive_log(
 def test_materialise_raw_log_segment_copies_the_requested_line_range(
     tmp_path: Path,
 ) -> None:
-    """The Thunderbird benchmark helper should copy the configured slice."""
+    """The Thunderbird benchmark helper should copy the configured slice.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            archive.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     source_log = source_root / "Thunderbird.log"

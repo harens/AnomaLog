@@ -22,7 +22,11 @@ if TYPE_CHECKING:
 
 
 class _HasTemplate(Protocol):
-    """Minimal template-bearing series contract used by report selection."""
+    """Minimal template-bearing series contract used by report selection.
+
+    Attributes:
+        template (str): Template identifier used to select highlighted series.
+    """
 
     template: str
 
@@ -33,7 +37,13 @@ _MIN_CALIBRATION_SAMPLE_COUNT = 30
 
 
 class DeepLogParameterCiThresholds(msgspec.Struct, frozen=True):
-    """Gaussian upper thresholds used for the Figure 9 style CI report."""
+    """Gaussian upper thresholds used for the Figure 9 style CI report.
+
+    Attributes:
+        confidence_98 (float): Threshold at the 98th percentile.
+        confidence_99 (float): Threshold at the 99th percentile.
+        confidence_999 (float): Threshold at the 99.9th percentile.
+    """
 
     confidence_98: float
     confidence_99: float
@@ -41,7 +51,20 @@ class DeepLogParameterCiThresholds(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiThresholdSummary(msgspec.Struct, frozen=True):
-    """Aggregate threshold outcome for one template series."""
+    """Aggregate threshold outcome for one template series.
+
+    Attributes:
+        confidence (float): Quantile used for the threshold.
+        threshold (float): Numeric threshold value.
+        point_count (int): Total scored points in the series.
+        anomalous_point_count (int): Anomalous points in the series.
+        detected_point_count (int): Points above the threshold.
+        detected_anomalous_point_count (int): Anomalous points above the
+            threshold.
+        detected_normal_point_count (int): Normal points above the threshold.
+        detection_rate (float): Fraction of all points detected.
+        anomalous_detection_rate (float): Fraction of anomalous points detected.
+    """
 
     confidence: float
     threshold: float
@@ -55,7 +78,25 @@ class DeepLogParameterCiThresholdSummary(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
-    """Aggregate per-template parameter residual series for the report."""
+    """Aggregate per-template parameter residual series for the report.
+
+    Attributes:
+        template (str): Template identifier for the series.
+        feature_names (list[str]): Feature names observed for the template.
+        train_pair_count (int): Number of training pairs used to fit the model.
+        validation_pair_count (int): Number of validation pairs used to
+            calibrate the thresholds.
+        validation_sample_warning (str | None): Warning emitted when validation
+            samples are too sparse.
+        point_count (int): Total scored points in the series.
+        anomalous_point_count (int): Anomalous points in the series.
+        residual_mse_mean (float): Mean residual error across the series.
+        residual_mse_min (float): Minimum residual error across the series.
+        residual_mse_max (float): Maximum residual error across the series.
+        thresholds (DeepLogParameterCiThresholds): Gaussian thresholds.
+        threshold_summaries (list[DeepLogParameterCiThresholdSummary]):
+            Threshold outcome summaries for the configured confidence levels.
+    """
 
     template: str
     feature_names: list[str]
@@ -72,7 +113,22 @@ class DeepLogParameterCiSeries(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiTracePoint(msgspec.Struct, frozen=True):
-    """One scored parameter-model point in the debug trace."""
+    """One scored parameter-model point in the debug trace.
+
+    Attributes:
+        window_id (int): Sequence/window identifier.
+        split_label (str): Train/test split label for the point.
+        label (int): Ground-truth anomaly label for the point.
+        event_index (int): Index of the scored event within the sequence.
+        template (str): Template identifier used for the score.
+        residual_mse (float): Residual mean-squared error for the point.
+        detected_at_98 (bool): Whether the point exceeded the 98th percentile.
+        detected_at_99 (bool): Whether the point exceeded the 99th percentile.
+        detected_at_999 (bool): Whether the point exceeded the 99.9th percentile.
+        most_anomalous_feature (str | None): Feature contributing most to the
+            residual.
+        feature_squared_errors (list[float | None]): Per-feature squared errors.
+    """
 
     window_id: int
     split_label: str
@@ -88,7 +144,21 @@ class DeepLogParameterCiTracePoint(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiTraceSeries(msgspec.Struct, frozen=True):
-    """Per-template parameter residual trace for debugging."""
+    """Per-template parameter residual trace for debugging.
+
+    Attributes:
+        template (str): Template identifier for the series.
+        feature_names (list[str]): Feature names observed for the template.
+        train_pair_count (int): Number of training pairs used to fit the model.
+        validation_pair_count (int): Number of validation pairs used to
+            calibrate the thresholds.
+        validation_sample_warning (str | None): Warning emitted when validation
+            samples are too sparse.
+        point_count (int): Total scored points in the series.
+        anomalous_point_count (int): Anomalous points in the series.
+        thresholds (DeepLogParameterCiThresholds): Gaussian thresholds.
+        points (list[DeepLogParameterCiTracePoint]): Per-point debug trace.
+    """
 
     template: str
     feature_names: list[str]
@@ -102,7 +172,28 @@ class DeepLogParameterCiTraceSeries(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
-    """Compact DeepLog parameter-value report for the OpenStack approximation."""
+    """Compact DeepLog parameter-value report for the OpenStack approximation.
+
+    Attributes:
+        task (str): Stable task identifier used in manifest output.
+        paper_approximation (bool): Whether the summary follows the paper
+            approximation.
+        paper_exact_reproduction (bool): Whether the summary exactly reproduces
+            the paper procedure.
+        result_note (str): Human-readable note describing the report flavour.
+        series_scope (str): Scope string describing the selected series subset.
+        train_sequence_count (int): Number of training sequences scored.
+        test_sequence_count (int): Number of test sequences scored.
+        series_count (int): Number of available template series.
+        highlighted_series_count (int): Number of series included in the
+            published summary.
+        highlighted_templates (list[str]): Templates retained in the compact
+            summary.
+        series (list[DeepLogParameterCiSeries]): Highlighted series payloads.
+        total_point_count (int): Total scored points across all series.
+        total_anomalous_point_count (int): Total anomalous points across all
+            series.
+    """
 
     task: str
     paper_approximation: bool
@@ -120,7 +211,31 @@ class DeepLogParameterCiReport(msgspec.Struct, frozen=True):
 
 
 class DeepLogParameterCiTraceReport(msgspec.Struct, frozen=True):
-    """Verbose parameter-value trace for explicit debugging."""
+    """Verbose parameter-value trace for explicit debugging.
+
+    Attributes:
+        task (str): Stable task identifier used in manifest output.
+        paper_approximation (bool): Whether the summary follows the paper
+            approximation.
+        paper_exact_reproduction (bool): Whether the summary exactly reproduces
+            the paper procedure.
+        result_note (str): Human-readable note describing the report flavour.
+        series_scope (str): Scope string describing the selected series subset.
+        train_sequence_count (int): Number of training sequences scored.
+        test_sequence_count (int): Number of test sequences scored.
+        series_count (int): Number of available template series.
+        highlighted_series_count (int): Number of series included in the
+            published summary.
+        highlighted_templates (list[str]): Templates retained in the compact
+            summary.
+        series (list[DeepLogParameterCiTraceSeries]): Highlighted series
+            payloads.
+        anomalous_points (list[DeepLogParameterCiTracePoint]): All anomalous
+            debug trace points.
+        total_point_count (int): Total scored points across all series.
+        total_anomalous_point_count (int): Total anomalous points across all
+            series.
+    """
 
     task: str
     paper_approximation: bool
@@ -140,7 +255,18 @@ class DeepLogParameterCiTraceReport(msgspec.Struct, frozen=True):
 
 @dataclass(slots=True)
 class _ParameterCiSeriesState:
-    """Mutable per-template state for the parameter CI approximation report."""
+    """Mutable per-template state for the parameter CI approximation report.
+
+    Attributes:
+        feature_names (list[str]): Feature names observed for the template.
+        train_pair_count (int): Number of training pairs used to fit the model.
+        validation_pair_count (int): Number of validation pairs used to
+            calibrate the thresholds.
+        gaussian_mean (float): Mean residual value learned from training.
+        gaussian_stddev (float): Standard deviation of the learned residuals.
+        points (list[DeepLogParameterCiTracePoint]): Recorded trace points for
+            the template.
+    """
 
     feature_names: list[str]
     train_pair_count: int
@@ -152,7 +278,12 @@ class _ParameterCiSeriesState:
 
 @dataclass(slots=True)
 class ParameterCiState:
-    """Run-local accumulator for the parameter-value CI approximation."""
+    """Run-local accumulator for the parameter-value CI approximation.
+
+    Attributes:
+        series_by_template (dict[str, _ParameterCiSeriesState]): Per-template
+            mutable state used to assemble summary and trace reports.
+    """
 
     series_by_template: dict[str, _ParameterCiSeriesState] = field(
         default_factory=dict,
@@ -165,7 +296,15 @@ class ParameterCiState:
         parameter_findings: dict[int, DeepLogParameterFinding],
         parameter_models: dict[str, ParameterModelState],
     ) -> None:
-        """Record one scored sequence into the parameter CI trace."""
+        """Record one scored sequence into the parameter CI trace.
+
+        Args:
+            sequence (TemplateSequence): Sequence being scored.
+            parameter_findings (dict[int, DeepLogParameterFinding]): Per-event
+                residual findings for the sequence.
+            parameter_models (dict[str, ParameterModelState]): Learned per-template
+                parameter models.
+        """
         for event_index, finding in sorted(parameter_findings.items()):
             state = parameter_models.get(finding.template)
             if state is None:
@@ -214,7 +353,20 @@ class ParameterCiState:
         highlighted_templates: tuple[str, ...] | None = None,
         include_empty: bool = False,
     ) -> DeepLogParameterCiReport | None:
-        """Return the aggregate publication-facing CI report."""
+        """Return the aggregate publication-facing CI report.
+
+        Args:
+            train_sequence_count (int): Number of training sequences scored.
+            test_sequence_count (int): Number of test sequences scored.
+            highlighted_templates (tuple[str, ...] | None): Optional template
+                subset to retain in the compact report.
+            include_empty (bool): Whether to return an empty report instead of
+                `None` when no series were recorded.
+
+        Returns:
+            DeepLogParameterCiReport | None: Compact report, or `None` when no
+                series were recorded and `include_empty` is false.
+        """
         if not self.series_by_template:
             if not include_empty:
                 return None
@@ -298,7 +450,21 @@ class ParameterCiState:
         highlighted_templates: tuple[str, ...] | None = None,
         include_empty: bool = False,
     ) -> DeepLogParameterCiTraceReport | None:
-        """Return the verbose per-point trace for debugging."""
+        """Return the verbose per-point trace for debugging.
+
+        Args:
+            train_sequence_count (int): Number of training sequences scored.
+            test_sequence_count (int): Number of test sequences scored.
+            highlighted_templates (tuple[str, ...] | None): Optional template
+                subset to retain in the trace report.
+            include_empty (bool): Whether to return an empty report instead of
+                `None` when no series were recorded.
+
+        Returns:
+            DeepLogParameterCiTraceReport | None: Verbose trace report, or
+                `None` when no series were recorded and `include_empty` is
+                false.
+        """
         if not self.series_by_template:
             if not include_empty:
                 return None
@@ -377,7 +543,17 @@ def parameter_ci_thresholds(
     mean: float,
     stddev: float,
 ) -> DeepLogParameterCiThresholds:
-    """Return Gaussian upper thresholds for the configured CI levels."""
+    """Return Gaussian upper thresholds for the configured CI levels.
+
+    Args:
+        mean (float): Gaussian mean fitted from the normal residuals.
+        stddev (float): Gaussian standard deviation fitted from the normal
+            residuals.
+
+    Returns:
+        DeepLogParameterCiThresholds: Upper thresholds for the configured
+            confidence levels.
+    """
     if stddev <= 0.0:
         threshold = round(mean, 8)
         return DeepLogParameterCiThresholds(
@@ -399,6 +575,10 @@ def _threshold_summaries(
     thresholds: DeepLogParameterCiThresholds,
 ) -> list[DeepLogParameterCiThresholdSummary]:
     """Build threshold summaries for the configured Figure 9 cut-offs.
+
+    Args:
+        points (list[DeepLogParameterCiTracePoint]): Scored trace points.
+        thresholds (DeepLogParameterCiThresholds): Gaussian upper thresholds.
 
     Returns:
         list[DeepLogParameterCiThresholdSummary]: Threshold-wise detection
@@ -429,6 +609,17 @@ def _threshold_summary(
     confidence: float,
     threshold: float,
 ) -> DeepLogParameterCiThresholdSummary:
+    """Build a threshold summary for one confidence level.
+
+    Args:
+        points (list[DeepLogParameterCiTracePoint]): Scored trace points.
+        confidence (float): Confidence level represented by the summary.
+        threshold (float): Threshold value being evaluated.
+
+    Returns:
+        DeepLogParameterCiThresholdSummary: Aggregate detection counts for the
+            threshold.
+    """
     detected_points = [point for point in points if point.residual_mse > threshold]
     anomalous_points = [point for point in points if point.label != 0]
     detected_anomalous_point_count = sum(
@@ -463,7 +654,16 @@ def _mean(values: list[float]) -> float:
 
 
 def _validation_sample_warning(validation_pair_count: int) -> str | None:
-    """Return a note when Gaussian calibration uses a small validation tail."""
+    """Return a note when Gaussian calibration uses a small validation tail.
+
+    Args:
+        validation_pair_count (int): Number of validation pairs used for the
+            Gaussian calibration.
+
+    Returns:
+        str | None: Warning text when the calibration tail is small, otherwise
+            `None`.
+    """
     if validation_pair_count >= _MIN_CALIBRATION_SAMPLE_COUNT:
         return None
     return (
@@ -474,7 +674,11 @@ def _validation_sample_warning(validation_pair_count: int) -> str | None:
 
 
 def _parameter_ci_result_note() -> str:
-    """Return the stable note attached to the Figure 9 approximation."""
+    """Return the stable note attached to the Figure 9 approximation.
+
+    Returns:
+        str: Stable explanatory note written into the compact report.
+    """
     return (
         "Approximation of DeepLog Figure 9 on the available OpenStack corpus; "
         "highlighted anomaly points are injected overlays, and Gaussian "
@@ -487,7 +691,15 @@ def _event_label_for_sequence_point(
     sequence: TemplateSequence,
     event_index: int,
 ) -> int:
-    """Return the most specific available label for one scored event."""
+    """Return the most specific available label for one scored event.
+
+    Args:
+        sequence (TemplateSequence): Sequence containing the scored event.
+        event_index (int): Position of the event within the sequence.
+
+    Returns:
+        int: Best available anomaly label for the scored event.
+    """
     event_labels = sequence.event_labels
     if event_labels is not None and event_index < len(event_labels):
         event_label = event_labels[event_index]
@@ -501,7 +713,16 @@ def _feature_squared_errors(
     observed: list[float | None],
     predicted: list[float | None],
 ) -> list[float | None]:
-    """Return per-feature squared errors for a scored parameter point."""
+    """Return per-feature squared errors for a scored parameter point.
+
+    Args:
+        observed (list[float | None]): Observed feature values.
+        predicted (list[float | None]): Predicted feature values.
+
+    Returns:
+        list[float | None]: Per-feature squared errors, or `None` when a
+            feature value is missing.
+    """
     return [
         None if obs is None or pred is None else (obs - pred) ** 2
         for obs, pred in zip(observed, predicted, strict=True)
@@ -513,7 +734,16 @@ def _select_highlighted_series(
     *,
     requested_templates: tuple[str, ...] | None,
 ) -> list[TSeries]:
-    """Return the compact report subset, honouring any explicit ordering."""
+    """Return the compact report subset, honouring any explicit ordering.
+
+    Args:
+        series (list[TSeries]): Candidate series sorted by publication order.
+        requested_templates (tuple[str, ...] | None): Optional template subset
+            to retain in the compact report.
+
+    Returns:
+        list[TSeries]: Highlighted series subset for the compact report.
+    """
     if requested_templates:
         series_by_template = {item.template: item for item in series}
         selected: list[TSeries] = []

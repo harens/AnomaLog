@@ -270,7 +270,14 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         return self._score_templates(templates)
 
     def _score_template(self, template: str) -> float:
-        """Return the negative log-probability for one template."""
+        """Return the negative log-probability for one template.
+
+        Args:
+            template (str): Template to score.
+
+        Returns:
+            float: Negative log-probability under the learned template model.
+        """
         vocab_size = max(len(self.template_counts), 1)
         denominator = self.total_events + (self.smoothing * vocab_size)
         numerator = self.template_counts.get(template, 0) + self.smoothing
@@ -278,7 +285,14 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         return -math.log(probability)
 
     def _score_templates(self, templates: list[str]) -> float:
-        """Return the mean negative log-probability for a template list."""
+        """Return the mean negative log-probability for a template list.
+
+        Args:
+            templates (list[str]): Templates to score.
+
+        Returns:
+            float: Mean negative log-probability across the templates.
+        """
         if not templates:
             return 0.0
         loss_sum = 0.0
@@ -287,7 +301,12 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         return loss_sum / len(templates)
 
     def _record_event_level_predictions(self, sequence: TemplateSequence) -> None:
-        """Accumulate event-level confusion counts for one scored sequence."""
+        """Accumulate event-level confusion counts for one scored sequence.
+
+        Args:
+            sequence (TemplateSequence): Sequence whose event-level predictions
+                should be recorded.
+        """
         if sequence.event_labels is None:
             return
         eligible_event_mask = evaluation_event_mask_for_sequence(sequence)
@@ -310,7 +329,12 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             )
 
     def _event_level_state_snapshot(self) -> EventLevelDetectionDiagnostics | None:
-        """Return the latest event-level detection diagnostics."""
+        """Return the latest event-level detection diagnostics.
+
+        Returns:
+            EventLevelDetectionDiagnostics | None: Latest event-level
+                diagnostics, or `None` when no events have been scored.
+        """
         return self._event_level_state.snapshot(task="event_level_detection")
 
     def run_metrics(
@@ -318,7 +342,16 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         *,
         run_metrics: dict[str, int | float | dict[int, int]],
     ) -> object | None:
-        """Return event-level diagnostics for the latest scored run."""
+        """Return event-level diagnostics for the latest scored run.
+
+        Args:
+            run_metrics (dict[str, int | float | dict[int, int]]): Metric values
+                collected during the run.
+
+        Returns:
+            object | None: Event-level diagnostics wrapper, or `None` when no
+                event-level state exists.
+        """
         del run_metrics
         snapshot = self._event_level_state_snapshot()
         return None if snapshot is None else {"event_level_detection": snapshot}
@@ -354,7 +387,16 @@ def _masked_templates(
     sequence: TemplateSequence,
     event_mask: tuple[bool, ...],
 ) -> list[str]:
-    """Return the templates whose positions are eligible under one mask."""
+    """Return the templates whose positions are eligible under one mask.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose templates should be masked.
+        event_mask (tuple[bool, ...]): Eligibility mask aligned to the
+            sequence's templates.
+
+    Returns:
+        list[str]: Templates retained by the mask.
+    """
     return [
         template
         for template, is_eligible in zip(sequence.templates, event_mask, strict=True)

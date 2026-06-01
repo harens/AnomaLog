@@ -314,7 +314,12 @@ def _write_equal_timestamp_fixture_source_tree(tmp_path: Path) -> Path:
 def test_load_ait_ads_label_windows_sorts_non_overlapping_intervals(
     tmp_path: Path,
 ) -> None:
-    """AIT-ADS label windows should be sorted by time before use."""
+    """AIT-ADS label windows should be sorted by time before use.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic CSV
+            input.
+    """
     source_root = _write_fixture_source_tree(tmp_path)
 
     windows = load_ait_ads_label_windows(source_root / "labels.csv")
@@ -329,7 +334,12 @@ def test_load_ait_ads_label_windows_sorts_non_overlapping_intervals(
 def test_materialise_ait_ads_alert_stream_assigns_labels_and_sorts(
     tmp_path: Path,
 ) -> None:
-    """The canonical AIT-ADS stream should sort alerts and apply half-open labels."""
+    """The canonical AIT-ADS stream should sort alerts and apply half-open labels.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
     source_root = _write_fixture_source_tree(tmp_path)
     raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,7 +384,12 @@ def test_materialise_ait_ads_alert_stream_assigns_labels_and_sorts(
 def test_materialise_ait_ads_alert_stream_uses_half_open_end_boundaries(
     tmp_path: Path,
 ) -> None:
-    """AIT-ADS label windows should stay half-open at the end boundary."""
+    """AIT-ADS label windows should stay half-open at the end boundary.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
     source_root = _write_boundary_fixture_source_tree(tmp_path)
     raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -405,7 +420,12 @@ def test_materialise_ait_ads_alert_stream_uses_half_open_end_boundaries(
 def test_materialise_ait_ads_alert_stream_orders_equal_timestamps_stably(
     tmp_path: Path,
 ) -> None:
-    """AIT-ADS sorting should stay deterministic when timestamps tie."""
+    """AIT-ADS sorting should stay deterministic when timestamps tie.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
     source_root = _write_equal_timestamp_fixture_source_tree(tmp_path)
     raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,7 +465,12 @@ def test_materialise_ait_ads_alert_stream_orders_equal_timestamps_stably(
 def test_materialise_ait_ads_alert_stream_sorts_across_scenarios(
     tmp_path: Path,
 ) -> None:
-    """AIT-ADS materialisation should preserve global chronology across scenarios."""
+    """AIT-ADS materialisation should preserve global chronology across scenarios.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
     source_root = _write_multi_scenario_fixture_source_tree(tmp_path)
     raw_logs_path = tmp_path / "preprocessed" / "ait_ads_alerts.jsonl"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -481,7 +506,12 @@ def test_materialise_ait_ads_alert_stream_sorts_across_scenarios(
 
 
 def test_ait_ads_source_uses_local_dir_sources_for_tests(tmp_path: Path) -> None:
-    """AITADSScenarioSource should be reusable with a local extracted fixture."""
+    """AITADSScenarioSource should be reusable with a local extracted fixture.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic source
+            tree.
+    """
     source_root = _write_fixture_source_tree(tmp_path)
     dataset_root = tmp_path / "materialised"
     source = AITADSScenarioSource(
