@@ -40,6 +40,7 @@ deeplog = [
 
 [dependency-groups]
 dev = [
+    "diff-cover>=10.3.0",
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
