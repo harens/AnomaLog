@@ -213,6 +213,42 @@ def test_main_does_not_print_the_run_directory(
     assert not capsys.readouterr().out
 
 
+def test_build_arg_parser_exposes_config_and_registry_inputs() -> None:
+    """The CLI parser should expose both config and registry modes."""
+    parser = runner.build_arg_parser()
+    option_strings = {
+        option_string
+        for action in parser._actions
+        for option_string in action.option_strings
+    }
+
+    assert {"--config", "--experiment"}.issubset(option_strings)
+    assert {"--registry", "--repo-root", "--force"}.issubset(option_strings)
+    assert {"--write-predictions", "--debug-reporting"}.issubset(option_strings)
+
+
+def test_failure_helpers_format_bundle_exceptions(
+    tmp_path: Path,
+) -> None:
+    """Bundle failure helpers should return stable log messages."""
+    bundle = SimpleNamespace(concrete_name="demo")
+
+    failure = runner._run_bundle_with_failure_capture(  # noqa: SLF001
+        bundle,
+        force=False,
+        write_predictions=False,
+        debug_reporting=False,
+    )
+    assert failure[1] is not None
+
+    future: Future[Path] = Future()
+    future.set_exception(RuntimeError("boom"))
+    captured = runner._capture_future_result(future, bundle)  # noqa: SLF001
+    assert captured[0] is None
+    assert captured[1] == "demo: boom"
+    assert runner._format_bundle_failure(bundle, RuntimeError()) == "demo: RuntimeError"  # noqa: SLF001
+
+
 def test_run_experiment_submits_plain_worker_payloads(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
