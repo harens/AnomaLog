@@ -16,9 +16,6 @@ The checked-in benchmark target is:
 The current config lives in
 [`experiments/configs/datasets/bgl/how_far_are_we_2022.toml`](../configs/datasets/bgl/how_far_are_we_2022.toml)
 and is intentionally separate from the CCS 2017 DeepLog BGL presets.
-That benchmark path uses the shared BGL template parser configuration rather
-than a Spell-specific override; the methodological work here is the raw-entry
-split and one-hour windowing, not parser training.
 
 ## What I checked
 
@@ -119,9 +116,6 @@ But the repository should not claim exact equality with the paper's BGL row
 yet. The current implementation is close enough for engineering comparison,
 but the count gap should stay documented until the exact benchmark archive or
 preprocessing script is available.
-
-For runtime evidence on the parser stage itself, see
-[BGL template parser runtime probe](bgl_template_parser_runtime_probe.md).
 
 ## Related notes
 
