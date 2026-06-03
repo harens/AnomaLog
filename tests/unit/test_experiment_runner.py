@@ -6,16 +6,24 @@ import logging
 from argparse import Namespace
 from concurrent.futures import Future
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from typing_extensions import Self
 
+from experiments.config import (
+    DatasetVariantConfig,
+    EntitySequenceConfig,
+    ExperimentBundle,
+)
+from experiments.models.base import decode_experiment_model_config
+from experiments.models.template_frequency import TemplateFrequencyModelConfig
 from experiments.runners import run_experiment as runner
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
-    from pathlib import Path
 
     import pytest
 
@@ -65,6 +73,39 @@ class _OneShotSequenceView:
             split_label=SimpleNamespace(value="train"),
             label=0,
         )
+
+
+@dataclass(frozen=True)
+class _FakeRunConfig:
+    name: str = "demo"
+    dataset: DatasetVariantConfig | None = None
+    models: list[TemplateFrequencyModelConfig] = field(default_factory=list)
+    results_root: Path = Path("experiments/results")
+    description: str | None = None
+    max_workers: int | Literal["auto"] = 1
+
+
+def _make_bundle(tmp_path: Path, *, concrete_name: str = "demo") -> ExperimentBundle:
+    dataset = DatasetVariantConfig(
+        name="demo",
+        dataset_name="demo",
+        preset="demo",
+        sequence=EntitySequenceConfig(),
+    )
+    return ExperimentBundle(
+        experiments_root=tmp_path / "experiments",
+        repo_root=tmp_path,
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=_FakeRunConfig(),
+        dataset=dataset,
+        model=decode_experiment_model_config(
+            {"name": "template_frequency"},
+            config_type=TemplateFrequencyModelConfig,
+        ),
+        concrete_name=concrete_name,
+    )
 
 
 class _SequenceConfig:
@@ -216,22 +257,27 @@ def test_main_does_not_print_the_run_directory(
 def test_build_arg_parser_exposes_config_and_registry_inputs() -> None:
     """The CLI parser should expose both config and registry modes."""
     parser = runner.build_arg_parser()
-    option_strings = {
-        option_string
-        for action in parser._actions
-        for option_string in action.option_strings
-    }
+    help_text = parser.format_help()
 
-    assert {"--config", "--experiment"}.issubset(option_strings)
-    assert {"--registry", "--repo-root", "--force"}.issubset(option_strings)
-    assert {"--write-predictions", "--debug-reporting"}.issubset(option_strings)
+    assert "--config" in help_text
+    assert "--experiment" in help_text
+    assert "--registry" in help_text
+    assert "--repo-root" in help_text
+    assert "--force" in help_text
+    assert "--write-predictions" in help_text
+    assert "--debug-reporting" in help_text
 
 
 def test_failure_helpers_format_bundle_exceptions(
     tmp_path: Path,
 ) -> None:
-    """Bundle failure helpers should return stable log messages."""
-    bundle = SimpleNamespace(concrete_name="demo")
+    """Bundle failure helpers should return stable log messages.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic bundle
+            paths used by the helper checks.
+    """
+    bundle = _make_bundle(tmp_path, concrete_name="demo")
 
     failure = runner._run_bundle_with_failure_capture(  # noqa: SLF001
         bundle,
