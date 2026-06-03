@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import pytest
 
 import experiments.results as experiment_results
@@ -91,12 +92,76 @@ def test_build_sequence_split_summary_exposes_effective_fraction_for_normal_only
     )
 
 
-def test_compact_run_metrics_report_drops_debug_only_diagnostics() -> None:
-    """Default metrics reports should keep the paper-facing next-event summary."""
-    report: dict[str, Any] = {
-        "metric_blocks": {
-            "next_event_prediction": {
-                "diagnostics": {
+def test_build_run_metrics_report_drops_debug_only_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default metrics reports should keep the paper-facing next-event summary.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub the report
+            builders.
+    """
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("data"),
+            cache_root=Path("cache"),
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    model_summary = ModelRunSummary(
+        metrics={},
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=0,
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+        ),
+    )
+
+    monkeypatch.setattr(
+        experiment_results,
+        "build_metric_metadata",
+        lambda **_: {
+            "evaluation_unit": EvaluationUnit.SEQUENCE.value,
+            "split_policy": {},
+            "stream_segment_policy": {},
+            "primary_metric_scope": None,
+        },
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_metric_blocks",
+        lambda **_: {
+            MetricScope.NEXT_EVENT_PREDICTION: MetricBlock(
+                prediction_unit=EvaluationUnit.NEXT_EVENT,
+                label_unit=EvaluationUnit.NEXT_EVENT,
+                status=MetricStatus.VALID,
+                diagnostics={
                     "task": "next_event_prediction",
                     "totals": {"coverage": 0.5},
                     "top_k": {
@@ -110,17 +175,16 @@ def test_compact_run_metrics_report_drops_debug_only_diagnostics() -> None:
                     "segment_diagnostics": {"segment_count": 2},
                     "vocabulary_policy": "full_dataset",
                 },
-            },
+            ),
         },
-    }
-
-    compact_report: dict[str, Any] = experiment_results._compact_run_metrics_report(  # noqa: SLF001
-        report,
-        debug_reporting=False,
     )
-    diagnostics: dict[str, Any] = compact_report["metric_blocks"][
-        "next_event_prediction"
-    ]["diagnostics"]
+
+    report: Any = experiment_results.build_run_metrics_report(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
+    diagnostics = report["metric_blocks"]["next_event_prediction"]["diagnostics"]
 
     assert "classification_top1_macro" not in diagnostics
     assert "segment_diagnostics" not in diagnostics
@@ -129,10 +193,15 @@ def test_compact_run_metrics_report_drops_debug_only_diagnostics() -> None:
     assert diagnostics["classification_top1_weighted"] == {"precision": 0.2}
 
 
-def test_build_metric_metadata_omits_aggregation_policy(
+def test_build_metric_metadata_keeps_only_manifest_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Persisted metric metadata should not expose the retired aggregation field."""
+    """Persisted metric metadata should stay thin and manifest-oriented.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub the report
+            builders.
+    """
     bundle = next(
         bundle
         for bundle in load_experiment_bundles(
@@ -207,64 +276,178 @@ def test_build_metric_metadata_omits_aggregation_policy(
     )
 
     assert "aggregation_policy" not in metadata
-    assert metadata["prediction_unit"] == EvaluationUnit.SEQUENCE.value
-
-
-def test_compact_model_manifest_trims_debug_only_fields() -> None:
-    """Persisted manifests should keep only the compact detector summaries."""
-    deeplog_manifest: dict[str, Any] = {
-        "detector": "deeplog",
-        "parameter_models": [{"template": "T"}],
-        "skipped_parameter_models": [{"template": "S"}],
-        "train_key_vocabulary_size": 3,
-    }
-    deepcase_manifest: dict[str, Any] = {
-        "detector": "deepcase",
-        "prediction_diagnostics": {
-            "event_count": 10,
-            "confident_event_count": 7,
-            "abstained_event_count": 3,
-            "confident_anomaly_event_count": 2,
-            "sequence_confident_anomaly_count": 1,
-            "sequence_confident_normal_count": 4,
-            "sequence_abstained_count": 2,
-            "abstained_anomalous_label_count": 1,
-            "abstained_normal_label_count": 2,
-            "reason_counts": {"known_benign_cluster": 8},
-            "event_decision_metrics": {
-                "event_count": 10,
-                "event_auto_decision_count": 7,
-                "event_abstained_decision_count": 3,
-                "event_auto_coverage": 0.7,
-                "event_abstain_rate": 0.3,
-                "event_tp": 2,
-                "event_fp": 1,
-                "event_tn": 3,
-                "event_fn": 1,
-                "event_precision": 0.5,
-                "event_recall": 0.4,
-                "event_f1": 0.44,
-                "event_accuracy": 0.6,
-                "event_predicted_normal_count": 5,
-                "event_predicted_anomalous_count": 2,
-                "event_true_normal_count": 6,
-                "event_true_anomalous_count": 4,
-            },
-        },
-    }
-
-    compact_deeplog: dict[str, Any] = experiment_results._compact_model_manifest(  # noqa: SLF001
-        deeplog_manifest,
-        debug_reporting=False,
-    )
-    compact_deepcase: dict[str, Any] = experiment_results._compact_model_manifest(  # noqa: SLF001
-        deepcase_manifest,
-        debug_reporting=False,
+    assert "prediction_unit" not in metadata
+    assert "label_unit" not in metadata
+    assert metadata["evaluation_unit"] == EvaluationUnit.SEQUENCE.value
+    assert (
+        metadata["primary_metric_scope"] == MetricScope.SEQUENCE_LEVEL_DETECTION.value
     )
 
-    assert "parameter_models" not in compact_deeplog
-    assert "skipped_parameter_models" not in compact_deeplog
-    prediction_diagnostics: dict[str, Any] = compact_deepcase["prediction_diagnostics"]
+
+def test_build_dataset_manifest_trims_debug_only_fields(
+    tmp_path: Path,
+) -> None:
+    """Persisted manifests should keep only the compact detector summaries.
+
+    Args:
+        tmp_path (Path): Temporary directory used to hold the synthetic raw
+            dataset and result artefacts.
+    """
+
+    class DeepLogModelManifest(ModelManifest, frozen=True, kw_only=True):
+        """Detector-specific manifest fields used to exercise compaction.
+
+        Attributes:
+            parameter_models (list[dict[str, str]]): Parameter models that
+                should be omitted from the compact manifest.
+            skipped_parameter_models (list[dict[str, str]]): Skipped parameter
+                models that should be omitted from the compact manifest.
+        """
+
+        parameter_models: list[dict[str, str]] = msgspec.field(
+            default_factory=list,
+        )
+        skipped_parameter_models: list[dict[str, str]] = msgspec.field(
+            default_factory=list,
+        )
+
+    class DeepCaseModelManifest(ModelManifest, frozen=True, kw_only=True):
+        """Detector-specific manifest fields used to exercise compaction.
+
+        Attributes:
+            prediction_diagnostics (dict[str, Any]): Detector-specific
+                diagnostics that should be compacted before persistence.
+        """
+
+        prediction_diagnostics: dict[str, Any]
+
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=tmp_path / "raw.log",
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    sink.raw_dataset_path.write_text("", encoding="utf-8")
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=tmp_path / "data",
+            cache_root=tmp_path / "cache",
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    result_paths = experiment_results.ResultPaths(
+        run_fingerprint="fingerprint",
+        run_dir=tmp_path,
+        config_path=tmp_path / "experiment_config.json",
+        dataset_manifest_path=tmp_path / "dataset_manifest.json",
+        metrics_path=tmp_path / "metrics.json",
+        predictions_path=tmp_path / "predictions.jsonl",
+        environment_path=tmp_path / "environment.json",
+        run_log_path=tmp_path / "run.log",
+    )
+
+    deeplog_context = experiment_results.ResultWriteContext(
+        bundle=bundle,
+        templated=templated,
+        sequences=sequences,
+        model_summary=ModelRunSummary(
+            metrics={},
+            model_manifest=DeepLogModelManifest(
+                detector="deeplog",
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+                ignored_sequence_count=0,
+            ),
+            sequence_summary=SequenceSummary(
+                sequence_count=0,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            ),
+        ),
+        result_paths=result_paths,
+    )
+    deepcase_context = experiment_results.ResultWriteContext(
+        bundle=bundle,
+        templated=templated,
+        sequences=sequences,
+        model_summary=ModelRunSummary(
+            metrics={},
+            model_manifest=DeepCaseModelManifest(
+                detector="deepcase",
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+                ignored_sequence_count=0,
+                prediction_diagnostics={
+                    "event_count": 10,
+                    "confident_event_count": 7,
+                    "abstained_event_count": 3,
+                    "confident_anomaly_event_count": 2,
+                    "sequence_confident_anomaly_count": 1,
+                    "sequence_confident_normal_count": 4,
+                    "sequence_abstained_count": 2,
+                    "abstained_anomalous_label_count": 1,
+                    "abstained_normal_label_count": 2,
+                    "reason_counts": {"known_benign_cluster": 8},
+                    "event_decision_metrics": {
+                        "event_count": 10,
+                        "event_auto_decision_count": 7,
+                        "event_abstained_decision_count": 3,
+                        "event_auto_coverage": 0.7,
+                        "event_abstain_rate": 0.3,
+                        "event_tp": 2,
+                        "event_fp": 1,
+                        "event_tn": 3,
+                        "event_fn": 1,
+                        "event_precision": 0.5,
+                        "event_recall": 0.4,
+                        "event_f1": 0.44,
+                        "event_accuracy": 0.6,
+                        "event_predicted_normal_count": 5,
+                        "event_predicted_anomalous_count": 2,
+                        "event_true_normal_count": 6,
+                        "event_true_anomalous_count": 4,
+                    },
+                },
+            ),
+            sequence_summary=SequenceSummary(
+                sequence_count=0,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            ),
+        ),
+        result_paths=result_paths,
+    )
+
+    deeplog_manifest: Any = experiment_results.build_dataset_manifest(
+        context=deeplog_context,
+    )
+    deepcase_manifest: Any = experiment_results.build_dataset_manifest(
+        context=deepcase_context,
+    )
+
+    deeplog_model_manifest = deeplog_manifest["model_manifest"]
+    assert "parameter_models" not in deeplog_model_manifest
+    assert "skipped_parameter_models" not in deeplog_model_manifest
+    deepcase_model_manifest = deepcase_manifest["model_manifest"]
+    prediction_diagnostics = deepcase_model_manifest["prediction_diagnostics"]
     assert "reason_counts" not in prediction_diagnostics
     assert "abstained_anomalous_label_count" not in prediction_diagnostics
     assert "abstained_normal_label_count" not in prediction_diagnostics
@@ -357,9 +540,6 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
         "build_run_metrics_report",
         lambda **kwargs: {
             "sequence_count": kwargs["model_summary"].metrics["sequence_count"],
-            "parameter_ci_report": kwargs["model_summary"].metrics[
-                "parameter_ci_report"
-            ],
         },
     )
     monkeypatch.setattr(
@@ -371,7 +551,7 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
     experiment_results.write_run_outputs(context=context)
 
     metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
-    assert metrics["parameter_ci_report"] == {"task": "parameter_ci_approximation"}
+    assert "parameter_ci_report" not in metrics
     assert "parameter_ci_trace" not in metrics
     assert json.loads(
         (tmp_path / "figure9_parameter_ci.json").read_text(
@@ -472,9 +652,6 @@ def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
         "build_run_metrics_report",
         lambda **kwargs: {
             "sequence_count": kwargs["model_summary"].metrics["sequence_count"],
-            "parameter_ci_report": kwargs["model_summary"].metrics[
-                "parameter_ci_report"
-            ],
         },
     )
     monkeypatch.setattr(
@@ -494,7 +671,7 @@ def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
         "series_count": 1,
     }
     metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
-    assert metrics["parameter_ci_report"] == {"task": "parameter_ci_approximation"}
+    assert "parameter_ci_report" not in metrics
     assert "parameter_ci_trace" not in metrics
 
 
