@@ -1656,9 +1656,12 @@ class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
 
     Attributes:
         chunk_size (int): Maximum number of raw entries per emitted chunk.
+        continuous_context (bool): Whether adjacent chunks should carry model
+            state across sequence boundaries.
     """
 
     chunk_size: int = 100_000
+    continuous_context: bool = True
 
     @override
     def __post_init__(self) -> None:
@@ -1750,10 +1753,26 @@ class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
                 split_label=split_label,
                 training_event_mask=training_event_mask,
                 evaluation_event_mask=evaluation_event_mask,
-                continuous_context=True,
+                continuous_context=self.continuous_context,
             )
             if sequence is not None:
                 yield sequence
+
+    def with_continuous_context(
+        self,
+        *,
+        enabled: bool = True,
+    ) -> Self:
+        """Treat consecutive stream chunks as one continuous stream.
+
+        Args:
+            enabled (bool): Whether to carry model state across chunk
+                boundaries.
+
+        Returns:
+            Self: Copy with updated continuity behaviour.
+        """
+        return replace(self, continuous_context=enabled)
 
     @staticmethod
     def _split_label_for_chronological_chunk(

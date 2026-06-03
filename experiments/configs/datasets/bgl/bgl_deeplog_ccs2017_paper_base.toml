@@ -11,3 +11,4 @@ evaluation_unit = "continuous_event_stream"
 [dataset.sequence]
 grouping = "chronological_stream"
 chunk_size = 100000
+continuous_context = true

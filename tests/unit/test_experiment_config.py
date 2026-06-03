@@ -7,7 +7,8 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from anomalog.parsers.template import IdentityTemplateParser
+from anomalog.cache import CachePathsConfig
+from anomalog.parsers.template import IdentityTemplateParser, TemplatedDataset
 from anomalog.sources.deeplog_preprocessed import (
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
@@ -40,6 +41,12 @@ from experiments.models.deeplog.detector import DeepLogModelConfig
 from experiments.models.markov import MarkovModelConfig
 from experiments.models.metric_schema import EvaluationUnit
 from experiments.models.template_frequency import TemplateFrequencyModelConfig
+from tests.unit.helpers import (
+    InMemoryStructuredSink,
+    NullStructuredParser,
+    label_lookup,
+    structured_line,
+)
 
 
 def _write_config_tree(
@@ -1012,6 +1019,7 @@ def test_load_experiment_bundles_supports_chronological_stream_grouping(
                 "\n[sequence]\n"
                 'grouping = "chronological_stream"\n'
                 "chunk_size = 7\n"
+                "continuous_context = false\n"
             ),
         ),
         model=(
@@ -1025,6 +1033,7 @@ def test_load_experiment_bundles_supports_chronological_stream_grouping(
 
     assert isinstance(bundle.dataset.sequence, ChronologicalStreamSequenceConfig)
     assert bundle.dataset.sequence.chunk_size == expected_chunk_size
+    assert bundle.dataset.sequence.continuous_context is False
 
 
 @pytest.mark.allow_no_new_coverage
@@ -1236,6 +1245,12 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         dataset_config=bundle_named(bgl_10pct_bundles, "deeplog").dataset,
         model_config=bundle_named(bgl_10pct_bundles, "deeplog").model,
     )
+    bgl_1pct_sequence = bundle_named(bgl_1pct_bundles, "deeplog").dataset.sequence
+    bgl_10pct_sequence = bundle_named(bgl_10pct_bundles, "deeplog").dataset.sequence
+    assert isinstance(bgl_1pct_sequence, ChronologicalStreamSequenceConfig)
+    assert isinstance(bgl_10pct_sequence, ChronologicalStreamSequenceConfig)
+    assert bgl_1pct_sequence.continuous_context is True
+    assert bgl_10pct_sequence.continuous_context is True
     validate_deeplog_paper_config(
         dataset_config=bundle_named(
             hdfs_bundles,
@@ -1749,35 +1764,79 @@ def test_thunderbird_smoke_dataset_builds_chronological_stream(
         encoding="utf-8",
     )
 
-    spec = build_dataset_spec(
-        DatasetVariantConfig(
-            name="thunderbird_smoke_local",
-            dataset_name="THUNDERBIRD_SMOKE_LOCAL",
-            source=LocalDirSourceConfig(
-                path=source_root,
-                raw_logs_relpath=Path("Thunderbird.log"),
-            ),
-            structured_parser="thunderbird",
-            template_parser="drain3",
-            cache_paths=CachePathsConfigModel(namespace="thunderbird_smoke_test"),
-            sequence=ChronologicalStreamSequenceConfig(
-                chunk_size=2,
-                train_fraction=0.5,
-                test_fraction=0.5,
-                split=RawEntryPrefixNormalFractionSplitConfig(
-                    train_normal_entry_fraction=0.5,
-                ),
+    dataset_config = DatasetVariantConfig(
+        name="thunderbird_smoke_local",
+        dataset_name="THUNDERBIRD_SMOKE_LOCAL",
+        source=LocalDirSourceConfig(
+            path=source_root,
+            raw_logs_relpath=Path("Thunderbird.log"),
+        ),
+        structured_parser="thunderbird",
+        template_parser="drain3",
+        cache_paths=CachePathsConfigModel(namespace="thunderbird_smoke_test"),
+        sequence=ChronologicalStreamSequenceConfig(
+            chunk_size=2,
+            train_fraction=0.5,
+            test_fraction=0.5,
+            split=RawEntryPrefixNormalFractionSplitConfig(
+                train_normal_entry_fraction=0.5,
             ),
         ),
-        repo_root=tmp_path,
     )
+    spec = build_dataset_spec(dataset_config, repo_root=tmp_path)
     templated = spec.build()
-    sequences = list(templated.group_by_chronological_stream(chunk_size=2))
+    sequences = list(dataset_config.sequence.apply(templated))
 
     assert templated.sink.count_rows() == 2
     assert len(sequences) == 1
     assert len(sequences[0].events) == 2
     assert sequences[0].label == 1
+
+
+def test_chronological_stream_sequence_config_apply_carries_context_flag() -> None:
+    """Chronological stream configs should pass their continuity flag through."""
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="stream",
+                untemplated_message_text="first",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=200,
+                entity_id="stream",
+                untemplated_message_text="second",
+                anomalous=0,
+            ),
+        ],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("data"),
+            cache_root=Path("cache"),
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequence_config = ChronologicalStreamSequenceConfig(
+        chunk_size=1,
+        continuous_context=False,
+    )
+
+    sequences = list(sequence_config.apply(templated))
+
+    assert len(sequences) == 2
+    assert [sequence.continuous_context for sequence in sequences] == [
+        False,
+        False,
+    ]
 
 
 @pytest.mark.allow_no_new_coverage

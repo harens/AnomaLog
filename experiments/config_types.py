@@ -698,9 +698,12 @@ class ChronologicalStreamSequenceConfig(
 
     Attributes:
         chunk_size (int): Maximum number of raw entries per emitted chunk.
+        continuous_context (bool): Whether adjacent chunks should carry model
+            state across sequence boundaries.
     """
 
     chunk_size: int = 100_000
+    continuous_context: bool = True
 
     def __post_init__(self) -> None:
         """Validate the chunk size and shared split settings.
@@ -724,7 +727,10 @@ class ChronologicalStreamSequenceConfig(
         Returns:
             SequenceBuilder: Chronological stream sequence builder.
         """
-        return templated.group_by_chronological_stream(chunk_size=self.chunk_size)
+        return templated.group_by_chronological_stream(
+            chunk_size=self.chunk_size,
+            continuous_context=self.continuous_context,
+        )
 
 
 SequenceConfig: TypeAlias = (

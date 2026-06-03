@@ -1011,6 +1011,63 @@ def test_chronological_stream_training_mask_aligns_with_target_events() -> None:
     assert sequence.split_label is SplitLabel.TRAIN
 
 
+def test_chronological_stream_builder_can_disable_continuous_context() -> None:
+    """Chronological stream builders should honour explicit context disabling."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="stream",
+            untemplated_message_text="two",
+            anomalous=0,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=2,
+        continuous_context=False,
+    )
+
+    [sequence] = list(builder)
+
+    assert sequence.continuous_context is False
+
+
+def test_chronological_stream_builder_with_continuous_context_returns_copy() -> None:
+    """Chronological stream builders should expose an explicit continuity toggle."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="stream",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+    )
+
+    builder = ChronologicalStreamSequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        chunk_size=1,
+    )
+
+    disabled = builder.with_continuous_context(enabled=False)
+
+    assert builder.continuous_context is True
+    assert disabled.continuous_context is False
+
+
 def test_chronological_stream_event_masks_are_stable_across_chunk_sizes() -> None:
     """Chunk size should not change event-level train/test membership."""
     sink = _sink(

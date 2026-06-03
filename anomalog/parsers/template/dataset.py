@@ -114,11 +114,14 @@ class TemplatedDataset:
         self,
         *,
         chunk_size: int = 100_000,
+        continuous_context: bool = True,
     ) -> ChronologicalStreamSequenceBuilder:
         """Group sequences into deterministic chronological stream chunks.
 
         Args:
             chunk_size (int): Maximum number of raw entries per emitted chunk.
+            continuous_context (bool): Whether emitted chunks should carry
+                model state across chunk boundaries.
 
         Returns:
             ChronologicalStreamSequenceBuilder: Chronological stream view.
@@ -128,6 +131,7 @@ class TemplatedDataset:
             infer_template=self.template_parser.inference,
             label_for_group=self.anomaly_labels.label_for_group,
             chunk_size=chunk_size,
+            continuous_context=continuous_context,
         )
 
     def group_by_fixed_window(

@@ -192,8 +192,9 @@ This section keeps the short version in the main DeepLog note:
 - `grouping = "chronological_stream"` gives BGL a deterministic entry-stream
   grouping mode while preserving the existing entity-based default for the
   benchmark configs;
-- chronological stream sequences are marked continuous internally, so DeepLog
-  carries history across internal batch boundaries without a user-facing switch;
+- chronological stream sequences can be marked continuous through the dataset
+  sequence config, so DeepLog carries history across chunk boundaries when the
+  stream contract asks for it;
 - chronological stream batches remain intact as memory containers, and BGL now
   uses explicit per-event training and evaluation masks so normal targets can
   train even when a batch also contains anomalies or post-cutoff context;
