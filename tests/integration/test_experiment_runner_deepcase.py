@@ -104,8 +104,8 @@ def _assert_deepcase_metrics(
     assert "next_event_prediction" not in metrics
     assert metrics["evaluation_unit"] == "sequence"
     assert metrics["primary_metric_scope"] == "sequence_level_detection"
-    assert metrics["prediction_unit"] == "sequence"
-    assert metrics["label_unit"] == "sequence"
+    assert "prediction_unit" not in metrics
+    assert "label_unit" not in metrics
     assert "primary_metrics" not in metrics
     assert "legacy_metrics" not in metrics
     metric_blocks = {str(key): value for key, value in metrics["metric_blocks"].items()}
@@ -171,6 +171,8 @@ def _assert_deepcase_task_metadata(
 ) -> None:
     assert manifest["evaluation_unit"] == metrics["evaluation_unit"]
     assert manifest["primary_metric_scope"] == metrics["primary_metric_scope"]
+    assert "prediction_unit" not in manifest
+    assert "label_unit" not in manifest
     assert sorted(metrics["metric_blocks"]) == [
         "event_level_detection",
         "manual_workload_reduction",

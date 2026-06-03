@@ -67,29 +67,3 @@ class EvaluationUnit(str, Enum):  # noqa: DOC601 DOC603
     CLUSTER = "cluster"
     CHRONOLOGICAL_EVENT_STREAM = "chronological_event_stream"
     CONTINUOUS_EVENT_STREAM = "continuous_event_stream"
-
-
-class AggregationPolicy(str, Enum):  # noqa: DOC601 DOC603
-    """Stable aggregation policies for derived metric blocks.
-
-    Attributes:
-        AUTO_DECISION: Metrics over automatic decisions only.
-        TOP_K: Metrics over top-k next-event predictions.
-        TOP_1: Metrics over top-1 next-event predictions.
-        ANY_EVENT: A block is positive if any event in the unit is positive.
-        MAX_EVENT_SCORE: Aggregate using the maximum event score.
-        MEAN_EVENT_SCORE: Aggregate using the mean event score.
-        MANUAL_SAMPLE: Metrics computed over manually reviewed samples.
-        SEMI_AUTOMATIC: Metrics computed over semi-automatic decisions.
-        NONE: No aggregation beyond the base unit.
-    """
-
-    AUTO_DECISION = "auto_decision"
-    TOP_K = "top_k"
-    TOP_1 = "top_1"
-    ANY_EVENT = "any_event"
-    MAX_EVENT_SCORE = "max_event_score"
-    MEAN_EVENT_SCORE = "mean_event_score"
-    MANUAL_SAMPLE = "manual_sample"
-    SEMI_AUTOMATIC = "semi_automatic"
-    NONE = "none"

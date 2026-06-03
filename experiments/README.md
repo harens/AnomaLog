@@ -398,15 +398,14 @@ Each concrete run writes a deterministic directory under
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
 - `metrics.json`: task-aware detector metrics, including the selected
-  `primary_metric_scope`, canonical scoped metric blocks, and run-level
-  evaluation metadata such as `evaluation_unit`, `prediction_unit`,
-  `label_unit`, and split policy details at the top level. The individual
-  blocks are keyed by scope, so they do not repeat `metric_scope`. By default
-  this file keeps the paper-facing summaries only; pass `--debug-reporting` if
-  you need the fuller diagnostic payloads during development. DeepLog runs also
-  record an exact-rank `top_g_replay` curve using the configured paper
-  cut-offs, so you can inspect multiple top-`g` thresholds from one fitted
-  model without re-running inference.
+  `primary_metric_scope`, `evaluation_unit`, split policy details, and
+  canonical scoped metric blocks. The block map is the source of truth for
+  scope-specific result units and status. By default this file keeps the
+  paper-facing summaries only; pass `--debug-reporting` if you need the fuller
+  diagnostic payloads during development. DeepLog runs also record an exact-rank
+  `top_g_replay` curve using the configured paper cut-offs, so you can inspect
+  multiple top-`g` thresholds from one fitted model without re-running
+  inference.
 - `figure9_parameter_ci.json`: concise publication-facing summary for the
   parameter-value OpenStack approximation.
 - `figure9_parameter_ci_debug.json`: optional verbose DeepLog parameter trace

@@ -36,6 +36,7 @@ from anomalog.parsers.template import (
 from anomalog.presets import (
     bgl,
     hdfs_v1,
+    hdfs_wuyifan18_deepcase_table_iv_compat,
     hdfs_wuyifan18_deeplog_preprocessed,
     openstack_deeplog_parameter_ci_approx,
     openstack_deeplog_preprocessed,
@@ -417,6 +418,23 @@ def test_wuyifan18_deeplog_hdfs_preset_uses_preprocessed_session_source() -> Non
     source = hdfs_wuyifan18_deeplog_preprocessed.source
     assert source is not None
     assert source.raw_logs_relpath == Path("preprocessed/hdfs_events.log")
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.base_source, RemoteZipSource)
+    assert source.base_source.md5_checksum == "36a2f69d4a4def7b4b6a19b27838291e"
+
+
+def test_wuyifan18_deepcase_hdfs_preset_uses_the_same_archive_checksum() -> None:
+    """The DeepCASE compatibility preset should use the same GitHub archive hash."""
+    assert (
+        hdfs_wuyifan18_deepcase_table_iv_compat.template_parser
+        is IdentityTemplateParser
+    )
+    source = hdfs_wuyifan18_deepcase_table_iv_compat.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/hdfs_test_normal_compat.log")
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.base_source, RemoteZipSource)
+    assert source.base_source.md5_checksum == "36a2f69d4a4def7b4b6a19b27838291e"
 
 
 @pytest.mark.allow_no_new_coverage

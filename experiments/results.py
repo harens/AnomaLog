@@ -178,7 +178,7 @@ def write_run_outputs(
         debug_reporting=debug_reporting,
     )
     _write_json(result_paths.metrics_path, metric_report)
-    parameter_ci_report = _parameter_ci_report(metric_report)
+    parameter_ci_report = _parameter_ci_report(model_summary.metrics)
     if parameter_ci_report is not None:
         _write_json(
             result_paths.run_dir / "figure9_parameter_ci.json",
@@ -483,7 +483,6 @@ def build_metric_metadata(
         requested_primary_scope=bundle.model.primary_metric_scope,
         evaluation_unit=evaluation_unit,
     )
-    primary_block = None if primary_scope is None else metric_blocks[primary_scope]
     split_policy = _build_split_policy(
         bundle=bundle,
         sequences=sequences,
@@ -492,10 +491,6 @@ def build_metric_metadata(
     stream_segment_policy = _build_stream_segment_policy(bundle.dataset)
     return {
         "evaluation_unit": evaluation_unit.value,
-        "prediction_unit": (
-            None if primary_block is None else primary_block.prediction_unit.value
-        ),
-        "label_unit": None if primary_block is None else primary_block.label_unit.value,
         "split_policy": split_policy,
         "stream_segment_policy": stream_segment_policy,
         "primary_metric_scope": (
@@ -549,10 +544,6 @@ def build_run_metrics_report(
             for scope, block in metric_blocks.items()
         },
     }
-    for key, value in run_metrics.items():
-        if key != "parameter_ci_report" or value is None:
-            continue
-        report[key] = value
     return _compact_run_metrics_report(report, debug_reporting=debug_reporting)
 
 

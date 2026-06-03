@@ -96,6 +96,7 @@ hdfs_wuyifan18_deeplog_preprocessed = (
         PostProcessedSource(
             base_source=RemoteZipSource(
                 url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+                md5_checksum="36a2f69d4a4def7b4b6a19b27838291e",
             ),
             post_process=partial(
                 materialise_labelled_session_stream,
@@ -114,6 +115,7 @@ hdfs_wuyifan18_deepcase_table_iv_compat = (
         PostProcessedSource(
             base_source=RemoteZipSource(
                 url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+                md5_checksum="36a2f69d4a4def7b4b6a19b27838291e",
             ),
             post_process=partial(
                 materialise_labelled_session_stream,

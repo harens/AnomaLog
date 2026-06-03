@@ -65,13 +65,12 @@ underlying automatic decisions separately from abstentions.
 ### Metric Interpretation
 
 `metrics.json` now reports scoped blocks with explicit
-`prediction_unit`, `label_unit`, and `status` fields. The scope is carried by
-the `metric_blocks` key itself, so the per-block payload no longer repeats
-`metric_scope`. The shared sequence-level wrapper remains useful when it is the
-configured primary scope, but it is no longer treated as the universal headline
-metric. The canonical payload lives in `metric_blocks`. DeepCASE runs should foreground
-the configured `primary_metric_scope` and keep sequence-level results separate
-from the event-level abstention diagnostics.
+`status` fields, and the block map itself carries the per-scope meaning. The
+shared sequence-level wrapper remains useful when it is the configured primary
+scope, but it is no longer treated as the universal headline metric. The
+canonical payload lives in `metric_blocks`. DeepCASE runs should foreground the
+configured `primary_metric_scope` and keep sequence-level results separate from
+the event-level abstention diagnostics.
 
 The paper-comparison block for HDFS Table IV lives at
 `metric_blocks.next_event_prediction.classification_top1_weighted`. It mirrors

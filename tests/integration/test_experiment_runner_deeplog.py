@@ -156,8 +156,8 @@ def _assert_deeplog_metric_metadata(metrics: dict[str, Any]) -> None:
     assert "next_event_prediction" not in metrics
     assert metrics["evaluation_unit"] == "continuous_event_stream"
     assert metrics["primary_metric_scope"] == "event_level_detection"
-    assert metrics["prediction_unit"] == "event"
-    assert metrics["label_unit"] == "event"
+    assert "prediction_unit" not in metrics
+    assert "label_unit" not in metrics
     assert "primary_metrics" not in metrics
     assert "legacy_metrics" not in metrics
 
@@ -268,6 +268,8 @@ def _assert_deeplog_manifest(
     assert "skipped_parameter_models" not in model_manifest
     sequence_config = bundle.dataset.sequence
     sequence_split_summary = _object_dict(manifest["sequence_split_summary"])
+    assert "prediction_unit" not in manifest
+    assert "label_unit" not in manifest
     assert sequence_split_summary.get("train_on_normal_entities_only") is None
     assert sequence_split_summary["requested_train_fraction"] == pytest.approx(
         sequence_config.train_fraction,
@@ -375,8 +377,8 @@ def _assert_baseline_run_artifacts(run_dir: Path) -> None:
         (run_dir / "metrics.json").read_text(encoding="utf-8"),
     )
     assert baseline_metrics["primary_metric_scope"] == "event_level_detection"
-    assert baseline_metrics["prediction_unit"] == "event"
-    assert baseline_metrics["label_unit"] == "event"
+    assert "prediction_unit" not in baseline_metrics
+    assert "label_unit" not in baseline_metrics
     baseline_metric_blocks = _object_dict(baseline_metrics["metric_blocks"])
     baseline_event_block = _object_dict(baseline_metric_blocks["event_level_detection"])
     baseline_sequence_block = _object_dict(
