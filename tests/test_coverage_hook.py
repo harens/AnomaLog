@@ -18,7 +18,12 @@ def _current_coverage() -> object:
 def test_pytest_runtest_makereport_stashes_call_report(
     request: pytest.FixtureRequest,
 ) -> None:
-    """The hook should keep the call-phase report available to later fixtures."""
+    """The hook should keep the call-phase report available to later fixtures.
+
+    Args:
+        request (pytest.FixtureRequest): Pytest request used to access the
+            current test item and its stash.
+    """
     item = request.node
     reports_key = unit_conftest._TEST_REPORTS_KEY  # noqa: SLF001
     call = pytest.CallInfo.from_call(lambda: None, "call")
@@ -39,7 +44,14 @@ def test_warns_when_test_does_not_add_new_coverage(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
 ) -> None:
-    """Tests that only repeat covered behaviour should emit a warning."""
+    """Tests that only repeat covered behaviour should emit a warning.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the hook dependencies so the
+            warning branch can be exercised deterministically.
+        request (pytest.FixtureRequest): Pytest request used to build the
+            synthetic report and fixture hook.
+    """
     warnings: list[pytest.PytestWarning] = []
 
     def _allow_coverage_marker(
@@ -105,7 +117,14 @@ def test_marker_suppresses_warning(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
 ) -> None:
-    """Tests can opt out when zero new coverage is intentional."""
+    """Tests can opt out when zero new coverage is intentional.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the hook dependencies so the
+            suppression branch can be exercised deterministically.
+        request (pytest.FixtureRequest): Pytest request used to build the
+            synthetic report and fixture hook.
+    """
     warnings: list[pytest.PytestWarning] = []
 
     def _mark_suppressed(
