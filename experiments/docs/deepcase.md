@@ -65,10 +65,11 @@ underlying automatic decisions separately from abstentions.
 ### Metric Interpretation
 
 `metrics.json` now reports scoped blocks with explicit
-`metric_scope`, `prediction_unit`, `label_unit`, and `status` fields. The
-shared sequence-level wrapper remains useful when it is the configured primary
-scope, but it is no longer treated as the universal headline metric. The
-canonical payload lives in `metric_blocks`. DeepCASE runs should foreground
+`prediction_unit`, `label_unit`, and `status` fields. The scope is carried by
+the `metric_blocks` key itself, so the per-block payload no longer repeats
+`metric_scope`. The shared sequence-level wrapper remains useful when it is the
+configured primary scope, but it is no longer treated as the universal headline
+metric. The canonical payload lives in `metric_blocks`. DeepCASE runs should foreground
 the configured `primary_metric_scope` and keep sequence-level results separate
 from the event-level abstention diagnostics.
 

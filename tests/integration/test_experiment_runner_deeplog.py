@@ -305,8 +305,8 @@ def _assert_deeplog_manifest(
         )
     assert manifest["evaluation_unit"] == "continuous_event_stream"
     assert manifest["primary_metric_scope"] == "event_level_detection"
-    assert "event_level_detection" in manifest["available_metric_scopes"]
-    assert "sequence_level_detection" in manifest["available_metric_scopes"]
+    assert "event_level_detection" in metrics["metric_blocks"]
+    assert "sequence_level_detection" in metrics["metric_blocks"]
     assert manifest["split_policy"]["train_fraction"] == pytest.approx(
         sequence_config.train_fraction,
     )

@@ -501,7 +501,6 @@ def build_metric_metadata(
         "primary_metric_scope": (
             None if primary_scope is None else primary_scope.value
         ),
-        "available_metric_scopes": [scope.value for scope in metric_blocks],
     }
 
 
@@ -639,7 +638,6 @@ def _build_metric_blocks(
         if MetricScope.EVENT_LEVEL_DETECTION not in metric_blocks:
             metric_blocks[MetricScope.EVENT_LEVEL_DETECTION] = (
                 build_not_applicable_metric_block(
-                    metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
                     prediction_unit=EvaluationUnit.EVENT,
                     label_unit=EvaluationUnit.EVENT,
                     diagnostics={"reason": "no_event_level_labels"},
@@ -648,7 +646,6 @@ def _build_metric_blocks(
         if MetricScope.SEQUENCE_LEVEL_DETECTION not in metric_blocks:
             metric_blocks[MetricScope.SEQUENCE_LEVEL_DETECTION] = (
                 build_not_applicable_metric_block(
-                    metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
                     prediction_unit=EvaluationUnit.SEQUENCE,
                     label_unit=EvaluationUnit.SEQUENCE,
                     diagnostics={"reason": "no_sequence_level_labels"},
@@ -698,7 +695,6 @@ def _build_sequence_level_detection_block(
     ) = sequence_inputs
     sequence_block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.SEQUENCE,
             label_unit=EvaluationUnit.SEQUENCE,
             tp=tp_value,
@@ -810,7 +806,6 @@ def _build_event_level_detection_block(
     ) = event_detection
     event_block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.EVENT,
             label_unit=EvaluationUnit.EVENT,
             tp=tp,
@@ -961,7 +956,6 @@ def _build_next_event_prediction_block(
     )
     return build_diagnostic_metric_block(
         request=DiagnosticMetricBlockRequest(
-            metric_scope=MetricScope.NEXT_EVENT_PREDICTION,
             prediction_unit=EvaluationUnit.NEXT_EVENT,
             label_unit=EvaluationUnit.NEXT_EVENT,
             headline_metrics={} if coverage is None else {"coverage": coverage},
@@ -980,7 +974,6 @@ def _build_manual_workload_block(
     manual_workload_mapping = _as_metric_mapping(manual_workload)
     return build_diagnostic_metric_block(
         request=DiagnosticMetricBlockRequest(
-            metric_scope=MetricScope.MANUAL_WORKLOAD_REDUCTION,
             prediction_unit=EvaluationUnit.CLUSTER,
             label_unit=EvaluationUnit.CLUSTER,
             diagnostics=manual_workload_mapping,
@@ -998,7 +991,6 @@ def _build_semi_automatic_workload_block(
     semi_automatic_workload_mapping = _as_metric_mapping(semi_automatic_workload)
     return build_diagnostic_metric_block(
         request=DiagnosticMetricBlockRequest(
-            metric_scope=MetricScope.SEMI_AUTOMATIC_WORKLOAD_REDUCTION,
             prediction_unit=EvaluationUnit.CLUSTER,
             label_unit=EvaluationUnit.CLUSTER,
             diagnostics=semi_automatic_workload_mapping,

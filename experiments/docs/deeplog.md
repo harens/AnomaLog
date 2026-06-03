@@ -97,7 +97,8 @@ diverge is short-session handling:
   `event_level_detection`, `sequence_level_detection`, and
   `next_event_prediction` inside the canonical `metric_blocks` object plus
   top-level metadata for `primary_metric_scope`, `evaluation_unit`, and the
-  active split policy. DeepLog BGL stream runs should foreground the
+  active split policy. Each block is keyed by scope, so the per-block payload
+  no longer repeats `metric_scope`. DeepLog BGL stream runs should foreground the
   event-level block and treat the sequence-level block as invalid or
   diagnostic-only when the sequence labels are single-class.
 - Missing or non-numeric parameter values:

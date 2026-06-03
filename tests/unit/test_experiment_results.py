@@ -157,7 +157,6 @@ def test_build_metric_metadata_omits_aggregation_policy(
     )
     sequences = templated.sequences()
     metric_block = MetricBlock(
-        metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
         prediction_unit=EvaluationUnit.SEQUENCE,
         label_unit=EvaluationUnit.SEQUENCE,
         status=MetricStatus.VALID,

@@ -26,7 +26,6 @@ def test_sequence_level_binary_metrics_are_valid_for_mixed_labels() -> None:
     """Mixed labels should produce a valid sequence-level detection block."""
     block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.SEQUENCE,
             label_unit=EvaluationUnit.SEQUENCE,
             tp=6,
@@ -45,6 +44,7 @@ def test_sequence_level_binary_metrics_are_valid_for_mixed_labels() -> None:
     assert block.status is MetricStatus.VALID
     assert block.invalid_reason is None
     assert block.class_counts == {"normal": 12, "anomalous": 7}
+    assert not hasattr(block, "metric_scope")
     assert not hasattr(block, "aggregation_policy")
     assert block.confusion_matrix is not None
     assert block.headline_metrics["precision"] == pytest.approx(6 / 8)
@@ -55,7 +55,6 @@ def test_single_class_sequence_level_metrics_are_invalid() -> None:
     """Single-class binary detection blocks should be rejected as invalid."""
     block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.SEQUENCE,
             label_unit=EvaluationUnit.SEQUENCE,
             tp=48,
@@ -82,7 +81,6 @@ def test_event_level_streaming_metrics_can_remain_diagnostic_only() -> None:
     """Secondary event-level blocks should stay diagnostic-only on streams."""
     event_block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.EVENT,
             label_unit=EvaluationUnit.EVENT,
             tp=9,
@@ -99,7 +97,6 @@ def test_event_level_streaming_metrics_can_remain_diagnostic_only() -> None:
         ),
     )
     sequence_block = build_not_applicable_metric_block(
-        metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
         prediction_unit=EvaluationUnit.SEQUENCE,
         label_unit=EvaluationUnit.SEQUENCE,
     )
@@ -123,7 +120,6 @@ def test_next_event_only_metrics_leave_anomaly_blocks_not_applicable() -> None:
     """Next-event-only runs should not fabricate binary anomaly metrics."""
     next_event_block = build_diagnostic_metric_block(
         request=DiagnosticMetricBlockRequest(
-            metric_scope=MetricScope.NEXT_EVENT_PREDICTION,
             prediction_unit=EvaluationUnit.NEXT_EVENT,
             label_unit=EvaluationUnit.NEXT_EVENT,
             headline_metrics={"coverage": 0.75},
@@ -131,12 +127,10 @@ def test_next_event_only_metrics_leave_anomaly_blocks_not_applicable() -> None:
         ),
     )
     event_block = build_not_applicable_metric_block(
-        metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
         prediction_unit=EvaluationUnit.EVENT,
         label_unit=EvaluationUnit.EVENT,
     )
     sequence_block = build_not_applicable_metric_block(
-        metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
         prediction_unit=EvaluationUnit.SEQUENCE,
         label_unit=EvaluationUnit.SEQUENCE,
     )
@@ -162,7 +156,6 @@ def test_deepcase_style_abstention_keeps_coverage_separate() -> None:
     """Abstained predictions should reconcile without breaking auto metrics."""
     block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.SEQUENCE,
             label_unit=EvaluationUnit.SEQUENCE,
             tp=2,
@@ -191,7 +184,6 @@ def test_binary_metric_blocks_require_matching_units() -> None:
     """Binary blocks should still reject mismatched prediction and label units."""
     block = build_binary_metric_block(
         request=BinaryMetricBlockRequest(
-            metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
             prediction_unit=EvaluationUnit.EVENT,
             label_unit=EvaluationUnit.SEQUENCE,
             tp=1,

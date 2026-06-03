@@ -171,7 +171,13 @@ def _assert_deepcase_task_metadata(
 ) -> None:
     assert manifest["evaluation_unit"] == metrics["evaluation_unit"]
     assert manifest["primary_metric_scope"] == metrics["primary_metric_scope"]
-    assert manifest["available_metric_scopes"] == metrics["available_metric_scopes"]
+    assert sorted(metrics["metric_blocks"]) == [
+        "event_level_detection",
+        "manual_workload_reduction",
+        "next_event_prediction",
+        "semi_automatic_workload_reduction",
+        "sequence_level_detection",
+    ]
 
 
 def _assert_deepcase_prediction_diagnostics(

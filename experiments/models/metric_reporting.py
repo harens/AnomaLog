@@ -18,7 +18,6 @@ class BinaryMetricBlockRequest:  # noqa: DOC601 DOC603
     """Input parameters for one binary metric block.
 
     Attributes:
-        metric_scope (MetricScope): Metric block being built.
         prediction_unit (EvaluationUnit): Unit used for detector predictions.
         label_unit (EvaluationUnit): Unit used for ground-truth labels.
         tp (int): True-positive count.
@@ -36,7 +35,6 @@ class BinaryMetricBlockRequest:  # noqa: DOC601 DOC603
         diagnostics (object | None): Optional diagnostic payload.
     """
 
-    metric_scope: MetricScope
     prediction_unit: EvaluationUnit
     label_unit: EvaluationUnit
     tp: int
@@ -59,7 +57,6 @@ class DiagnosticMetricBlockRequest:  # noqa: DOC601 DOC603
     """Input parameters for one non-binary metric block.
 
     Attributes:
-        metric_scope (MetricScope): Metric block being built.
         prediction_unit (EvaluationUnit): Unit used for detector predictions.
         label_unit (EvaluationUnit): Unit used for ground-truth labels.
         status (MetricStatus): Status assigned to the diagnostic block.
@@ -67,7 +64,6 @@ class DiagnosticMetricBlockRequest:  # noqa: DOC601 DOC603
         diagnostics (object | None): Optional diagnostic payload.
     """
 
-    metric_scope: MetricScope
     prediction_unit: EvaluationUnit
     label_unit: EvaluationUnit
     status: MetricStatus = MetricStatus.VALID
@@ -92,10 +88,9 @@ class ConfusionMatrix(msgspec.Struct, frozen=True):  # noqa: DOC601 DOC603
 
 
 class MetricBlock(msgspec.Struct, frozen=True):  # noqa: DOC601 DOC603
-    """One scoped metric block plus validation state.
+    """One metric block plus validation state.
 
     Attributes:
-        metric_scope (MetricScope): Scope represented by the block.
         prediction_unit (EvaluationUnit): Unit used for predictions.
         label_unit (EvaluationUnit): Unit used for labels.
         status (MetricStatus): Validation status for the block.
@@ -110,7 +105,6 @@ class MetricBlock(msgspec.Struct, frozen=True):  # noqa: DOC601 DOC603
         diagnostics (Any): Additional diagnostics for the block.
     """
 
-    metric_scope: MetricScope
     prediction_unit: EvaluationUnit
     label_unit: EvaluationUnit
     status: MetricStatus = MetricStatus.VALID
@@ -217,7 +211,6 @@ def build_binary_metric_block(
         request.diagnostics if isinstance(request.diagnostics, dict) else {}
     )
     return MetricBlock(
-        metric_scope=request.metric_scope,
         prediction_unit=request.prediction_unit,
         label_unit=request.label_unit,
         status=status,
@@ -238,7 +231,6 @@ def build_binary_metric_block(
 
 def build_not_applicable_metric_block(
     *,
-    metric_scope: MetricScope,
     prediction_unit: EvaluationUnit,
     label_unit: EvaluationUnit,
     diagnostics: Mapping[str, object] | None = None,
@@ -246,7 +238,6 @@ def build_not_applicable_metric_block(
     """Build a metric block explicitly marked as not applicable.
 
     Args:
-        metric_scope (MetricScope): Metric scope represented by the block.
         prediction_unit (EvaluationUnit): Unit used for predictions.
         label_unit (EvaluationUnit): Unit used for labels.
         diagnostics (Mapping[str, object] | None): Optional diagnostic payload.
@@ -256,7 +247,6 @@ def build_not_applicable_metric_block(
             metrics.
     """
     return MetricBlock(
-        metric_scope=metric_scope,
         prediction_unit=prediction_unit,
         label_unit=label_unit,
         status=MetricStatus.NOT_APPLICABLE,
@@ -285,7 +275,6 @@ def build_diagnostic_metric_block(
         request.diagnostics if isinstance(request.diagnostics, dict) else {}
     )
     return MetricBlock(
-        metric_scope=request.metric_scope,
         prediction_unit=request.prediction_unit,
         label_unit=request.label_unit,
         status=request.status,
