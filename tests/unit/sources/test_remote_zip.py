@@ -1,5 +1,6 @@
 """Tests for non-network `RemoteZipSource` branches."""
 
+import gzip
 import tarfile
 import zipfile
 from collections.abc import Callable
@@ -201,6 +202,65 @@ def test_remote_zip_source_materialise_downloads_and_extracts_tarball(
     assert extracted == [(zip_path, dst_dir)]
     assert dst_dir.is_dir()
     assert (dst_dir / "preprocessed/openstack_labelled_raw.log").is_file()
+    assert not zip_path.exists()
+
+
+def test_remote_zip_source_materialise_downloads_and_extracts_gzip_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-file gzip archives should unpack into the configured raw log path.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local dataset fixtures.
+        monkeypatch (pytest.MonkeyPatch): Replaces network and archive helpers so
+            the gzip-specific branch can be exercised deterministically.
+    """
+    dst_dir = tmp_path / "dataset"
+    zip_path = dst_dir.with_suffix(".zip")
+    source = RemoteZipSource(
+        url="https://example.com/bgl2.gz",
+        md5_checksum="expected-md5",
+        raw_logs_relpath=Path("bgl2"),
+    )
+    verified: list[tuple[Path, str]] = []
+
+    archive_path = tmp_path / "bgl2.gz"
+    with gzip.open(archive_path, "wb") as archive:
+        archive.write(b"line-1\nline-2\n")
+
+    def _fake_urlretrieve(
+        url: str,
+        target: Path,
+        reporthook: Callable[[int, int, int], None] | None = None,
+    ) -> None:
+        assert url == source.url
+        target.write_bytes(archive_path.read_bytes())
+        if reporthook is not None:
+            reporthook(1, 4, 8)
+
+    def _fake_verify_md5(path: Path, checksum: str) -> None:
+        verified.append((path, checksum))
+
+    def _fake_extract_zip(_path: Path, _output_dir: Path) -> None:
+        message = "not a zip archive"
+        raise zipfile.BadZipFile(message)
+
+    monkeypatch.setattr("anomalog.sources.remote_zip.urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr("anomalog.sources.remote_zip.verify_md5", _fake_verify_md5)
+    monkeypatch.setattr("anomalog.sources.remote_zip.extract_zip", _fake_extract_zip)
+
+    def _progress_factory() -> Progress:
+        return Progress()
+
+    with disable_run_logger():
+        source._download_dataset(  # noqa: SLF001 - exercising the gzip branch directly
+            zip_path,
+            progress_factory=_progress_factory,
+        )
+
+    assert verified == [(zip_path, "expected-md5")]
+    assert (dst_dir / "bgl2").read_text(encoding="utf-8") == "line-1\nline-2\n"
     assert not zip_path.exists()
 
 

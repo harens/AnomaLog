@@ -1,5 +1,7 @@
-"""Remote ZIP dataset source with progress reporting and checksum verification."""
+"""Remote archive dataset source with progress reporting and checksum verification."""
 
+import gzip
+import shutil
 import tarfile
 import zipfile
 from collections.abc import Callable
@@ -45,7 +47,7 @@ class _DownloadProgress:
 
 @dataclass(frozen=True)
 class RemoteZipSource(DatasetSource):
-    """Download a dataset zip from a remote URL and extract it locally.
+    """Download a dataset archive from a remote URL and extract it locally.
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the source.
@@ -86,6 +88,15 @@ class RemoteZipSource(DatasetSource):
             bool: True when the remote URL path ends with a tarball suffix.
         """
         return urlparse(self.url).path.endswith((".tar.gz", ".tgz"))
+
+    def _archive_is_gzip(self) -> bool:
+        """Return whether the remote archive should be unpacked as a gzip file.
+
+        Returns:
+            bool: True when the remote URL path ends with a plain gzip suffix.
+        """
+        path = urlparse(self.url).path
+        return path.endswith(".gz") and not self._archive_is_tarball()
 
     def materialise(
         self,
@@ -290,9 +301,12 @@ class RemoteZipSource(DatasetSource):
         try:
             extract_zip(zip_path, zip_path.with_suffix(""))
         except zipfile.BadZipFile:
-            if not self._archive_is_tarball():
+            if self._archive_is_tarball():
+                self._extract_tarball(zip_path)
+            elif self._archive_is_gzip():
+                self._extract_gzip(zip_path)
+            else:
                 raise
-            self._extract_tarball(zip_path)
 
     @staticmethod
     def _extract_tarball(archive_path: Path) -> None:
@@ -306,3 +320,34 @@ class RemoteZipSource(DatasetSource):
         with tarfile.open(archive_path, mode="r:gz") as archive:
             for member in archive.getmembers():
                 archive.extract(member, dst_dir)
+
+    def _extract_gzip(self, archive_path: Path) -> None:
+        """Extract a gzip archive into the matching dataset directory.
+
+        The CFDR BGL corpus is published as a single compressed log file rather
+        than a zip or tarball, so this keeps the remote archive source reusable
+        without introducing a separate download mechanism.
+
+        Args:
+            archive_path (Path): Local path of the downloaded gzip archive.
+
+        Raises:
+            ValueError: If the source does not define `raw_logs_relpath` for
+                the decompressed file name.
+        """
+        dst_dir = archive_path.with_suffix("")
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if self.raw_logs_relpath is None:
+            msg = (
+                "gzip sources require raw_logs_relpath so the output file can be named"
+            )
+            raise ValueError(msg)
+        output_path = dst_dir / self.raw_logs_relpath
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            gzip.open(archive_path, mode="rb") as source,
+            output_path.open(
+                "wb",
+            ) as target,
+        ):
+            shutil.copyfileobj(source, target)

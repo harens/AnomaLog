@@ -90,6 +90,21 @@ bgl = (
     .parse_with(BGLParser())
 )
 
+bgl_cfdr = (
+    DatasetSpec("BGL_CFDR")
+    .from_source(
+        RemoteZipSource(
+            url=(
+                "http://0b4af6cdc2f0c5998459-c0245c5c937c5dedcca3f1764ecc9b2f."
+                "r43.cf2.rackcdn.com/hpc4/bgl2.gz"
+            ),
+            md5_checksum="479057cc2c8935a896e65479a4fcb850",
+            raw_logs_relpath=Path("bgl2"),
+        ),
+    )
+    .parse_with(BGLParser())
+)
+
 hdfs_wuyifan18_deeplog_preprocessed = (
     DatasetSpec("HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED")
     .from_source(
@@ -221,6 +236,7 @@ ait_ads = (
 
 _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
+    "bgl_cfdr": bgl_cfdr,
     "hdfs_v1": hdfs_v1,
     "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
     "hdfs_wuyifan18_deepcase_table_iv_compat": hdfs_wuyifan18_deepcase_table_iv_compat,

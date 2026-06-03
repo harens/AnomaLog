@@ -35,6 +35,7 @@ from anomalog.parsers.template import (
 )
 from anomalog.presets import (
     bgl,
+    bgl_cfdr,
     hdfs_v1,
     hdfs_wuyifan18_deepcase_table_iv_compat,
     hdfs_wuyifan18_deeplog_preprocessed,
@@ -372,6 +373,7 @@ def test_dataset_spec_defaults_to_drain3_template_parser() -> None:
 def test_builtin_presets_register_and_resolve_by_name() -> None:
     """Built-in presets should be available through the public registry."""
     assert resolve_preset("bgl") is bgl
+    assert resolve_preset("bgl_cfdr") is bgl_cfdr
     assert resolve_preset("hdfs_v1") is hdfs_v1
     assert (
         resolve_preset("hdfs_wuyifan18_deeplog_preprocessed")
@@ -400,6 +402,7 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
     }
     assert set(preset_names()) >= {
         "bgl",
+        "bgl_cfdr",
         "hdfs_v1",
         "hdfs_wuyifan18_deeplog_preprocessed",
         "openstack_deeplog_preprocessed",
@@ -435,6 +438,20 @@ def test_wuyifan18_deepcase_hdfs_preset_uses_the_same_archive_checksum() -> None
     assert isinstance(source, PostProcessedSource)
     assert isinstance(source.base_source, RemoteZipSource)
     assert source.base_source.md5_checksum == "36a2f69d4a4def7b4b6a19b27838291e"
+
+
+def test_bgl_cfdr_preset_uses_the_cfdr_archive_checksum() -> None:
+    """The CFDR preset should pin the rackcdn archive and raw filename."""
+    assert bgl_cfdr.template_parser is Drain3Parser
+    source = bgl_cfdr.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("bgl2")
+    assert isinstance(source, RemoteZipSource)
+    assert source.url == (
+        "http://0b4af6cdc2f0c5998459-c0245c5c937c5dedcca3f1764ecc9b2f."
+        "r43.cf2.rackcdn.com/hpc4/bgl2.gz"
+    )
+    assert source.md5_checksum == "479057cc2c8935a896e65479a4fcb850"
 
 
 @pytest.mark.allow_no_new_coverage

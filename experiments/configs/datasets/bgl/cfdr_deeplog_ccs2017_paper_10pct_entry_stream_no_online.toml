@@ -1,0 +1,18 @@
+extends = "cfdr_deeplog_ccs2017_paper_base.toml"
+name = "bgl_cfdr_deeplog_ccs2017_paper_10pct_entry_stream_no_online"
+description = "DeepLog CCS 2017 CFDR BGL reproduction for the 10% raw-entry prefix interpretation without online update, plus template-frequency and Markov sanity baselines on the same split."
+
+[dataset]
+name = "bgl_cfdr_deeplog_ccs2017_paper_10pct_entry_stream_no_online"
+description = "DeepLog CCS 2017 CFDR BGL reproduction config: first 10% normal raw entries, chronological stream grouping, and no online update."
+
+[dataset.sequence]
+train_fraction = 0.1
+test_fraction = 0.9
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_normal_fraction"
+train_normal_entry_fraction = 0.1
+
+[dataset.cache_paths]
+namespace = "bgl_cfdr_entity"

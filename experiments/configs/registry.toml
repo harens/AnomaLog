@@ -57,6 +57,22 @@ models = [
   "deeplog_default",
 ]
 
+[experiments.bgl_cfdr_entity_chronological]
+dataset = "bgl/cfdr_entity_chronological"
+# CFDR BGL variant that intentionally reuses the regular BGL entity-level
+# coverage. The raw corpus differs, but the parser, labels, grouping, and
+# diagnostic/baseline experiment matrix stay the same.
+model_sets = [
+  "baselines_with_nb",
+  "deepcase_majority_vote",
+  "deepcase_threshold_fraction",
+  "deepcase_abstain_mixed",
+]
+models = [
+  "deepcase",
+  "deeplog_default",
+]
+
 [experiments.hdfs_v1_entity_chronological]
 dataset = "hdfs/v1_entity_chronological"
 # Generic entity-grouped HDFS benchmark used for local comparisons and
@@ -158,6 +174,25 @@ datasets = [
 ]
 
 [experiment_sets.bgl_deeplog_ccs2017_paper.overrides.deeplog_default]
+"model.history_size" = 3
+"model.top_g_values" = [1, 3, 6]
+"model.num_layers" = 1
+"model.hidden_size" = 256
+"model.primary_metric_scope" = "event_level_detection"
+"model.secondary_metric_scopes" = ["next_event_prediction", "sequence_level_detection"]
+
+[experiment_sets.bgl_cfdr_deeplog_ccs2017_paper]
+# CFDR BGL variant that intentionally reuses the regular BGL DeepLog matrix.
+# The archive is different, but the paper-facing protocol, parser, and model
+# coverage remain aligned with the regular BGL registry entry.
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
+datasets = [
+  "bgl/cfdr_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online",
+  "bgl/cfdr_deeplog_ccs2017_paper_10pct_entry_stream_no_online",
+]
+
+[experiment_sets.bgl_cfdr_deeplog_ccs2017_paper.overrides.deeplog_default]
 "model.history_size" = 3
 "model.top_g_values" = [1, 3, 6]
 "model.num_layers" = 1

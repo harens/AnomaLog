@@ -1187,6 +1187,22 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
         / "bgl"
         / "bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml",
     )
+    bgl_cfdr_1pct_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "bgl"
+        / "cfdr_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml",
+    )
+    bgl_cfdr_10pct_bundles = load_experiment_bundles(
+        repo_root
+        / "experiments"
+        / "configs"
+        / "datasets"
+        / "bgl"
+        / "cfdr_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml",
+    )
     bgl_2022_bundles = load_experiment_bundles(
         repo_root
         / "experiments"
@@ -1244,6 +1260,14 @@ def test_deeplog_paper_configs_pin_expected_protocols() -> None:
     validate_deeplog_paper_config(
         dataset_config=bundle_named(bgl_10pct_bundles, "deeplog").dataset,
         model_config=bundle_named(bgl_10pct_bundles, "deeplog").model,
+    )
+    validate_deeplog_paper_config(
+        dataset_config=bundle_named(bgl_cfdr_1pct_bundles, "deeplog").dataset,
+        model_config=bundle_named(bgl_cfdr_1pct_bundles, "deeplog").model,
+    )
+    validate_deeplog_paper_config(
+        dataset_config=bundle_named(bgl_cfdr_10pct_bundles, "deeplog").dataset,
+        model_config=bundle_named(bgl_cfdr_10pct_bundles, "deeplog").model,
     )
     bgl_1pct_sequence = bundle_named(bgl_1pct_bundles, "deeplog").dataset.sequence
     bgl_10pct_sequence = bundle_named(bgl_10pct_bundles, "deeplog").dataset.sequence

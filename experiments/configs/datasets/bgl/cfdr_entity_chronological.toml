@@ -1,0 +1,12 @@
+extends = "entity_chronological.toml"
+name = "bgl_cfdr_entity_chronological"
+description = "CFDR BGL entity chronological experiment matrix with the same diagnostics and baselines as regular BGL, but sourced from the CFDR archive."
+
+[dataset]
+name = "bgl_cfdr_entity_chronological"
+dataset_name = "BGL_CFDR"
+preset = "bgl_cfdr"
+description = "CFDR BGL preset grouped by entity with chronological prefix/suffix splitting."
+
+[dataset.cache_paths]
+namespace = "bgl_cfdr_entity"

@@ -1,0 +1,12 @@
+extends = "bgl_deeplog_ccs2017_paper_base.toml"
+name = "bgl_cfdr_deeplog_ccs2017_paper_base"
+description = "Shared BGL CFDR DeepLog CCS 2017 paper-reproduction dataset contract."
+
+[dataset]
+name = "bgl_cfdr_deeplog_ccs2017_paper_base"
+dataset_name = "BGL_CFDR"
+preset = "bgl_cfdr"
+description = "DeepLog CCS 2017 CFDR BGL reproduction config with raw-entry chronological stream grouping and the same experiment coverage as the regular BGL matrix."
+
+[dataset.cache_paths]
+namespace = "bgl_cfdr_entity"

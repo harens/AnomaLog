@@ -725,7 +725,9 @@ def validate_deeplog_paper_config(
         model_config (ExperimentModelConfig | None): Optional decoded model
             config to validate.
     """
-    if dataset_config.name.startswith("bgl_deeplog_ccs2017_paper_"):
+    if dataset_config.name.startswith(
+        ("bgl_deeplog_ccs2017_paper_", "bgl_cfdr_deeplog_ccs2017_paper_"),
+    ):
         _validate_bgl_deeplog_ccs2017_paper_config(
             dataset_config=dataset_config,
             model_config=model_config,

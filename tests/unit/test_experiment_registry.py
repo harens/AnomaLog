@@ -206,6 +206,34 @@ def test_load_experiment_registry_splits_bgl_protocol_targets() -> None:
     }
 
 
+def test_load_experiment_registry_registers_bgl_cfdr_reuse() -> None:
+    """The CFDR BGL variant should reuse the regular BGL experiment coverage."""
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_experiment_registry(
+        repo_root / "experiments" / "configs" / "registry.toml",
+        repo_root=repo_root,
+    )
+
+    selected = registry.select(groups=("bgl_cfdr_deeplog_ccs2017_paper",))
+
+    assert [experiment.dataset for experiment in selected] == [
+        "bgl/cfdr_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online",
+        "bgl/cfdr_deeplog_ccs2017_paper_10pct_entry_stream_no_online",
+    ]
+    assert {experiment.model_sets for experiment in selected} == {("baselines_no_nb",)}
+    assert {experiment.models for experiment in selected} == {("deeplog_default",)}
+
+    bgl_cfdr_entity = registry.require("bgl_cfdr_entity_chronological")
+    assert bgl_cfdr_entity.dataset == "bgl/cfdr_entity_chronological"
+    assert bgl_cfdr_entity.models == ("deepcase", "deeplog_default")
+    assert bgl_cfdr_entity.model_sets == (
+        "baselines_with_nb",
+        "deepcase_majority_vote",
+        "deepcase_threshold_fraction",
+        "deepcase_abstain_mixed",
+    )
+
+
 def test_hdfs_deeplog_paper_registry_includes_short_session_padding_variant() -> None:
     """The HDFS DeepLog paper registry should expose the legacy padding variant."""
     repo_root = Path(__file__).resolve().parents[2]
