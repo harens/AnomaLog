@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/harens/AnomaLog/compare/v0.4.0...v0.5.0) (2026-06-03)
+
+
+### Features
+
+* **bgl:** add CFDR BGL dataset preset ([a47de4a](https://github.com/harens/AnomaLog/commit/a47de4a532b2f9f31c0c0ee72b5742d0d58766c0))
+
+
+### Bug Fixes
+
+* **deeplog:** wire continuous context through chronological streams ([fd6a09c](https://github.com/harens/AnomaLog/commit/fd6a09ce7f57537064a5326b3f530ca06df6dda4))
+
 ## [0.4.0](https://github.com/harens/AnomaLog/compare/v0.3.0...v0.4.0) (2026-06-03)
 
 
