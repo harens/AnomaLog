@@ -2,6 +2,7 @@
 
 import heapq
 import json
+import shutil
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
@@ -11,16 +12,15 @@ from typing import ClassVar
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
-from anomalog.cache import (
-    CachePathsConfig,
-    asset_from_local_path,
-    materialize,
-)
+from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
+from anomalog.cache.core import dataset_build_lock
 from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,
+    RAW_PARAMETERS_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
     EntityLabelCounts,
@@ -32,10 +32,46 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
     ENTITY_CHRONOLOGY_INDEX_FILENAME,
+    STRUCTURED_BATCH_SCHEMA,
     EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
 )
+
+
+def _value_at_int(arr: pa.Array | None, i: int) -> int | None:
+    if arr is None:
+        return None
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return None
+    return scalar.as_py()
+
+
+def _value_at_str(
+    arr: pa.Array | None,
+    i: int,
+    *,
+    default: str | None,
+) -> str | None:
+    if arr is None:
+        return default
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return default
+    return scalar.as_py()
+
+
+def _value_at_str_list(arr: pa.Array | None, i: int) -> list[str] | None:
+    if arr is None:
+        return None
+    scalar = arr[i]
+    if not scalar.is_valid:
+        return None
+    values = scalar.as_py()
+    if values is None:
+        return None
+    return [str(value) for value in values]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +124,19 @@ class ParquetStructuredSink(StructuredSink):
         """
         return self.cache_paths.cache_root / dataset_name / self.cache_dir
 
-    def write_structured_lines(self, _workers: int | None = None) -> bool:
+    def write_structured_lines(
+        self,
+        _workers: int | None = None,
+        *,
+        refresh_cache: bool = False,
+    ) -> bool:
         """Parse raw logs and persist structured lines to Parquet.
 
         Args:
             _workers (int | None): Reserved worker-count override. Currently
                 unused by this sink implementation.
+            refresh_cache (bool): Whether to force Prefect to ignore any cached
+                materialisation result and rebuild the parquet cache.
 
         Returns:
             bool: Whether any anomalous rows were observed during parsing.
@@ -101,6 +144,7 @@ class ParquetStructuredSink(StructuredSink):
         base_extract_structured_components = materialize(
             self.structured_data_cache(self.dataset_name),
             asset_deps=[asset_from_local_path(self.raw_dataset_path)],
+            refresh_cache=refresh_cache,
         )(extract_structured_components)
 
         return base_extract_structured_components(
@@ -143,6 +187,57 @@ class ParquetStructuredSink(StructuredSink):
             )
             for batch in scanner.to_batches():
                 yield from self._rows_from_batch(batch)
+
+        return _iter
+
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Iterate over structured rows in raw-entry order.
+
+        The parquet dataset is partitioned by entity buckets, so this merges the
+        bucket-local scans by `line_order` to recover the original raw-entry
+        chronology without materialising the entire dataset in memory.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields structured rows ordered by `line_order`.
+        """
+
+        def _iter() -> Iterator[StructuredLine]:
+            buckets = sorted(self._iter_buckets())
+            buckets_with_null = [*buckets, None]
+            bucket_iters: list[Iterator[StructuredLine]] = []
+            for bucket in buckets_with_null:
+                if bucket is None:
+                    expr = ds.field(ENTITY_BUCKET_FIELD).is_null()
+                else:
+                    expr = ds.field(ENTITY_BUCKET_FIELD) == bucket
+                bucket_iters.append(
+                    self.iter_structured_lines(
+                        batch_size=self._DEFAULT_BATCH_SIZE,
+                        filter_expr=expr,
+                    )(),
+                )
+
+            heap: list[tuple[int, int, StructuredLine, Iterator[StructuredLine]]] = []
+            for idx, it in enumerate(bucket_iters):
+                try:
+                    first = next(it)
+                except StopIteration:
+                    continue
+                heap.append((int(first.line_order), idx, first, it))
+
+            heapq.heapify(heap)
+
+            while heap:
+                _, idx, row, it = heapq.heappop(heap)
+                yield row
+                try:
+                    nxt = next(it)
+                except StopIteration:
+                    continue
+                heapq.heappush(heap, (int(nxt.line_order), idx, nxt, it))
 
         return _iter
 
@@ -216,35 +311,16 @@ class ParquetStructuredSink(StructuredSink):
         entity_col = column_or_default(ENTITY_FIELD)
         msg_col = column_or_default(UNTEMPLATED_FIELD)
         anomalous_col = column_or_default(ANOMALOUS_FIELD)
-
-        def value_at_int(arr: pa.Array | None, i: int) -> int | None:
-            if arr is None:
-                return None
-            scalar = arr[i]
-            if not scalar.is_valid:
-                return None
-            return scalar.as_py()
-
-        def value_at_str(
-            arr: pa.Array | None,
-            i: int,
-            *,
-            default: str | None,
-        ) -> str | None:
-            if arr is None:
-                return default
-            scalar = arr[i]
-            if not scalar.is_valid:
-                return default
-            return scalar.as_py()
+        raw_parameters_col = column_or_default(RAW_PARAMETERS_FIELD)
 
         for i in range(batch.num_rows):
             yield StructuredLine(
-                line_order=value_at_int(line_col, i) or 0,
-                timestamp_unix_ms=value_at_int(ts_col, i),
-                entity_id=value_at_str(entity_col, i, default=None),
-                untemplated_message_text=value_at_str(msg_col, i, default="") or "",
-                anomalous=value_at_int(anomalous_col, i),
+                line_order=_value_at_int(line_col, i) or 0,
+                timestamp_unix_ms=_value_at_int(ts_col, i),
+                entity_id=_value_at_str(entity_col, i, default=None),
+                untemplated_message_text=_value_at_str(msg_col, i, default="") or "",
+                anomalous=_value_at_int(anomalous_col, i),
+                raw_parameters=_value_at_str_list(raw_parameters_col, i),
             )
 
     def _dataset(self) -> ds.Dataset:
@@ -253,15 +329,97 @@ class ParquetStructuredSink(StructuredSink):
         Returns:
             ds.Dataset: PyArrow dataset over the structured parquet cache.
         """
+        self._repair_structured_cache_if_needed()
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        try:
+            return self._structured_dataset(cache_dir)
+        except FileNotFoundError:
+            self._rebuild_structured_cache()
+            return self._structured_dataset(cache_dir)
+
+    @staticmethod
+    def _structured_dataset(cache_dir: Path) -> ds.Dataset:
+        """Build the Arrow dataset view over one structured parquet cache.
+
+        Args:
+            cache_dir (Path): Directory containing the partitioned parquet
+                fragments for one structured dataset.
+
+        Returns:
+            ds.Dataset: Arrow dataset view over the structured parquet cache.
+        """
+        # Give Arrow the full row schema up front so projection and filter
+        # binding do not depend on fragment inference over the hive partition
+        # directory structure. The materialised dataset always carries these
+        # structured fields, even when a scan only asks for a subset.
         return ds.dataset(
-            self.structured_data_cache(self.dataset_name),
+            cache_dir,
             format="parquet",
+            schema=STRUCTURED_BATCH_SCHEMA,
             exclude_invalid_files=True,
             partitioning=ds.partitioning(
                 schema=pa.schema([pa.field(ENTITY_BUCKET_FIELD, pa.int32())]),
                 flavor="hive",
             ),
         )
+
+    def _repair_structured_cache_if_needed(self) -> None:
+        """Rebuild the structured parquet cache if it is missing or invalid.
+
+        The structured cache can be left in a partially written state after an
+        interrupted or stale Prefect materialisation. PyArrow will otherwise
+        ignore unreadable files when `exclude_invalid_files=True`, which can make
+        the cache look empty and surface as downstream zero-train failures. A
+        missing cache directory is equally stale, so the repair path restores the
+        whole structured dataset before any read continues. The repair itself is
+        serialised under the dataset-build lock so concurrent model runs do not
+        delete and rebuild the same cache namespace at once.
+        """
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        if not cache_dir.exists() or not cache_dir.is_dir():
+            self._rebuild_structured_cache()
+            return
+
+        with dataset_build_lock(self.dataset_name, cache_paths=self.cache_paths):
+            parquet_files = list(cache_dir.rglob("*.parquet"))
+            if not parquet_files:
+                return
+
+            invalid_file = next(
+                (path for path in parquet_files if self._is_invalid_parquet_file(path)),
+                None,
+            )
+            if invalid_file is None:
+                return
+
+            shutil.rmtree(cache_dir)
+            self.write_structured_lines(refresh_cache=True)
+
+    def _rebuild_structured_cache(self) -> None:
+        """Delete and recreate the structured parquet cache under lock."""
+        cache_dir = self.structured_data_cache(self.dataset_name)
+        with dataset_build_lock(self.dataset_name, cache_paths=self.cache_paths):
+            if cache_dir.exists() and cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+            elif cache_dir.exists():
+                cache_dir.unlink()
+            self.write_structured_lines(refresh_cache=True)
+
+    @staticmethod
+    def _is_invalid_parquet_file(path: Path) -> bool:
+        """Return whether a parquet file cannot be read by PyArrow.
+
+        Args:
+            path (Path): Parquet fragment to validate.
+
+        Returns:
+            bool: `True` when PyArrow cannot read the file metadata.
+        """
+        try:
+            pq.read_metadata(path)
+        except (OSError, pa.ArrowInvalid, ValueError):
+            return True
+        return False
 
     # Statistics helpers
     def count_rows(self) -> int:
@@ -285,28 +443,25 @@ class ParquetStructuredSink(StructuredSink):
         Returns:
             EntityLabelCounts: Normal and total distinct entity counts.
         """
-        scanner = self._dataset().scanner(
-            columns=[ENTITY_FIELD],
-            batch_size=self._DEFAULT_BATCH_SIZE,
-        )
         normals = 0
-        entities_seen: set[str] = set()
+        total = 0
 
-        for batch in scanner.to_batches():
-            col = batch.column(0)
-            for val in col.to_pylist():
-                if val is None:
-                    continue
-                entity_id = str(val)
-                if entity_id in entities_seen:
-                    continue
-                entities_seen.add(entity_id)
-                label = label_for_group(entity_id)
-                if is_anomalous_label(label):
-                    continue
-                normals += 1
+        # Reuse the sink's canonical entity grouping rather than projecting the
+        # entity id column directly from the dataset. That keeps the counting
+        # path aligned with the grouped reader and avoids depending on
+        # single-column Arrow projections for partitioned parquet caches.
+        for rows in self.iter_entity_sequences()():
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            if entity_id is None:
+                continue
+            total += 1
+            if is_anomalous_label(label_for_group(entity_id)):
+                continue
+            normals += 1
 
-        total = len(entities_seen)
         return EntityLabelCounts(normal_entities=normals, total_entities=total)
 
     def timestamp_bounds(self) -> tuple[int | None, int | None]:
@@ -447,7 +602,7 @@ class ParquetStructuredSink(StructuredSink):
             (
                 self._entity_group_for_rows(
                     entity_id,
-                    rows,
+                    sorted(rows, key=lambda row: row.line_order),
                     chronology_index=chronology_index,
                 )
                 for entity_id, rows in by_entity.items()
@@ -566,6 +721,8 @@ class ParquetStructuredSink(StructuredSink):
             tuple[StructuredLine, ...]: Rows belonging to each emitted time window.
         """
         buffer: deque[StructuredLine] = deque()
+        # Keep the first window anchored to the first observed timestamp so the
+        # initial bucket does not split rows that naturally belong together.
         window_start = first_ts
         window_end = window_start + time_span_ms
 
@@ -668,9 +825,6 @@ class ParquetStructuredSink(StructuredSink):
                         if not buffer:
                             break
                         buffer.popleft()
-
-            if buffer:
-                yield tuple(buffer)
 
         return _iter
 

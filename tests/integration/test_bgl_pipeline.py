@@ -289,3 +289,31 @@ def test_user_can_turn_a_small_bgl_archive_into_reproducible_entity_sequences(
     assert rebuilt_rows == rows
     assert rebuilt_templates_by_message == templates_by_message
     assert rebuilt_sequences == first_pass
+
+
+def test_bgl_fixture_groups_into_one_hour_window(tmp_path: Path) -> None:
+    """The tiny BGL fixture should collapse into one one-hour window.
+
+    This is a bounded smoke test for the later BGL benchmark protocol: the
+    checked-in fixture spans only a few seconds, so a one-hour window should
+    emit exactly one sequence and preserve the anomalous label.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            archive.
+    """
+    archive_path = tmp_path / "tiny-bgl.zip"
+    _build_local_bgl_archive(archive_path)
+    dataset = _dataset_from_local_archive(tmp_path, archive_path)
+
+    templated = dataset.build()
+    windows = list(
+        templated.group_by_time_window(
+            3_600_000,
+            step_span_ms=3_600_000,
+        ),
+    )
+
+    assert len(windows) == 1
+    assert len(windows[0].events) == EXPECTED_ROW_COUNT
+    assert windows[0].label == 1

@@ -1,8 +1,9 @@
 """StructuredDataset wraps parsed logs prior to template mining."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
-from anomalog.cache import CachePathsConfig
+from anomalog.cache import CachePathsConfig, asset_from_local_path
 from anomalog.labels import AnomalyLabelLookup
 from anomalog.parsers.structured.contracts import (
     UNTEMPLATED_FIELD,
@@ -34,6 +35,20 @@ class StructuredDataset:
     cache_paths: CachePathsConfig
     anomaly_labels: AnomalyLabelLookup
 
+    def _iter_untemplated_text(self) -> Iterator[str]:
+        """Yield the canonical message body for template mining.
+
+        Yields:
+            str: Untemplated structured message text in sink order.
+
+        The template parser must only see the structured message body, not the
+        raw source line or any parser-specific envelope fields. Keeping this
+        boundary in one place makes the contract easy to audit in tests.
+        """
+        rows = self.sink.iter_structured_lines(columns=[UNTEMPLATED_FIELD])()
+        for row in rows:
+            yield row.untemplated_message_text
+
     def mine_templates_with(self, template_parser: TemplateParser) -> TemplatedDataset:
         """Train a template parser and return a templated dataset view.
 
@@ -44,13 +59,10 @@ class StructuredDataset:
         Returns:
             TemplatedDataset: Structured dataset paired with the trained parser.
         """
+        asset_deps = [asset_from_local_path(self.sink.raw_dataset_path)]
         template_parser.train(
-            lambda: (
-                row.untemplated_message_text
-                for row in self.sink.iter_structured_lines(
-                    columns=[UNTEMPLATED_FIELD],
-                )()
-            ),
+            self._iter_untemplated_text,
+            asset_deps=asset_deps,
         )
 
         return TemplatedDataset(

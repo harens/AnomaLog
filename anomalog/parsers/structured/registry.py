@@ -1,11 +1,24 @@
 """Registry helpers for built-in structured parsers."""
 
 from anomalog.parsers.structured.contracts import StructuredParser
-from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.deeplog_preprocessed import (
+    DelimitedLabelledEventParser,
+)
+from anomalog.parsers.structured.parsers import (
+    AITADSParser,
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+    ThunderbirdParser,
+)
 
 _STRUCTURED_PARSERS: dict[str, type[StructuredParser]] = {
+    "ait_ads": AITADSParser,
     "bgl": BGLParser,
+    "delimited_labelled_event": DelimitedLabelledEventParser,
     "hdfs_v1": HDFSV1Parser,
+    "openstack_deeplog": OpenStackDeepLogParser,
+    "thunderbird": ThunderbirdParser,
 }
 
 

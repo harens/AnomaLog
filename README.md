@@ -171,12 +171,30 @@ Built-in experiment detectors include Template Frequency, [Naive Bayes](https://
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --config experiments/configs/runs/bgl_template_frequency.toml
+  --experiment bgl_entity_chronological_template_frequency
 ```
 
-Experiment runs reuse AnomaLog's dataset-side caches and write deterministic
-result directories, but detector training and test scoring are intentionally
-rerun for new config fingerprints.
+Local execution is the canonical reproducibility path. Experiment runs reuse
+AnomaLog's dataset-side caches and write deterministic result directories, but
+detector training and test scoring are intentionally rerun for new config
+fingerprints.
+
+To run a curated local suite:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --group bgl_deeplog_ccs2017_paper \
+  --group hdfs_deeplog_paper \
+  --max-parallel 2
+```
+
+The same registry also drives the optional Slurm backend:
+
+```bash
+uv run python -m experiments.execution.slurm submit \
+  --group bgl_deeplog_ccs2017_paper \
+  --group hdfs_deeplog_paper
+```
 
 See [`experiments/README.md`](experiments/README.md) for the experiment layout and artifact format.
 

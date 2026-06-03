@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import logging
 from argparse import Namespace
+from concurrent.futures import Future
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from typing_extensions import Self
 
+from experiments.config import (
+    DatasetVariantConfig,
+    EntitySequenceConfig,
+    ExperimentBundle,
+)
+from experiments.models.base import decode_experiment_model_config
+from experiments.models.template_frequency import TemplateFrequencyModelConfig
 from experiments.runners import run_experiment as runner
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterable, Iterator
 
     import pytest
 
@@ -32,6 +43,138 @@ class _RecordingConsole:
         """
         del soft_wrap
         self.messages.append(message)
+
+
+class _OneShotSequenceView:
+    """Replay probe that raises if the same view is iterated twice.
+
+    Args:
+        token (int): Monotonic identifier for the created sequence view.
+    """
+
+    def __init__(self, token: int) -> None:
+        self.token = token
+        self._consumed = False
+
+    @staticmethod
+    def split_count_hint() -> SimpleNamespace:
+        return SimpleNamespace(train_count=1, test_count=1)
+
+    @staticmethod
+    def train_sequence_count_unit_hint() -> str:
+        return "sequences"
+
+    def __iter__(self) -> Iterator[SimpleNamespace]:
+        if self._consumed:
+            msg = f"sequence view {self.token} was reused"
+            raise AssertionError(msg)
+        self._consumed = True
+        yield SimpleNamespace(
+            split_label=SimpleNamespace(value="train"),
+            label=0,
+        )
+
+
+@dataclass(frozen=True)
+class _FakeRunConfig:
+    name: str = "demo"
+    dataset: DatasetVariantConfig | None = None
+    models: list[TemplateFrequencyModelConfig] = field(default_factory=list)
+    results_root: Path = Path("experiments/results")
+    description: str | None = None
+    max_workers: int | Literal["auto"] = 1
+
+
+def _make_bundle(tmp_path: Path, *, concrete_name: str = "demo") -> ExperimentBundle:
+    dataset = DatasetVariantConfig(
+        name="demo",
+        dataset_name="demo",
+        preset="demo",
+        sequence=EntitySequenceConfig(),
+    )
+    return ExperimentBundle(
+        experiments_root=tmp_path / "experiments",
+        repo_root=tmp_path,
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=_FakeRunConfig(),
+        dataset=dataset,
+        model=decode_experiment_model_config(
+            {"name": "template_frequency"},
+            config_type=TemplateFrequencyModelConfig,
+        ),
+        concrete_name=concrete_name,
+    )
+
+
+class _SequenceConfig:
+    """Sequence config double that returns a fresh one-shot view each time."""
+
+    def __init__(self) -> None:
+        self.apply_calls = 0
+
+    def apply(self, templated: object) -> _OneShotSequenceView:
+        return _sequence_config_apply(self, templated)
+
+
+def _sequence_config_apply(
+    config: _SequenceConfig,
+    templated: object,
+) -> _OneShotSequenceView:
+    del templated
+    config.apply_calls += 1
+    return _OneShotSequenceView(config.apply_calls)
+
+
+def _build_dataset_spec(_dataset: object, *, repo_root: Path) -> SimpleNamespace:
+    del repo_root
+
+    def _build() -> SimpleNamespace:
+        return SimpleNamespace()
+
+    return SimpleNamespace(clear_cache=lambda: None, build=_build)
+
+
+def _build_sequence_split_summary(
+    sequences: Iterable[object],
+    *,
+    sequence_summary: object,
+) -> SimpleNamespace:
+    del sequence_summary
+    list(sequences)
+    return SimpleNamespace(
+        train_on_normal_entities_only=None,
+        requested_train_fraction=0.2,
+        realised_train_sequence_count=1,
+        eligible_train_sequence_count=1,
+        train_pool_sequence_count=1,
+        ineligible_train_pool_count=0,
+        ignored_sequence_count=0,
+    )
+
+
+def _build_run_metrics_report(
+    *,
+    bundle: object,
+    sequences: Iterable[object],
+    model_summary: object,
+    debug_reporting: bool = False,
+) -> dict[str, object]:
+    del bundle, model_summary, debug_reporting
+    list(sequences)
+    return {
+        "primary_metric_scope": None,
+        "metric_blocks": {},
+    }
+
+
+@contextmanager
+def _logger_context(
+    *_args: object,
+    **_kwargs: object,
+) -> Iterator[logging.Logger]:
+    yield logging.getLogger("tests.experiment_runner")
 
 
 def test_shared_console_handler_uses_shared_console(
@@ -80,7 +223,7 @@ def test_main_does_not_print_the_run_directory(
             run directory.
     """
     expected_config = object()
-    seen: list[tuple[object, bool, bool]] = []
+    seen: list[tuple[object, bool, bool, bool]] = []
 
     class _Parser:
         @staticmethod
@@ -98,8 +241,8 @@ def test_main_does_not_print_the_run_directory(
     monkeypatch.setattr(
         runner,
         "run_experiment",
-        lambda config_path, *, force, write_predictions: (
-            seen.append((config_path, force, write_predictions))
+        lambda config_path, *, force, write_predictions, debug_reporting=False: (
+            seen.append((config_path, force, write_predictions, debug_reporting))
             or tmp_path / "result-dir"
         ),
     )
@@ -107,8 +250,49 @@ def test_main_does_not_print_the_run_directory(
     exit_code = runner.main()
 
     assert exit_code == 0
-    assert seen == [(expected_config, True, False)]
+    assert seen == [(expected_config, True, False, False)]
     assert not capsys.readouterr().out
+
+
+def test_build_arg_parser_exposes_config_and_registry_inputs() -> None:
+    """The CLI parser should expose both config and registry modes."""
+    parser = runner.build_arg_parser()
+    help_text = parser.format_help()
+
+    assert "--config" in help_text
+    assert "--experiment" in help_text
+    assert "--registry" in help_text
+    assert "--repo-root" in help_text
+    assert "--force" in help_text
+    assert "--write-predictions" in help_text
+    assert "--debug-reporting" in help_text
+
+
+def test_failure_helpers_format_bundle_exceptions(
+    tmp_path: Path,
+) -> None:
+    """Bundle failure helpers should return stable log messages.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic bundle
+            paths used by the helper checks.
+    """
+    bundle = _make_bundle(tmp_path, concrete_name="demo")
+
+    failure = runner._run_bundle_with_failure_capture(  # noqa: SLF001
+        bundle,
+        force=False,
+        write_predictions=False,
+        debug_reporting=False,
+    )
+    assert failure[1] is not None
+
+    future: Future[Path] = Future()
+    future.set_exception(RuntimeError("boom"))
+    captured = runner._capture_future_result(future, bundle)  # noqa: SLF001
+    assert captured[0] is None
+    assert captured[1] == "demo: boom"
+    assert runner._format_bundle_failure(bundle, RuntimeError()) == "demo: RuntimeError"  # noqa: SLF001
 
 
 def test_run_experiment_submits_plain_worker_payloads(
@@ -126,7 +310,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
     ]
-    submitted_payloads: list[tuple[Path, int, bool, bool]] = []
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
 
     class _FakeExecutor:
         def __init__(self, *, max_workers: int) -> None:
@@ -146,7 +330,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool, bool]],
+            payloads: list[tuple[Path, int, bool, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == len(bundles)
             del func
@@ -155,10 +339,664 @@ def test_run_experiment_submits_plain_worker_payloads(
 
     monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
     monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
     result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
 
     assert result == [tmp_path / "result-0", tmp_path / "result-1"]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True, False),
-        (tmp_path / "sweep.toml", 1, True, False),
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
     ]
+
+
+def test_run_experiment_batches_groups_sequentially(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Separate run groups should not execute in the same worker pool.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading, the worker
+            pool, and the serial runner so the test can inspect scheduling.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+
+    class _IndexedBundle(Protocol):
+        index: int
+
+    expected_max_workers = 2
+    bundles = [
+        SimpleNamespace(
+            index=0,
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=1,
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=2,
+            run_group="deepcase",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+    ]
+    submitted_payloads: list[list[tuple[Path, int, bool, bool, bool]]] = []
+    serial_runs: list[int] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        def map(
+            self,
+            func: object,
+            payloads: list[tuple[Path, int, bool, bool, bool]],
+        ) -> list[Path]:
+            assert self.max_workers == expected_max_workers
+            del func
+            submitted_payloads.append(payloads)
+            return [tmp_path / f"parallel-{index}" for index in range(len(payloads))]
+
+    def _run_bundle(
+        bundle: _IndexedBundle,
+        *,
+        force: bool = False,
+        write_predictions: bool = False,
+        debug_reporting: bool = False,
+    ) -> Path:
+        del force, write_predictions, debug_reporting
+        serial_runs.append(bundle.index)
+        return tmp_path / f"serial-{bundle.index}"
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner, "_run_bundle", _run_bundle)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [
+        tmp_path / "parallel-0",
+        tmp_path / "parallel-1",
+        tmp_path / "serial-2",
+    ]
+    assert submitted_payloads == [
+        [
+            (tmp_path / "sweep.toml", 0, True, False, False),
+            (tmp_path / "sweep.toml", 1, True, False, False),
+        ],
+    ]
+    assert serial_runs == [2]
+
+
+def test_run_experiment_parallelises_baselines_with_nb_before_deepcase(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The registry baseline group should submit together before DeepCASE.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading, the worker
+            pool, and the serial runner so the test can inspect scheduling.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+
+    class _IndexedBundle(Protocol):
+        index: int
+
+    expected_max_workers = 2
+    bundles = [
+        SimpleNamespace(
+            index=0,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=1,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=2,
+            run_group="baselines_with_nb",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+        SimpleNamespace(
+            index=3,
+            run_group="deepcase",
+            sweep=SimpleNamespace(max_workers=expected_max_workers),
+        ),
+    ]
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
+    serial_runs: list[int] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        @staticmethod
+        def submit(
+            func: object,
+            payload: tuple[Path, int, bool, bool, bool],
+        ) -> Future[Path]:
+            del func
+            submitted_payloads.append(payload)
+            future: Future[Path] = Future()
+            index = payload[1]
+            future.set_result(tmp_path / f"parallel-{index}")
+            return future
+
+    def _run_bundle(
+        bundle: _IndexedBundle,
+        *,
+        force: bool = False,
+        write_predictions: bool = False,
+        debug_reporting: bool = False,
+    ) -> Path:
+        del force, write_predictions, debug_reporting
+        serial_runs.append(bundle.index)
+        return tmp_path / f"serial-{bundle.index}"
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner, "_run_bundle", _run_bundle)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [
+        tmp_path / "parallel-0",
+        tmp_path / "parallel-1",
+        tmp_path / "parallel-2",
+        tmp_path / "serial-3",
+    ]
+    assert submitted_payloads == [
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
+        (tmp_path / "sweep.toml", 2, True, False, False),
+    ]
+    assert serial_runs == [3]
+
+
+def test_run_experiment_logs_bundle_failures_and_keeps_running(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """One failing bundle should not stop the rest of the run group.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading and worker
+            execution so the test can inspect failure handling.
+        capsys (pytest.CaptureFixture[str]): Captures the failure summary
+            emitted by the runner.
+        tmp_path (Path): Temporary path used to fabricate result locations.
+    """
+    bundles = [
+        SimpleNamespace(
+            concrete_name="demo-a",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+        SimpleNamespace(
+            concrete_name="demo-b",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+        SimpleNamespace(
+            concrete_name="demo-c",
+            run_group="baselines",
+            sweep=SimpleNamespace(max_workers=2),
+        ),
+    ]
+    submitted_payloads: list[tuple[Path, int, bool, bool, bool]] = []
+
+    class _FakeExecutor:
+        def __init__(self, *, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> None:
+            del exc_type, exc, tb
+
+        @staticmethod
+        def submit(
+            func: object,
+            payload: tuple[Path, int, bool, bool, bool],
+        ) -> Future[Path]:
+            del func
+            submitted_payloads.append(payload)
+            future: Future[Path] = Future()
+            index = payload[1]
+            if index == 1:
+                future.set_exception(RuntimeError("boom"))
+            else:
+                future.set_result(tmp_path / f"result-{index}")
+            return future
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(runner.os, "cpu_count", lambda: 8)
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [tmp_path / "result-0", tmp_path / "result-2"]
+    assert submitted_payloads == [
+        (tmp_path / "sweep.toml", 0, True, False, False),
+        (tmp_path / "sweep.toml", 1, True, False, False),
+        (tmp_path / "sweep.toml", 2, True, False, False),
+    ]
+    output_lines = capsys.readouterr().out.splitlines()
+    assert output_lines[0] == "One or more runs in this group failed:"
+    assert output_lines[1] == "  - demo-b: boom"
+
+
+def test_run_bundle_rebuilds_sequence_views_for_each_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Each runner stage should receive a fresh sequence view.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces filesystem and orchestration
+            helpers so the test can focus on sequence-view reuse.
+        tmp_path (Path): Temporary filesystem root used for the fake run.
+    """
+    sequence_config = _SequenceConfig()
+
+    bundle = SimpleNamespace(
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(
+            dataset_name="demo",
+            sequence=sequence_config,
+        ),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="demo-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    run_paths = SimpleNamespace(
+        run_dir=tmp_path / "run",
+        run_log_path=tmp_path / "run.log",
+        predictions_path=tmp_path / "predictions.jsonl",
+    )
+
+    monkeypatch.setattr(runner, "prepare_result_paths", lambda _bundle: run_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, **_kwargs: (
+            list(sequence_factory()),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
+
+    runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    expected_apply_calls = 6
+    assert sequence_config.apply_calls == expected_apply_calls
+
+
+def test_run_bundle_replaces_stale_output_directory_without_force(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stale run directory without metrics should be replaced without force.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces filesystem and orchestration
+            helpers so the test can focus on overwrite behaviour.
+        tmp_path (Path): Temporary filesystem root used for the fake run.
+    """
+    sequence_config = _SequenceConfig()
+
+    bundle = SimpleNamespace(
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(
+            dataset_name="demo",
+            sequence=sequence_config,
+        ),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="demo-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run.log").write_text("stale", encoding="utf-8")
+    run_paths = SimpleNamespace(
+        run_dir=run_dir,
+        metrics_path=tmp_path / "metrics.json",
+        run_log_path=tmp_path / "run.log",
+        predictions_path=tmp_path / "predictions.jsonl",
+    )
+    removed_paths: list[Path] = []
+
+    real_rmtree = runner.shutil.rmtree
+
+    def _recording_rmtree(path: Path) -> None:
+        removed_paths.append(path)
+        real_rmtree(path)
+
+    monkeypatch.setattr(runner, "prepare_result_paths", lambda _bundle: run_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, **_kwargs: (
+            list(sequence_factory()),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.shutil, "rmtree", _recording_rmtree)
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=False)
+
+    assert result == [run_dir]
+    assert removed_paths == [run_dir]
+    assert run_dir.exists()
+
+
+def test_run_bundle_force_clears_dataset_cache_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Force reruns should invalidate the dataset cache before rebuilding.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces orchestration helpers.
+        tmp_path (Path): Temporary filesystem root used for the fake run.
+    """
+    sequence_config = _SequenceConfig()
+    bundle = SimpleNamespace(
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(
+            dataset_name="demo",
+            sequence=sequence_config,
+        ),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="demo-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    run_dir = tmp_path / "run"
+    run_paths = SimpleNamespace(
+        run_dir=run_dir,
+        metrics_path=run_dir / "metrics.json",
+        run_log_path=run_dir / "run.log",
+        predictions_path=run_dir / "predictions.jsonl",
+    )
+    clear_cache_calls: list[str] = []
+
+    def _build_dataset_spec(
+        _dataset: object,
+        *,
+        repo_root: Path,
+    ) -> SimpleNamespace:
+        del repo_root
+
+        def _build() -> SimpleNamespace:
+            return SimpleNamespace()
+
+        def _clear_cache() -> None:
+            clear_cache_calls.append("demo")
+
+        return SimpleNamespace(clear_cache=_clear_cache, build=_build)
+
+    monkeypatch.setattr(runner, "prepare_result_paths", lambda _bundle: run_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, **_kwargs: (
+            list(sequence_factory()),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: [bundle])
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=True)
+
+    assert result == [run_dir]
+    assert clear_cache_calls == ["demo"]
+
+
+def test_run_experiment_skips_completed_bundle_and_rebuilds_stale_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Completed bundles should be skipped while stale ones are rebuilt.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to stub run
+            orchestration.
+        tmp_path (Path): Temporary directory used to host the synthetic run
+            state.
+    """
+    sequence_config = _SequenceConfig()
+    completed_bundle = SimpleNamespace(
+        sweep_path=tmp_path / "completed.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model-completed.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(dataset_name="demo", sequence=sequence_config),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="completed-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    stale_bundle = SimpleNamespace(
+        sweep_path=tmp_path / "stale.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model-stale.toml",
+        sweep=SimpleNamespace(max_workers=1),
+        dataset=SimpleNamespace(dataset_name="demo", sequence=sequence_config),
+        model=SimpleNamespace(detector="demo", name="demo"),
+        concrete_name="stale-run",
+        applied_overrides={},
+        repo_root=tmp_path,
+    )
+    completed_run_dir = tmp_path / "completed"
+    completed_run_dir.mkdir()
+    completed_metrics_path = completed_run_dir / "metrics.json"
+    completed_metrics_path.write_text("{}", encoding="utf-8")
+    stale_run_dir = tmp_path / "stale"
+    stale_run_dir.mkdir()
+    (stale_run_dir / "run.log").write_text("stale", encoding="utf-8")
+
+    run_paths_by_name = {
+        "completed-run": SimpleNamespace(
+            run_dir=completed_run_dir,
+            metrics_path=completed_metrics_path,
+            run_log_path=tmp_path / "completed.log",
+            predictions_path=tmp_path / "completed.jsonl",
+        ),
+        "stale-run": SimpleNamespace(
+            run_dir=stale_run_dir,
+            metrics_path=stale_run_dir / "metrics.json",
+            run_log_path=tmp_path / "stale.log",
+            predictions_path=tmp_path / "stale.jsonl",
+        ),
+    }
+    removed_paths: list[Path] = []
+    run_model_calls: list[str] = []
+
+    class _HasConcreteName(Protocol):
+        concrete_name: str
+
+    real_rmtree = runner.shutil.rmtree
+
+    def _recording_rmtree(path: Path) -> None:
+        removed_paths.append(path)
+        real_rmtree(path)
+
+    def _prepare_result_paths(bundle: _HasConcreteName) -> SimpleNamespace:
+        return run_paths_by_name[bundle.concrete_name]
+
+    monkeypatch.setattr(runner, "prepare_result_paths", _prepare_result_paths)
+    monkeypatch.setattr(runner, "build_dataset_spec", _build_dataset_spec)
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        sequence_config,
+        "apply",
+        lambda templated: _sequence_config_apply(sequence_config, templated),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda *, sequence_factory, config, **_kwargs: (
+            run_model_calls.append(config.name),
+            list(sequence_factory()),
+            SimpleNamespace(
+                sequence_summary=SimpleNamespace(
+                    sequence_count=2,
+                    train_sequence_count=1,
+                    test_sequence_count=1,
+                    ignored_sequence_count=0,
+                ),
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_sequence_split_summary",
+        _build_sequence_split_summary,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_run_metrics_report",
+        _build_run_metrics_report,
+    )
+    monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.shutil, "rmtree", _recording_rmtree)
+    monkeypatch.setattr(
+        runner,
+        "load_experiment_bundles",
+        lambda _path: [completed_bundle, stale_bundle],
+    )
+
+    result = runner.run_experiment(tmp_path / "sweep.toml", force=False)
+
+    assert result == [completed_run_dir, stale_run_dir]
+    assert removed_paths == [stale_run_dir]
+    assert run_model_calls == ["demo"]

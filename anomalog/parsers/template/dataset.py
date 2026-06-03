@@ -4,9 +4,12 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, runtime_checkable
 
+from prefect.assets import Asset
+
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredSink
 from anomalog.sequences import (
+    ChronologicalStreamSequenceBuilder,
     EntitySequenceBuilder,
     FixedSequenceBuilder,
     TimeSequenceBuilder,
@@ -54,12 +57,16 @@ class TemplateParser(Protocol):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Train the parser on the dataset's untemplated message stream.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Optional upstream asset
+                dependencies to incorporate into the training cache key.
         """
 
 
@@ -102,6 +109,26 @@ class TemplatedDataset:
             EntitySequenceBuilder: Entity-grouped sequence view.
         """
         return self.sequences()
+
+    def group_by_chronological_stream(
+        self,
+        *,
+        chunk_size: int = 100_000,
+    ) -> ChronologicalStreamSequenceBuilder:
+        """Group sequences into deterministic chronological stream chunks.
+
+        Args:
+            chunk_size (int): Maximum number of raw entries per emitted chunk.
+
+        Returns:
+            ChronologicalStreamSequenceBuilder: Chronological stream view.
+        """
+        return ChronologicalStreamSequenceBuilder(
+            sink=self.sink,
+            infer_template=self.template_parser.inference,
+            label_for_group=self.anomaly_labels.label_for_group,
+            chunk_size=chunk_size,
+        )
 
     def group_by_fixed_window(
         self,

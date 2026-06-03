@@ -1,5 +1,6 @@
 """Tests for `ParquetStructuredSink`."""
 
+import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import ClassVar
 
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 from prefect.logging import disable_run_logger
 from typing_extensions import override
@@ -20,13 +22,16 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
 )
+from anomalog.parsers.structured.parquet import sink as parquet_sink
 from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
+    ENTITY_BUCKET_FIELD,
     EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
 )
+from anomalog.sequences import EntitySequenceBuilder
 from tests.unit.helpers import structured_line
 
 
@@ -281,6 +286,30 @@ def test_rows_from_batch_applies_defaults_for_missing_and_null_columns(
     assert rows == WINDOW_AND_BATCH_ROWS[:2]
 
 
+def test_value_helpers_handle_missing_scalar_payloads() -> None:
+    """Arrow helper functions should tolerate missing and null payload values."""
+    value_at_str_list = vars(parquet_sink)["_value_at_str_list"]
+
+    class _Scalar:
+        def __init__(self, value: object, *, valid: bool = True) -> None:
+            self.is_valid = valid
+            self._value = value
+
+        def as_py(self) -> object:
+            return self._value
+
+    class _Array:
+        def __init__(self, scalars: list[_Scalar]) -> None:
+            self._scalars = scalars
+
+        def __getitem__(self, index: int) -> _Scalar:
+            return self._scalars[index]
+
+    assert value_at_str_list(None, 0) is None
+    assert value_at_str_list(_Array([_Scalar(None)]), 0) is None
+    assert value_at_str_list(_Array([_Scalar(["a", 1])]), 0) == ["a", "1"]
+
+
 def test_iter_structured_lines_reads_rows_from_real_parquet_dataset(
     tmp_path: Path,
 ) -> None:
@@ -298,6 +327,26 @@ def test_iter_structured_lines_reads_rows_from_real_parquet_dataset(
     rows = list(sink.iter_structured_lines()())
 
     assert rows == WINDOW_AND_BATCH_ROWS[2:4]
+
+
+def test_parquet_dataset_schema_exposes_timestamp_and_partition_fields(
+    tmp_path: Path,
+) -> None:
+    """The materialised parquet dataset should advertise the full row schema.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        WINDOW_AND_BATCH_ROWS[2:4],
+    )
+
+    dataset = sink._dataset()  # noqa: SLF001
+
+    assert TIMESTAMP_FIELD in dataset.schema.names
+    assert ENTITY_BUCKET_FIELD in dataset.schema.names
 
 
 def test_iter_structured_lines_projection_applies_defaults_from_real_dataset(
@@ -372,6 +421,309 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
     }
 
 
+def test_count_entities_by_label_skips_rows_without_entity_id(
+    tmp_path: Path,
+) -> None:
+    """Entity counting should ignore rows that do not belong to an entity.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        [
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id=None,
+                untemplated_message_text="missing",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=120,
+                entity_id="node-a",
+                untemplated_message_text="a1",
+                anomalous=0,
+            ),
+        ],
+    )
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 0 if entity_id == "node-a" else 1,
+    )
+
+    assert (normal_entities, total_entities) == (1, 1)
+
+
+def test_count_entities_by_label_uses_grouped_rows_when_scanning_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct-entity counts should not depend on a single-column dataset scan.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the dataset reader with a
+            sentinel so this regression test exercises the grouped-row path.
+    """
+    sink = _make_sink(tmp_path)
+
+    def _fail_dataset(_self: ParquetStructuredSink) -> object:
+        msg = "count_entities_by_label should use grouped rows"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(ParquetStructuredSink, "_dataset", _fail_dataset)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "iter_entity_sequences",
+        lambda _self: (
+            lambda: iter(
+                [
+                    (
+                        structured_line(
+                            line_order=0,
+                            timestamp_unix_ms=10,
+                            entity_id="node-b",
+                            untemplated_message_text="b0",
+                            anomalous=0,
+                        ),
+                    ),
+                    (
+                        structured_line(
+                            line_order=1,
+                            timestamp_unix_ms=11,
+                            entity_id="node-a",
+                            untemplated_message_text="a1",
+                            anomalous=0,
+                        ),
+                        structured_line(
+                            line_order=2,
+                            timestamp_unix_ms=12,
+                            entity_id="node-a",
+                            untemplated_message_text="a2",
+                            anomalous=1,
+                        ),
+                    ),
+                ],
+            )
+        ),
+    )
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+
+    assert (normal_entities, total_entities) == (1, 2)
+
+
+def test_sink_repairs_corrupted_parquet_cache_before_reading(
+    tmp_path: Path,
+) -> None:
+    """A corrupt structured-parquet cache should be rebuilt before reads.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+
+    corrupt_file = next(
+        sink.structured_data_cache(sink.dataset_name).rglob("*.parquet"),
+    )
+    corrupt_file.write_bytes(b"not parquet")
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=lambda text: (text, []),
+            label_for_group=lambda entity_id: 1 if entity_id == "node-a" else 0,
+            train_frac=0.5,
+            test_frac=0.5,
+        ),
+    )
+
+    assert (normal_entities, total_entities) == (1, 2)
+    assert [sequence.split_label.value for sequence in sequences] == [
+        "train",
+        "test",
+    ]
+    rebuilt_file = next(
+        sink.structured_data_cache(sink.dataset_name).rglob("*.parquet"),
+    )
+    metadata = pq.read_metadata(rebuilt_file)
+    assert metadata.num_rows > 0
+
+
+def test_sink_rebuilds_missing_structured_cache_directory_before_reading(
+    tmp_path: Path,
+) -> None:
+    """A missing structured cache directory should be rebuilt on the next read.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+
+    shutil.rmtree(sink.structured_data_cache(sink.dataset_name))
+
+    normal_entities, total_entities = sink.count_entities_by_label(
+        lambda entity_id: 1 if entity_id == "node-a" else 0,
+    )
+    sequences = list(sink.iter_entity_sequences()())
+
+    assert (normal_entities, total_entities) == (1, 2)
+    assert [[row.entity_id for row in rows] for rows in sequences] == [
+        ["node-b"],
+        ["node-a", "node-a"],
+    ]
+    assert sink.entity_chronology_index_path().exists()
+    assert sink.structured_data_cache(sink.dataset_name).exists()
+
+
+def test_dataset_lookup_retries_after_missing_structured_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sink should rebuild and retry if the structured dataset vanishes.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the structured dataset
+            lookup so the retry path can be exercised deterministically.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+    sentinel = object()
+    calls: list[Path] = []
+    rebuilds: list[bool] = []
+
+    def _missing_once(_self: ParquetStructuredSink, cache_dir: Path) -> object:
+        calls.append(cache_dir)
+        if len(calls) == 1:
+            raise FileNotFoundError
+        return sentinel
+
+    monkeypatch.setattr(ParquetStructuredSink, "_structured_dataset", _missing_once)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "_rebuild_structured_cache",
+        lambda _self: rebuilds.append(True),
+    )
+
+    assert sink._dataset() is sentinel  # noqa: SLF001
+    assert rebuilds == [True]
+
+
+def test_repair_structured_cache_handles_empty_and_invalid_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured cache repair should skip empty caches and rebuild invalid ones.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces cache helpers so the repair
+            branch can be exercised deterministically.
+    """
+    sink = _make_sink(tmp_path)
+    empty_cache_dir = sink.structured_data_cache(sink.dataset_name)
+    empty_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    with disable_run_logger():
+        sink._repair_structured_cache_if_needed()  # noqa: SLF001
+
+    invalid_cache_dir = (
+        tmp_path / "cache" / sink.dataset_name / "structured_parquet_invalid"
+    )
+    invalid_cache_dir.mkdir(parents=True, exist_ok=True)
+    (invalid_cache_dir / "part-0.parquet").write_text("not parquet", encoding="utf-8")
+
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "structured_data_cache",
+        lambda _self, _dataset_name: invalid_cache_dir,
+    )
+    rebuilds: list[bool] = []
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "write_structured_lines",
+        lambda _self, refresh_cache=False: rebuilds.append(refresh_cache) or True,
+    )
+
+    with disable_run_logger():
+        sink._repair_structured_cache_if_needed()  # noqa: SLF001
+
+    assert rebuilds == [True]
+
+
+@pytest.mark.parametrize("cache_as_file", [False, True])
+def test_rebuild_structured_cache_removes_existing_cache_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cache_as_file: bool,
+) -> None:
+    """Structured cache rebuilds should clear both directory and file cache roots.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the structured cache write
+            helper so the rebuild path can be exercised deterministically.
+        cache_as_file (bool): Whether the stale cache root starts as a file or
+            a directory.
+    """
+    sink = _make_sink(tmp_path)
+    cache_root = sink.structured_data_cache(sink.dataset_name)
+    if cache_as_file:
+        cache_root.parent.mkdir(parents=True, exist_ok=True)
+        cache_root.write_text("stale", encoding="utf-8")
+    else:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        (cache_root / "stale.parquet").write_text("stale", encoding="utf-8")
+
+    rebuilds: list[bool] = []
+
+    def _write_structured_lines(
+        _self: ParquetStructuredSink,
+        *,
+        refresh_cache: bool = False,
+    ) -> bool:
+        rebuilds.append(refresh_cache)
+        if cache_as_file:
+            cache_root.write_text("rebuilt", encoding="utf-8")
+        else:
+            cache_root.mkdir(parents=True, exist_ok=True)
+            (cache_root / "rebuilt.parquet").write_text("rebuilt", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "write_structured_lines",
+        _write_structured_lines,
+    )
+
+    with disable_run_logger():
+        sink._rebuild_structured_cache()  # noqa: SLF001
+
+    assert rebuilds == [True]
+    assert cache_root.exists()
+
+
 def test_sink_entity_grouping_merges_buckets_chronologically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -435,6 +787,73 @@ def test_sink_entity_grouping_merges_buckets_chronologically(
     assert [[row.entity_id for row in rows] for rows in sequences] == [
         ["early"],
         ["late"],
+    ]
+
+
+def test_sink_entity_grouping_sorts_rows_within_each_entity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entity grouping should preserve source line order inside a session.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the
+            grouping logic can be exercised without a real parquet scan.
+    """
+    sink = _make_sink(tmp_path)
+
+    def _iter_buckets(_self: ParquetStructuredSink) -> set[int]:
+        return {0}
+
+    def _iter_structured_lines(
+        _self: ParquetStructuredSink,
+        columns: list[str] | None = None,
+        *,
+        filter_expr: ds.Expression | None = None,
+        batch_size: int | None = None,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        del columns, filter_expr, batch_size
+        return lambda: iter(
+            [
+                structured_line(
+                    line_order=9,
+                    timestamp_unix_ms=900,
+                    entity_id="node-a",
+                    untemplated_message_text="third",
+                    anomalous=0,
+                ),
+                structured_line(
+                    line_order=1,
+                    timestamp_unix_ms=100,
+                    entity_id="node-a",
+                    untemplated_message_text="first",
+                    anomalous=0,
+                ),
+                structured_line(
+                    line_order=5,
+                    timestamp_unix_ms=500,
+                    entity_id="node-a",
+                    untemplated_message_text="second",
+                    anomalous=0,
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(ParquetStructuredSink, "_iter_buckets", _iter_buckets)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "iter_structured_lines",
+        _iter_structured_lines,
+    )
+
+    sequences = list(sink.iter_entity_sequences()())
+
+    assert [row.line_order for row in sequences[0]] == [1, 5, 9]
+    assert [row.untemplated_message_text for row in sequences[0]] == [
+        "first",
+        "second",
+        "third",
     ]
 
 
@@ -593,10 +1012,10 @@ def test_sink_fixed_window_iteration_uses_global_order_across_partitions(
     ]
 
 
-def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buffer(
+def test_sink_fixed_window_iteration_drops_partial_tail_when_step_exhausts_buffer(
     tmp_path: Path,
 ) -> None:
-    """Fixed-size windows should emit a trailing partial window when rows remain.
+    """Fixed-size windows should drop a trailing partial window when rows remain.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
@@ -613,7 +1032,6 @@ def test_sink_fixed_window_iteration_yields_partial_tail_when_step_exhausts_buff
 
     assert [[row.line_order for row in rows] for rows in fixed_windows] == [
         [0, 1],
-        [2],
     ]
 
 
@@ -710,6 +1128,40 @@ def test_iter_record_batches_skips_unparseable_rows_and_populates_null_entity_bu
     assert batches[0].column("entity_bucket").to_pylist()[1] is None
 
 
+def test_iter_record_batches_emits_silence_progress_for_long_parses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow parsing should emit the time-based progress branch.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the raw log fixture.
+        monkeypatch (pytest.MonkeyPatch): Replaces the monotonic clock so the
+            elapsed-time branch is deterministic.
+    """
+    raw_input_path = tmp_path / "raw.log"
+    raw_input_path.write_text(
+        "100|node-a|first|1\n101|node-a|second|1\n",
+        encoding="utf-8",
+    )
+    perf_values = iter([0.0, 61.0, 62.0, 63.0, 64.0])
+    monkeypatch.setattr(writer_worker, "perf_counter", lambda: next(perf_values))
+
+    with disable_run_logger():
+        iter_record_batches = vars(writer_worker)["_iter_record_batches"]
+        batches = list(
+            iter_record_batches(
+                raw_input_path,
+                _Parser(),
+                cfg=WriterConfig(batch_rows=10, log_every_rows=0),
+            ),
+        )
+
+    expected_rows = 2
+    assert len(batches) == 1
+    assert batches[0].num_rows == expected_rows
+
+
 def test_extract_structured_components_rejects_missing_input_path(
     tmp_path: Path,
 ) -> None:
@@ -781,7 +1233,7 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
     )
 
     with disable_run_logger():
-        has_anomaly = extract_structured_components(
+        has_inline_labels = extract_structured_components(
             raw_input_path=raw_input_path,
             parser=_Parser(),
             parquet_out_dir=parquet_out_dir,
@@ -796,8 +1248,38 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
             ),
         )
 
-    assert has_anomaly is False
+    assert has_inline_labels is True
     assert parquet_out_dir.exists()
+
+
+def test_extract_structured_components_reports_inline_labels_when_present(
+    tmp_path: Path,
+) -> None:
+    """Inline anomaly labels should be reported when any parsed row is labelled.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for raw input and output.
+    """
+    raw_input_path = tmp_path / "raw.log"
+    raw_input_path.write_text("100|node-a|first|1\n", encoding="utf-8")
+
+    with disable_run_logger():
+        has_inline_labels = extract_structured_components(
+            raw_input_path=raw_input_path,
+            parser=_Parser(),
+            parquet_out_dir=tmp_path / "out",
+            config=WriterConfig(
+                buckets=2,
+                batch_rows=1,
+                max_rows_per_file=8,
+                max_rows_per_group=8,
+                max_open_files=8,
+                log_every_rows=0,
+                max_partitions=8,
+            ),
+        )
+
+    assert has_inline_labels is True
 
 
 @pytest.mark.allow_no_new_coverage

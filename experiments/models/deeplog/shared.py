@@ -15,7 +15,7 @@ paper-to-code mapping easier to follow.
 
 from __future__ import annotations
 
-from collections.abc import Sized
+from collections.abc import Callable, Sized
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,13 +23,13 @@ import msgspec
 import torch
 from torch import nn
 
-from anomalog.parsers.structured.contracts import is_anomalous_label
-from experiments.models.base import ModelManifest, require_entity_local_sequences
+from experiments.models.base import ModelManifest
+from experiments.models.sequence_masks import training_event_index_mask
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from rich.progress import Progress
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
 
@@ -97,6 +97,10 @@ class ParameterModelState:
         normalisation (NormalisationStats): Per-feature normalisation stats.
         gaussian (GaussianThreshold): Residual calibration thresholds.
         model (ParameterLSTM): Fitted parameter model.
+        train_pair_count (int): Number of normalised training pairs used to fit
+            the model.
+        validation_pair_count (int): Number of held-out validation pairs used to
+            calibrate the Gaussian threshold.
     """
 
     template: str
@@ -104,6 +108,8 @@ class ParameterModelState:
     normalisation: NormalisationStats
     gaussian: GaussianThreshold
     model: ParameterLSTM
+    train_pair_count: int = 0
+    validation_pair_count: int = 0
 
 
 class ParameterModelManifestEntry(msgspec.Struct, frozen=True):
@@ -180,6 +186,8 @@ class DeepLogKeyFinding(msgspec.Struct, frozen=True):
         actual_template (str): Observed next log-key template.
         actual_probability (float | None): Probability assigned to the
             observed template, if available.
+        actual_rank (int | None): Rank position of the observed template among
+            the full fitted vocabulary, if the model could score it.
         is_anomalous (bool): Whether the key-model decision is anomalous.
         is_oov (bool): Whether the observed template was out of vocabulary.
         top_predictions (list[DeepLogTopPrediction]): Ranked top predictions.
@@ -190,6 +198,7 @@ class DeepLogKeyFinding(msgspec.Struct, frozen=True):
     unknown_history_templates: list[str]
     actual_template: str
     actual_probability: float | None
+    actual_rank: int | None
     is_anomalous: bool
     is_oov: bool
     top_predictions: list[DeepLogTopPrediction]
@@ -262,7 +271,9 @@ class DeepLogManifest(ModelManifest, frozen=True):
         parameter_validation_policy (str): Policy used when validating parameter
             model inputs.
         history_size (int): Key-model history length.
-        top_g (int): Number of top key predictions treated as normal.
+        top_g (int): Maximum top key predictions treated as normal.
+        top_g_values (list[int]): Replay cut-offs used to evaluate the accepted
+            key window across multiple `g` values.
         num_layers (int): LSTM layer count used by DeepLog models.
         hidden_size (int): Shared LSTM hidden size.
         epochs (int): Training epochs.
@@ -270,8 +281,13 @@ class DeepLogManifest(ModelManifest, frozen=True):
         learning_rate (float): Optimiser learning rate.
         validation_fraction (float): Fraction reserved for validation.
         gaussian_confidence (float): Confidence level used for Gaussian bounds.
-        include_elapsed_time (bool): Whether elapsed time is modeled as a
+        parameter_detection_enabled (bool): Whether the parameter branch was
+            fitted and applied during the run.
+        include_elapsed_time (bool): Whether elapsed time is modelled as a
             parameter feature.
+        short_session_padding_fidelity (bool): Whether the legacy DeepLog
+            prediction-script padding fallback was enabled for standalone short
+            sessions.
         train_key_vocabulary_size (int): Key-model vocabulary size from training.
         trained_parameter_model_count (int): Number of per-template parameter
             models trained successfully.
@@ -296,6 +312,7 @@ class DeepLogManifest(ModelManifest, frozen=True):
     parameter_validation_policy: str
     history_size: int
     top_g: int
+    top_g_values: list[int]
     num_layers: int
     hidden_size: int
     epochs: int
@@ -303,7 +320,9 @@ class DeepLogManifest(ModelManifest, frozen=True):
     learning_rate: float
     validation_fraction: float
     gaussian_confidence: float
+    parameter_detection_enabled: bool
     include_elapsed_time: bool
+    short_session_padding_fidelity: bool
     train_key_vocabulary_size: int
     trained_parameter_model_count: int
     skipped_parameter_model_count: int
@@ -421,47 +440,87 @@ def build_normal_training_corpus(
     train_sequences: Iterable[TemplateSequence],
     *,
     progress: Progress,
+    observe_sequence: Callable[[TemplateSequence], None] | None = None,
 ) -> NormalTrainingCorpus:
-    """Collect replayable normal-only training state for offline DeepLog.
+    """Collect replayable normal-target training state for offline DeepLog.
 
     Args:
         train_sequences (Iterable[TemplateSequence]): Train-split sequences.
         progress (Progress): Progress reporter.
+        observe_sequence (Callable[[TemplateSequence], None] | None): Optional
+            callback invoked for every observed training sequence before target
+            filtering is applied.
 
     Returns:
-        NormalTrainingCorpus: Cached normal training state for replay.
+        NormalTrainingCorpus: Cached training state for replay.
 
     Raises:
         ValueError: If no normal sequences are available for training.
     """
-    # The paper trains DeepLog from normal execution only. We materialise the
-    # filtered corpus once so both the key model and the per-template parameter
-    # models can replay exactly the same normal-only training data.
+    # The paper trains DeepLog from normal execution only. For raw-entry
+    # chronological streams we preserve mixed batches as context but filter
+    # training targets at the event level, so we materialise the replayable
+    # corpus once and let the model-specific builders consume the eligibility
+    # mask for each event.
     total = len(train_sequences) if isinstance(train_sequences, Sized) else None
     prepare_task = progress.add_task(
         "Preparing DeepLog training corpus",
         total=total,
     )
     normal_sequences: list[TemplateSequence] = []
-    template_set: set[str] = set()
-    event_count = 0
     try:
-        for sequence in train_sequences:
-            require_entity_local_sequences((sequence,), detector_name="DeepLog")
-            if is_anomalous_label(sequence.label):
-                progress.advance(prepare_task)
-                continue
-            normal_sequences.append(sequence)
-            event_count += len(sequence.events)
-            template_set.update(sequence.templates)
-            progress.advance(prepare_task)
+        normal_sequences, template_set, event_count = _collect_normal_training_corpus(
+            train_sequences=train_sequences,
+            observe_sequence=observe_sequence,
+            progress=progress,
+            prepare_task=prepare_task,
+        )
     finally:
         progress.remove_task(prepare_task)
     if not normal_sequences:
-        msg = "DeepLog requires at least one normal training sequence."
+        msg = "DeepLog requires at least one eligible training target."
         raise ValueError(msg)
     return NormalTrainingCorpus(
         sequences=tuple(normal_sequences),
         templates=tuple(sorted(template_set)),
         event_count=event_count,
     )
+
+
+def _collect_normal_training_corpus(
+    *,
+    train_sequences: Iterable[TemplateSequence],
+    observe_sequence: Callable[[TemplateSequence], None] | None,
+    progress: Progress,
+    prepare_task: TaskID,
+) -> tuple[list[TemplateSequence], set[str], int]:
+    """Collect normal DeepLog training sequences and their vocabulary.
+
+    Args:
+        train_sequences (Iterable[TemplateSequence]): Candidate training
+            sequences.
+        observe_sequence (Callable[[TemplateSequence], None] | None): Optional
+            callback invoked for every observed training sequence before target
+            filtering is applied.
+        progress (Progress): Active progress reporter.
+        prepare_task (TaskID): Progress task being advanced while scanning.
+
+    Returns:
+        tuple[list[TemplateSequence], set[str], int]: Filtered normal
+        sequences, their vocabulary, and the total eligible event count.
+    """
+    normal_sequences: list[TemplateSequence] = []
+    template_set: set[str] = set()
+    event_count = 0
+    for sequence in train_sequences:
+        if observe_sequence is not None:
+            observe_sequence(sequence)
+        eligible_indexes = training_event_index_mask(sequence)
+        if not eligible_indexes:
+            progress.advance(prepare_task)
+            continue
+        normal_sequences.append(sequence)
+        event_count += len(eligible_indexes)
+        template_set.update(sequence.templates)
+        progress.advance(prepare_task)
+    return normal_sequences, template_set, event_count

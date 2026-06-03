@@ -8,10 +8,10 @@ import shutil
 from dataclasses import asdict, dataclass
 from hashlib import blake2s
 from pathlib import Path  # noqa: TC003 - used at runtime for file IO
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from prefect.logging import get_run_logger
 
@@ -19,6 +19,7 @@ from anomalog.parsers.structured.contracts import (
     ANOMALOUS_FIELD,
     ENTITY_FIELD,
     LINE_FIELD,
+    RAW_PARAMETERS_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
     StructuredLine,
@@ -56,6 +57,7 @@ class WriterConfig:
 
 ENTITY_BUCKET_FIELD = "entity_bucket"
 ENTITY_CHRONOLOGY_INDEX_FILENAME = "entity_chronology_index.jsonl"
+_STRUCTURED_PROGRESS_SILENCE_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -84,6 +86,7 @@ STRUCTURED_BATCH_SCHEMA = pa.schema(
         pa.field(UNTEMPLATED_FIELD, pa.string()),
         pa.field(ANOMALOUS_FIELD, pa.int64()),
         pa.field(LINE_FIELD, pa.int64()),
+        pa.field(RAW_PARAMETERS_FIELD, pa.list_(pa.string())),
         pa.field(ENTITY_BUCKET_FIELD, pa.int32()),
     ],
 )
@@ -131,6 +134,8 @@ def _iter_record_batches(
     logger = get_run_logger()
     rows: list[dict] = []
     total_rows = 0
+    started_at = perf_counter()
+    last_progress_at = started_at
     with raw_input_path.open("r", encoding="utf-8", errors="replace") as f:
         for line_no, raw_line in enumerate(f):
             base_rec = parser.parse_line(raw_line.rstrip("\n").rstrip("\r"))
@@ -168,6 +173,25 @@ def _iter_record_batches(
             if cfg.log_every_rows > 0 and total_rows % cfg.log_every_rows == 0:
                 logger.info("Parsed %d structured rows so far", total_rows)
 
+            elif (
+                perf_counter() - last_progress_at
+                >= _STRUCTURED_PROGRESS_SILENCE_SECONDS
+            ):
+                elapsed = perf_counter() - started_at
+                rate = total_rows / elapsed if elapsed > 0 else 0.0
+                logger.info(
+                    (
+                        "Parsed %d structured rows so far (raw_line=%d "
+                        "elapsed=%.3fs rows_per_sec=%.1f sample=%r)"
+                    ),
+                    total_rows,
+                    line_no + 1,
+                    elapsed,
+                    rate,
+                    raw_line.rstrip("\n\r"),
+                )
+                last_progress_at = perf_counter()
+
             if len(rows) >= cfg.batch_rows:
                 logger.info(
                     "Emitting batch of %d rows (total parsed: %d)",
@@ -204,7 +228,9 @@ def extract_structured_components(
         config (WriterConfig | None): Optional writer configuration override.
 
     Returns:
-        bool: `True` if at least one anomalous row is observed; otherwise `False`.
+        bool: `True` when the structured rows carry an inline anomaly label
+            field, even if every label is normal (`0`). `False` means the parser
+            did not populate inline anomaly labels at all.
 
     Raises:
         FileNotFoundError: If `raw_input_path` does not exist.
@@ -216,6 +242,8 @@ def extract_structured_components(
 
     raw_input_path = raw_input_path.resolve()
     parquet_out_dir = parquet_out_dir.resolve()
+    started_at = perf_counter()
+    stage_started_at = started_at
 
     if not raw_input_path.exists():
         msg = f"Input file does not exist: {raw_input_path}"
@@ -248,33 +276,19 @@ def extract_structured_components(
         msg = "No structured lines produced; nothing to write"
         raise ValueError(msg) from None
 
-    has_anomaly = False
+    has_inline_labels = False
     batches_emitted = 0
 
-    pc_any = getattr(pc, "any")  # noqa: B009 - stubs miss these functions
-    pc_equal = getattr(pc, "equal")  # noqa: B009 - stubs miss these functions
-
     def _tracking_batches() -> Generator[pa.RecordBatch, None, None]:
-        nonlocal has_anomaly, batches_emitted
+        nonlocal has_inline_labels, batches_emitted
         for batch in itertools.chain((first_batch,), batch_iter):
             if ANOMALOUS_FIELD in batch.schema.names:
                 col = batch.column(ANOMALOUS_FIELD)
-                if pc_any(pc_equal(col, pa.scalar(1, col.type))).as_py():
-                    has_anomaly = True
+                if col.null_count < len(col):
+                    has_inline_labels = True
 
             batches_emitted += 1
             yield batch
-
-    schema = first_batch.schema
-
-    partitioning = ds.partitioning(
-        schema=pa.schema(
-            [
-                pa.field(ENTITY_BUCKET_FIELD, pa.int32()),
-            ],
-        ),
-        flavor="hive",
-    )
 
     logger.info(
         "Starting parquet write to %s (buckets=%d)",
@@ -283,10 +297,20 @@ def extract_structured_components(
     )
 
     ds.write_dataset(
-        data=ds.Scanner.from_batches(_tracking_batches(), schema=schema),
+        data=ds.Scanner.from_batches(
+            _tracking_batches(),
+            schema=first_batch.schema,
+        ),
         base_dir=parquet_out_dir,
         format="parquet",
-        partitioning=partitioning,
+        partitioning=ds.partitioning(
+            schema=pa.schema(
+                [
+                    pa.field(ENTITY_BUCKET_FIELD, pa.int32()),
+                ],
+            ),
+            flavor="hive",
+        ),
         max_partitions=max(cfg.max_partitions, cfg.buckets),
         existing_data_behavior="delete_matching",
         use_threads=True,
@@ -295,20 +319,35 @@ def extract_structured_components(
         max_rows_per_group=cfg.max_rows_per_group,
         max_open_files=cfg.max_open_files,
     )
+    logger.info(
+        "Finished parquet write to %s in %.3fs",
+        parquet_out_dir,
+        perf_counter() - stage_started_at,
+    )
 
+    stage_started_at = perf_counter()
     _write_entity_chronology_index(
         parquet_out_dir=parquet_out_dir,
         chronology=entity_chronology,
     )
+    logger.info(
+        "Wrote entity chronology sidecar for %s in %.3fs",
+        parquet_out_dir,
+        perf_counter() - stage_started_at,
+    )
 
     logger.info(
-        "Structured extraction complete: file=%s out=%s batches_written=%d",
+        (
+            "Structured extraction complete: file=%s out=%s "
+            "batches_written=%d elapsed=%.3fs"
+        ),
         raw_input_path,
         parquet_out_dir,
         batches_emitted,
+        perf_counter() - started_at,
     )
 
-    return has_anomaly
+    return has_inline_labels
 
 
 def _write_entity_chronology_index(

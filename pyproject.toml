@@ -16,6 +16,7 @@ dependencies = [
     "prefect>=3.6.15",
     "pyarrow>=23.0.0",
     "rich>=14.2.0",
+    "spellpy>=0.0.9",
 ]
 
 [project.urls]
@@ -36,14 +37,10 @@ deepcase = [
 deeplog = [
     "torch>=2.11.0",
 ]
-river = [
-    # River 0.24.0 shipped a broken release layout for our naive_bayes usage:
-    # https://github.com/online-ml/river/issues/1806
-    "river>=0.23.0,<0.24.0",
-]
 
 [dependency-groups]
 dev = [
+    "diff-cover>=10.3.0",
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
@@ -60,7 +57,7 @@ docs = [
 # select = ["E", "F", "UP", "B", "SIM", "I", "ANN"]
 select = ['ALL']
 ignore = ["TD", "FIX002", "ERA001", "CPY001", "D107"]
-external = ["DOC603", "DOC201", "DOC203"]
+external = ["DOC"]
 preview = true
 
 [tool.ruff.lint.per-file-ignores]
@@ -86,3 +83,4 @@ module-name = "anomalog"
 drain3 = { git = "https://github.com/logpai/Drain3" }
 # See https://github.com/harens/DeepCASE/blob/main/docs/deepcase-audit.md
 deepcase = { git = "https://github.com/harens/DeepCASE.git" }
+spellpy = { git = "https://github.com/harens/spellpy.git" }

@@ -9,6 +9,7 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    ClassVar,
     Protocol,
     TypeVar,
     runtime_checkable,
@@ -19,6 +20,7 @@ from typing_extensions import Self
 
 from anomalog.representations import TemplatePhraseRepresentation
 from experiments import ConfigError
+from experiments.models.metric_schema import MetricScope  # noqa: TC001
 
 if TYPE_CHECKING:
     import logging
@@ -386,6 +388,33 @@ class ExperimentModelConfig(msgspec.Struct, frozen=True, tag_field="detector"):
         str | None,
         msgspec.Meta(description="Optional free-text model config description."),
     ] = None
+    primary_metric_scope: Annotated[
+        MetricScope | None,
+        msgspec.Meta(
+            description=(
+                "Primary metric block to foreground in run summaries. "
+                "When unset, the result writer selects a valid block using "
+                "the run's declared evaluation unit."
+            ),
+        ),
+    ] = None
+    secondary_metric_scopes: Annotated[
+        list[MetricScope],
+        msgspec.Meta(
+            description=(
+                "Additional metric blocks to preserve as secondary diagnostics."
+            ),
+        ),
+    ] = msgspec.field(default_factory=list)
+    allow_single_class_reporting: Annotated[
+        bool,
+        msgspec.Meta(
+            description=(
+                "Whether binary metric blocks may be reported as valid when "
+                "the test labels are single-class."
+            ),
+        ),
+    ] = False
 
     def __post_init__(self) -> None:
         """Reject direct construction so msgspec metadata remains authoritative.
@@ -493,10 +522,11 @@ class ExperimentDetector(Protocol):
     """Common detector runtime interface.
 
     Attributes:
-        detector_name (str): Stable detector name for manifests and logging.
+        detector_name (ClassVar[str]): Stable detector name for manifests and
+            logging.
     """
 
-    detector_name: str
+    detector_name: ClassVar[str]
 
     def fit(
         self,

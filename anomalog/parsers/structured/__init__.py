@@ -5,20 +5,33 @@ from anomalog.parsers.structured.contracts import (
     StructuredParser,
     StructuredSink,
 )
+from anomalog.parsers.structured.deeplog_preprocessed import (
+    DelimitedLabelledEventParser,
+)
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
-from anomalog.parsers.structured.parsers import BGLParser, HDFSV1Parser
+from anomalog.parsers.structured.parsers import (
+    AITADSParser,
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+    ThunderbirdParser,
+)
 from anomalog.parsers.structured.registry import (
     resolve_structured_parser,
     structured_parser_names,
 )
 
 __all__ = [
+    "AITADSParser",
     "BGLParser",
     "BaseStructuredLine",
+    "DelimitedLabelledEventParser",
     "HDFSV1Parser",
+    "OpenStackDeepLogParser",
     "ParquetStructuredSink",
     "StructuredParser",
     "StructuredSink",
+    "ThunderbirdParser",
     "resolve_structured_parser",
     "structured_parser_names",
 ]

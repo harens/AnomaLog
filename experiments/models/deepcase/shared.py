@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 import msgspec
 import numpy as np
-import torch
 
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import ModelManifest, require_entity_local_sequences
@@ -24,7 +23,7 @@ from experiments.models.base import ModelManifest, require_entity_local_sequence
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-    from rich.progress import Progress
+    from rich.progress import Progress, TaskID
 
     from anomalog.sequences import TemplateSequence
 DEEPCASE_NO_EVENT = -1337
@@ -77,6 +76,26 @@ class DeepCaseSequenceDecision(str, Enum):
     CONFIDENT_ANOMALY = "confident_anomaly"
 
 
+class DeepCaseClusterScoreStrategy(str, Enum):
+    """Stable cluster-labelling policies for DeepCASE ablations.
+
+    Attributes:
+        ANY_ANOMALOUS: Conservative, paper-faithful baseline. A cluster is
+            labelled anomalous when any member event is anomalous.
+        MAJORITY_VOTE: A cluster is labelled anomalous when anomalous labels
+            outnumber normal labels; ties fall back to normal.
+        THRESHOLD_FRACTION: A cluster is labelled anomalous when the anomaly
+            fraction meets or exceeds the configured threshold.
+        ABSTAIN_MIXED: Mixed clusters are deferred for manual inspection
+            instead of forcing a binary label.
+    """
+
+    ANY_ANOMALOUS = "max"
+    MAJORITY_VOTE = "majority_vote"
+    THRESHOLD_FRACTION = "threshold_fraction"
+    ABSTAIN_MIXED = "abstain_mixed"
+
+
 class DeepCaseEventDecisionMetrics(msgspec.Struct, frozen=True):
     """Automatic event-level DeepCASE decision metrics.
 
@@ -121,6 +140,70 @@ class DeepCaseEventDecisionMetrics(msgspec.Struct, frozen=True):
     event_true_anomalous_count: int
 
 
+class DeepCaseWorkloadMode(str, Enum):
+    """Paper workload-reduction modes supported by DeepCASE audits.
+
+    Attributes:
+        MANUAL: Operator samples clusters directly during manual review.
+        SEMI_AUTOMATIC: Operator only reviews unmatched or abstained cases.
+    """
+
+    MANUAL = "manual"
+    SEMI_AUTOMATIC = "semi_automatic"
+
+
+@dataclass(frozen=True, slots=True)
+class DeepCaseWorkloadAlertSampling:
+    """Manual-mode alert sampling for DeepCASE workload calculations.
+
+    Attributes:
+        cluster_count (int): Number of learned clusters.
+        alerts_per_cluster (int): Number of alerts sampled per cluster.
+    """
+
+    cluster_count: int
+    alerts_per_cluster: int = 10
+
+
+@dataclass(slots=True, frozen=True)
+class _TrainingBatchProgressState:
+    progress: Progress | None
+    task_id: TaskID | None
+
+
+class DeepCaseWorkloadReductionMetrics(msgspec.Struct, frozen=True):
+    """Paper-style DeepCASE workload-reduction metrics.
+
+    Attributes:
+        mode (DeepCaseWorkloadMode): Manual or semi-automatic workload mode.
+        total_contextual_sequence_count (int): Total contextual sequences
+            considered in the workload calculation.
+        covered_contextual_sequence_count (int): Sequences handled by the
+            detector or cluster database.
+        uncovered_contextual_sequence_count (int): Sequences that still need
+            manual inspection.
+        cluster_count (int | None): Number of learned clusters when alerts
+            are sampled from clusters in manual mode.
+        alerts_per_cluster (int | None): Samples shown per cluster.
+        alert_count (int | None): Total operator-facing alerts, if applicable.
+        coverage (float): Covered sequences divided by total sequences.
+        reduction (float): Manual workload reduction fraction.
+        overall (float): Overall reduction after accounting for uncovered
+            sequences.
+    """
+
+    mode: DeepCaseWorkloadMode
+    total_contextual_sequence_count: int
+    covered_contextual_sequence_count: int
+    uncovered_contextual_sequence_count: int
+    cluster_count: int | None
+    alerts_per_cluster: int | None
+    alert_count: int | None
+    coverage: float
+    reduction: float
+    overall: float
+
+
 # Sentinel scores emitted by the DeepCase library for non-cluster outcomes.
 SPECIAL_SCORE_REASONS: dict[float, ScoreReason] = {
     -1.0: ScoreReason.NOT_CONFIDENT_ENOUGH,
@@ -139,12 +222,12 @@ class DeepCaseSampleBatch:
     AnomaLog ``TemplateSequence``.
 
     Attributes:
-        contexts (torch.Tensor): Integer context windows of shape
+        contexts (np.ndarray): Integer context windows of shape
             ``(sample_count, context_length)``.
         context_original_event_ids (list[list[int | None]]): Original
             train-vocabulary ids for each context slot, with ``None`` used for
             padding slots and unknown prediction-time templates.
-        events (torch.Tensor): Integer target event ids of shape
+        events (np.ndarray): Integer target event ids of shape
             ``(sample_count,)``.
         scores (np.ndarray): Per-sample labels or scores aligned with
             ``contexts`` and ``events``.
@@ -160,9 +243,9 @@ class DeepCaseSampleBatch:
             to fall back to the parent sequence label.
     """
 
-    contexts: torch.Tensor
+    contexts: np.ndarray
     context_original_event_ids: list[list[int | None]]
-    events: torch.Tensor
+    events: np.ndarray
     scores: np.ndarray
     event_indexes: list[int]
     templates: list[str]
@@ -203,7 +286,7 @@ class DeepCaseEventIdMap:
 
     Attributes:
         template_to_event_id (dict[str, int]): Mapping from train template to
-            contiguous DeepCase event id.
+            contiguous DeepCASE event id.
         event_id_to_template (dict[int, str]): Reverse mapping used for
             manifest/reporting purposes, including the no-event sentinel id.
         no_event_id (int): Contiguous event id reserved for missing or stale
@@ -211,11 +294,8 @@ class DeepCaseEventIdMap:
     """
 
     template_to_event_id: dict[str, int]
-    """Mapping from event template to contiguous event id."""
     event_id_to_template: dict[int, str]
-    """Mapping from contiguous event id to event template, including no-event id."""
     no_event_id: int
-    """Contiguous event id used for no-event contexts, equal to vocabulary size."""
 
     @classmethod
     def from_sequences(
@@ -528,11 +608,21 @@ class DeepCaseManifest(ModelManifest, frozen=True):
         learning_rate (float): Context-builder optimizer learning rate.
         teach_ratio (float): Teacher-forcing ratio.
         iterations (int): Maximum interpreter query iterations used while
-            building clusters and during prediction-time attention queries.
+            building clusters. The paper-faithful path uses 100 iterations
+            both for interpreter clustering and the subsequent query
+            refinement step.
+        attention_query_iterations (int): Prediction-time attention-query
+            iterations forwarded to the upstream DeepCASE scoring path. The
+            paper-faithful path uses 100; zero is reserved for explicit
+            ablation or smoke-test variants.
         query_batch_size (int): Batch size used during querying/prediction.
-        cluster_score_strategy (str): Cluster score aggregation strategy.
+        cluster_score_strategy (str): Cluster-labelling policy used after
+            interpreter clustering.
+        cluster_anomaly_fraction_threshold (float): Cut-off used by the
+            thresholded anomaly-fraction policy.
         no_score (int): Special no-score value passed to DeepCASE.
         device (str): Resolved runtime torch device.
+        random_seed (int): Configured random seed used for the run.
         train_event_vocabulary_size (int): Number of train templates mapped to
             contiguous DeepCASE ids.
         train_sample_count (int): Number of event-centered training samples.
@@ -568,10 +658,13 @@ class DeepCaseManifest(ModelManifest, frozen=True):
     learning_rate: float
     teach_ratio: float
     iterations: int
+    attention_query_iterations: int
     query_batch_size: int
     cluster_score_strategy: str
+    cluster_anomaly_fraction_threshold: float
     no_score: int
     device: str
+    random_seed: int
     train_event_vocabulary_size: int
     train_sample_count: int
     clustered_sample_count: int
@@ -625,6 +718,7 @@ def build_sample_batch(
             )
             for template in templates
         ]
+        sample_indexes = _deepcase_prediction_sample_indexes(sequence)
         sequence_batch = _SequenceBatchData(
             sequence=sequence,
             templates=templates,
@@ -633,6 +727,7 @@ def build_sample_batch(
                 event_id_map.template_to_event_id.get(template)
                 for template in templates
             ],
+            sample_indexes=sample_indexes,
         )
         _append_sequence_samples(
             sequence_batch=sequence_batch,
@@ -669,15 +764,47 @@ def build_training_batch(
         tuple[DeepCaseEventIdMap, DeepCaseSampleBatch]: Train event-id map and
         aligned tensor batch.
     """
-    template_to_event_id: dict[str, int] = {}
+    sequences_list = list(sequences)
+    event_id_map = DeepCaseEventIdMap.from_sequences(sequences_list)
+    batch = build_training_batch_from_map(
+        sequences_list,
+        event_id_map=event_id_map,
+        context_length=context_length,
+        timeout_seconds=timeout_seconds,
+        progress=progress,
+    )
+    return event_id_map, batch
+
+
+def build_training_batch_from_map(
+    sequences: Iterable[TemplateSequence],
+    *,
+    event_id_map: DeepCaseEventIdMap,
+    context_length: int,
+    timeout_seconds: float,
+    progress: Progress | None = None,
+) -> DeepCaseSampleBatch:
+    """Build a training batch using a precomputed DeepCASE event map.
+
+    Args:
+        sequences (Iterable[TemplateSequence]): Training sequences to encode.
+        event_id_map (DeepCaseEventIdMap): Precomputed template-to-event map.
+        context_length (int): Number of prior events to retain per sample.
+        timeout_seconds (float): Maximum target-to-context age in seconds.
+        progress (Progress | None): Optional progress reporter used to track
+            training-sequence preparation.
+
+    Returns:
+        DeepCaseSampleBatch: Immutable batch aligned to the provided event map.
+    """
     timeout_ms = int(timeout_seconds * 1000)
     context_policy = ContextWindowPolicy(
         context_length=context_length,
         timeout_ms=timeout_ms,
-        no_event_id=DEEPCASE_NO_EVENT,
+        no_event_id=event_id_map.no_event_id,
     )
     batch_columns = _EmptyBatchColumns.create()
-    prepare_task: int | None = None
+    prepare_task: TaskID | None = None
     if progress is not None:
         total = len(sequences) if isinstance(sequences, Sized) else None
         prepare_task = progress.add_task(
@@ -686,50 +813,59 @@ def build_training_batch(
         )
 
     try:
-        for sequence in sequences:
-            require_entity_local_sequences((sequence,), detector_name="DeepCase")
-            templates = sequence.templates
-            sequence_event_ids = [
-                template_to_event_id.setdefault(template, len(template_to_event_id))
-                for template in templates
-            ]
-            sequence_batch = _SequenceBatchData(
-                sequence=sequence,
-                templates=templates,
-                sequence_event_ids=sequence_event_ids,
-                original_event_ids=[
-                    template_to_event_id.get(template) for template in templates
-                ],
-            )
-            _append_sequence_samples(
-                sequence_batch=sequence_batch,
-                context_policy=context_policy,
-                batch_columns=batch_columns,
-            )
-            if progress is not None and prepare_task is not None:
-                progress.advance(prepare_task)
+        _append_training_sequences_to_batch_columns(
+            sequences=sequences,
+            event_id_map=event_id_map,
+            context_policy=context_policy,
+            batch_columns=batch_columns,
+            progress_state=_TrainingBatchProgressState(
+                progress=progress,
+                task_id=prepare_task,
+            ),
+        )
     finally:
         if progress is not None and prepare_task is not None:
             progress.remove_task(prepare_task)
 
-    no_event_id = len(template_to_event_id)
-    event_id_to_template = {
-        event_id: template for template, event_id in template_to_event_id.items()
-    }
-    event_id_to_template[no_event_id] = str(DEEPCASE_NO_EVENT)
-    batch = batch_columns.to_batch(
+    return batch_columns.to_batch(
         context_length=context_length,
         no_event_placeholder=DEEPCASE_NO_EVENT,
-        no_event_id=no_event_id,
+        no_event_id=event_id_map.no_event_id,
     )
-    return (
-        DeepCaseEventIdMap(
-            template_to_event_id=template_to_event_id,
-            event_id_to_template=event_id_to_template,
-            no_event_id=no_event_id,
-        ),
-        batch,
-    )
+
+
+def _append_training_sequences_to_batch_columns(
+    *,
+    sequences: Iterable[TemplateSequence],
+    event_id_map: DeepCaseEventIdMap,
+    context_policy: ContextWindowPolicy,
+    batch_columns: _EmptyBatchColumns,
+    progress_state: _TrainingBatchProgressState,
+) -> None:
+    for sequence in sequences:
+        require_entity_local_sequences((sequence,), detector_name="DeepCase")
+        templates = sequence.templates
+        sequence_event_ids = [
+            event_id_map.template_to_event_id[template] for template in templates
+        ]
+        sample_indexes = _deepcase_training_sample_indexes(sequence)
+        sequence_batch = _SequenceBatchData(
+            sequence=sequence,
+            templates=templates,
+            sequence_event_ids=sequence_event_ids,
+            original_event_ids=[
+                event_id_map.template_to_event_id.get(template)
+                for template in templates
+            ],
+            sample_indexes=sample_indexes,
+        )
+        _append_sequence_samples(
+            sequence_batch=sequence_batch,
+            context_policy=context_policy,
+            batch_columns=batch_columns,
+        )
+        if progress_state.progress is not None and progress_state.task_id is not None:
+            progress_state.progress.advance(progress_state.task_id)
 
 
 def finding_reason_for_score(raw_score: float) -> ScoreReason:
@@ -761,6 +897,80 @@ def finding_reason_for_score(raw_score: float) -> ScoreReason:
     return ScoreReason.KNOWN_BENIGN_CLUSTER
 
 
+def build_workload_reduction_metrics(
+    *,
+    mode: DeepCaseWorkloadMode,
+    total_contextual_sequence_count: int,
+    covered_contextual_sequence_count: int,
+    uncovered_contextual_sequence_count: int,
+    alert_sampling: DeepCaseWorkloadAlertSampling | None = None,
+) -> DeepCaseWorkloadReductionMetrics:
+    """Build DeepCASE paper-style workload metrics from aggregate counts.
+
+    Args:
+        mode (DeepCaseWorkloadMode): Manual or semi-automatic workload mode.
+        total_contextual_sequence_count (int): Total contextual samples in the
+            chosen unit. Paper-style usage keeps this aligned with the same
+            unit as the covered and uncovered counts, typically training
+            samples for manual mode or scored event samples for semi-automatic
+            mode.
+        covered_contextual_sequence_count (int): Contextual samples handled
+            automatically or by a learned cluster database.
+        uncovered_contextual_sequence_count (int): Contextual samples that
+            still need manual inspection.
+        alert_sampling (DeepCaseWorkloadAlertSampling | None): Manual-mode
+            alert sampling details. This is ignored for semi-automatic mode.
+
+    Returns:
+        DeepCaseWorkloadReductionMetrics: Paper-style workload summary.
+    """
+    coverage = (
+        covered_contextual_sequence_count / total_contextual_sequence_count
+        if total_contextual_sequence_count
+        else 0.0
+    )
+    if mode is DeepCaseWorkloadMode.MANUAL:
+        cluster_count = None if alert_sampling is None else alert_sampling.cluster_count
+        alerts_per_cluster = (
+            None if alert_sampling is None else alert_sampling.alerts_per_cluster
+        )
+        alert_count = (
+            None
+            if alert_sampling is None
+            else alert_sampling.cluster_count * alert_sampling.alerts_per_cluster
+        )
+        reduction = (
+            1.0 - (alert_count / covered_contextual_sequence_count)
+            if alert_count is not None and covered_contextual_sequence_count
+            else 0.0
+        )
+        overall = (
+            1.0
+            - ((alert_count or 0) + uncovered_contextual_sequence_count)
+            / total_contextual_sequence_count
+            if total_contextual_sequence_count
+            else 0.0
+        )
+    else:
+        cluster_count = None if alert_sampling is None else alert_sampling.cluster_count
+        alerts_per_cluster = None
+        alert_count = None
+        reduction = 1.0 if total_contextual_sequence_count else 0.0
+        overall = coverage
+    return DeepCaseWorkloadReductionMetrics(
+        mode=mode,
+        total_contextual_sequence_count=total_contextual_sequence_count,
+        covered_contextual_sequence_count=covered_contextual_sequence_count,
+        uncovered_contextual_sequence_count=uncovered_contextual_sequence_count,
+        cluster_count=cluster_count,
+        alerts_per_cluster=alerts_per_cluster,
+        alert_count=alert_count,
+        coverage=coverage,
+        reduction=reduction,
+        overall=overall,
+    )
+
+
 def decision_label_for_score(raw_score: float) -> int:
     """Map a raw DeepCase score/code into AnomaLog's binary anomaly label.
 
@@ -790,6 +1000,99 @@ def aggregate_sequence_score(raw_scores: Sequence[float]) -> float:
         float: Sequence-level score for the experiment metrics contract.
     """
     return max((score for score in raw_scores if score > 0), default=0.0)
+
+
+def cluster_score_for_labels(
+    labels: Sequence[int | float] | np.ndarray,
+    *,
+    strategy: DeepCaseClusterScoreStrategy,
+    anomaly_fraction_threshold: float = 0.75,
+    no_score: int = -1,
+) -> float:
+    """Return one cluster score from the labels attached to its members.
+
+    Args:
+        labels (Sequence[int | float] | np.ndarray): Labels attached to
+            samples within one cluster. ``no_score`` values are ignored.
+        strategy (DeepCaseClusterScoreStrategy): Cluster-labelling policy.
+        anomaly_fraction_threshold (float): Minimum anomaly fraction required
+            by ``threshold_fraction``.
+        no_score (int): Sentinel used for ignored or abstained samples.
+
+    Returns:
+        float: Cluster score suitable for DeepCASE's ``score()`` contract.
+    """
+    observed_labels = np.asarray(labels)
+    observed_labels = observed_labels[observed_labels != no_score]
+    if observed_labels.size == 0:
+        return float(no_score)
+
+    anomalous_count = int(np.count_nonzero(observed_labels != 0))
+    normal_count = len(observed_labels) - anomalous_count
+
+    if strategy is DeepCaseClusterScoreStrategy.ANY_ANOMALOUS:
+        return 1.0 if anomalous_count else 0.0
+
+    if strategy is DeepCaseClusterScoreStrategy.MAJORITY_VOTE:
+        return 1.0 if anomalous_count > normal_count else 0.0
+
+    if strategy is DeepCaseClusterScoreStrategy.THRESHOLD_FRACTION:
+        anomaly_fraction = anomalous_count / len(observed_labels)
+        return 1.0 if anomaly_fraction >= anomaly_fraction_threshold else 0.0
+
+    if anomalous_count and normal_count:
+        return float(no_score)
+    return 1.0 if anomalous_count else 0.0
+
+
+def cluster_scores_for_labels(
+    clusters: Sequence[int] | np.ndarray,
+    labels: Sequence[int | float] | np.ndarray,
+    *,
+    strategy: DeepCaseClusterScoreStrategy,
+    anomaly_fraction_threshold: float = 0.75,
+    no_score: int = -1,
+) -> np.ndarray:
+    """Return one score per sample by labelling each non-noise cluster.
+
+    Args:
+        clusters (Sequence[int] | np.ndarray): Cluster id per sample, using
+            ``-1`` for noise or unmatched samples.
+        labels (Sequence[int | float] | np.ndarray): Labels attached to
+            samples.
+        strategy (DeepCaseClusterScoreStrategy): Cluster-labelling policy.
+        anomaly_fraction_threshold (float): Minimum anomaly fraction required
+            by ``threshold_fraction``.
+        no_score (int): Sentinel used for ignored or abstained samples.
+
+    Returns:
+        np.ndarray: Per-sample cluster scores ready for ``Interpreter.score``.
+
+    Raises:
+        ValueError: If the cluster and label arrays do not share a shape.
+    """
+    clusters_array = np.asarray(clusters)
+    labels_array = np.asarray(labels)
+    if clusters_array.shape != labels_array.shape:
+        msg = (
+            "Clusters and labels should have the same shape, but instead "
+            f"found {clusters_array.shape!r} clusters and "
+            f"{labels_array.shape!r} labels."
+        )
+        raise ValueError(msg)
+
+    result = np.full(labels_array.shape[0], float(no_score), dtype=float)
+    for cluster_id in np.unique(clusters_array):
+        if cluster_id == -1:
+            continue
+        indices = np.flatnonzero(clusters_array == cluster_id)
+        result[indices] = cluster_score_for_labels(
+            labels_array[indices],
+            strategy=strategy,
+            anomaly_fraction_threshold=anomaly_fraction_threshold,
+            no_score=no_score,
+        )
+    return result
 
 
 def _event_id_for_template(
@@ -848,6 +1151,7 @@ def _context_for_target(
         ...         templates=sequence.templates,
         ...         sequence_event_ids=[10, 11, 12],
         ...         original_event_ids=[10, 11, 12],
+        ...         sample_indexes=[2],
         ...     ),
         ...     target_index=2,
         ...     context_policy=ContextWindowPolicy(
@@ -951,12 +1255,15 @@ class _SequenceBatchData:
             ``templates``.
         original_event_ids (Sequence[int | None]): Original train-vocabulary
             ids aligned with ``templates``.
+        sample_indexes (Sequence[int]): Event indexes selected for the current
+            sampling mode.
     """
 
     sequence: TemplateSequence
     templates: Sequence[str]
     sequence_event_ids: Sequence[int]
     original_event_ids: Sequence[int | None]
+    sample_indexes: Sequence[int]
 
 
 @dataclass(slots=True)
@@ -1043,9 +1350,9 @@ class _EmptyBatchColumns:
             contexts_array[contexts_array == no_event_placeholder] = no_event_id
 
         return DeepCaseSampleBatch(
-            contexts=torch.tensor(contexts_array, dtype=torch.long),
+            contexts=contexts_array,
             context_original_event_ids=self.context_original_event_ids,
-            events=torch.tensor(self.events, dtype=torch.long),
+            events=np.asarray(self.events, dtype=int),
             scores=np.asarray(self.scores, dtype=float),
             event_indexes=self.event_indexes,
             templates=self.templates,
@@ -1074,9 +1381,9 @@ def _append_sequence_samples(
     sequence_event_ids = sequence_batch.sequence_event_ids
     parent_sample_label = int(is_anomalous_label(sequence.label))
     event_labels = sequence.event_labels
-    for target_index, (template, event_id) in enumerate(
-        zip(templates, sequence_event_ids, strict=True),
-    ):
+    for target_index in sequence_batch.sample_indexes:
+        template = templates[target_index]
+        event_id = sequence_event_ids[target_index]
         target_event_label = (
             None if event_labels is None else event_labels[target_index]
         )
@@ -1101,3 +1408,44 @@ def _append_sequence_samples(
         batch_columns.original_event_ids.append(
             sequence_batch.original_event_ids[target_index],
         )
+
+
+def _deepcase_training_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    """Return train-time sample indexes for one DeepCASE sequence.
+
+    Explicit per-event masks take precedence so event-level extension
+    configurations can preserve chronological split boundaries without changing
+    the default whole-sequence behaviour used by the existing entity-grouped
+    benchmarks.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being sampled.
+
+    Returns:
+        list[int]: Event indexes selected for training.
+    """
+    if sequence.training_event_mask is not None:
+        return [
+            event_index
+            for event_index, is_eligible in enumerate(sequence.training_event_mask)
+            if is_eligible
+        ]
+    return list(range(len(sequence.events)))
+
+
+def _deepcase_prediction_sample_indexes(sequence: TemplateSequence) -> list[int]:
+    """Return prediction-time sample indexes for one DeepCASE sequence.
+
+    Args:
+        sequence (TemplateSequence): Source sequence being sampled.
+
+    Returns:
+        list[int]: Event indexes selected for scoring.
+    """
+    if sequence.evaluation_event_mask is not None:
+        return [
+            event_index
+            for event_index, is_eligible in enumerate(sequence.evaluation_event_mask)
+            if is_eligible
+        ]
+    return list(range(len(sequence.events)))

@@ -1,0 +1,12 @@
+extends = "../shared/entity_chronological_base.toml"
+name = "hdfs_v1_entity_chronological"
+description = "HDFS v1 entity chronological experiment matrix with unsupervised, supervised, Markov, and label-aware sanity baselines."
+
+[dataset]
+name = "hdfs_v1_entity_chronological"
+dataset_name = "HDFS_V1"
+preset = "hdfs_v1"
+description = "Built-in HDFS_v1 preset grouped by entity with chronological prefix/suffix splitting."
+
+[dataset.cache_paths]
+namespace = "hdfs_entity"

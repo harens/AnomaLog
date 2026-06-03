@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
+import math
 import types
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
+import msgspec
 import pytest
 from rich.progress import Progress, TextColumn
 from typing_extensions import override
 
+import experiments.models.markov as markov_module
 from anomalog.representations import (
     SequenceRepresentationView,
     SequentialRepresentation,
@@ -40,8 +46,8 @@ from experiments.models.evaluate import (
     fit_detector,
     stream_predictions,
 )
+from experiments.models.markov import MarkovManifest, MarkovModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
-from experiments.models.river import RiverDetector, RiverModelConfig
 from experiments.models.template_frequency import (
     TemplateFrequencyModelConfig,
 )
@@ -52,6 +58,10 @@ from tests.unit.helpers import (
 )
 
 REPRESENTATION_VIEW_WINDOW_ID = 0
+EXPECTED_MARKOV_NORMAL_SEQUENCE_COUNT = 2
+EXPECTED_MARKOV_NORMAL_TRANSITION_COUNT = 2
+EXPECTED_MARKOV_CONTEXT_VOCABULARY = 2
+EXPECTED_MARKOV_TEMPLATE_VOCABULARY = 2
 ConfigValue = str | int | float | bool | None
 
 
@@ -69,27 +79,36 @@ def _naive_bayes_config(**values: ConfigValue) -> NaiveBayesModelConfig:
     )
 
 
-def _river_config(**values: ConfigValue) -> RiverModelConfig:
+def _markov_config(**values: ConfigValue) -> MarkovModelConfig:
     return decode_experiment_model_config(
-        {"name": "river", **values},
-        config_type=RiverModelConfig,
+        {"name": "markov", **values},
+        config_type=MarkovModelConfig,
     )
 
 
-def _sequence(
+def _sequence(  # noqa: PLR0913
     window_id: int,
     *,
     templates: list[str],
-    label: int,
+    label: int | None,
     split_label: SplitLabel = SplitLabel.TRAIN,
+    event_labels: tuple[int | None, ...] | None = None,
+    training_event_mask: tuple[bool, ...] | None = None,
+    evaluation_event_mask: tuple[bool, ...] | None = None,
 ) -> TemplateSequence:
-    return TemplateSequence(
+    sequence = TemplateSequence(
         events=[(template, [], None) for template in templates],
-        label=label,
+        label=0 if label is None else label,
         entity_ids=[f"entity-{window_id}"],
         window_id=window_id,
         split_label=split_label,
+        event_labels=event_labels,
+        training_event_mask=training_event_mask,
+        evaluation_event_mask=evaluation_event_mask,
     )
+    if label is None:
+        object.__setattr__(sequence, "label", None)  # noqa: PLC2801
+    return sequence
 
 
 def _supervised_train_sequences() -> list[TemplateSequence]:
@@ -149,7 +168,7 @@ def test_fit_detector_wraps_lazy_train_stream_with_known_total() -> None:
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         seen_total: int | None = None
         seen_unit: str | None = None
         seen_sequences: list[TemplateSequence] = field(default_factory=list)
@@ -248,7 +267,7 @@ def test_stream_predictions_only_scores_test_sequences(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         predicted_window_ids: list[int] = field(default_factory=list)
 
         @override
@@ -373,7 +392,7 @@ def test_stream_predictions_logs_scored_test_sequence_counts(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
 
         @override
         def fit(
@@ -447,7 +466,7 @@ def test_stream_predictions_uses_bulk_detector_interface(
 
     @dataclass(slots=True)
     class _BulkRecordingDetector(ExperimentDetector, BatchExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
         bulk_window_ids: list[int] = field(default_factory=list)
 
         @override
@@ -532,7 +551,7 @@ def test_stream_predictions_does_not_write_predictions_by_default(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
 
         @override
         def fit(
@@ -588,7 +607,7 @@ def test_model_registries_resolve_builtins() -> None:
     # `anomalog` coverage target.
     assert resolve_model_config_type("deeplog") is DeepLogModelConfig
     assert resolve_model_config_type("naive_bayes") is NaiveBayesModelConfig
-    assert resolve_model_config_type("river") is RiverModelConfig
+    assert resolve_model_config_type("markov") is MarkovModelConfig
     assert (
         resolve_model_config_type("template_frequency") is TemplateFrequencyModelConfig
     )
@@ -641,11 +660,11 @@ def test_model_registry_reports_missing_optional_dependencies(
         monkeypatch (pytest.MonkeyPatch): Replaces the module importer so the
             test can simulate a missing backend dependency.
     """
-    missing_dependency = ModuleNotFoundError("No module named 'river'")
-    missing_dependency.name = "river"
+    missing_dependency = ModuleNotFoundError("No module named 'deepcase'")
+    missing_dependency.name = "deepcase"
     registration = types.SimpleNamespace(
-        module_path="experiments.models.river",
-        config_type_name="RiverModelConfig",
+        module_path="experiments.models.deepcase",
+        config_type_name="DeepCaseModelConfig",
     )
 
     def _import_module(module_path: str) -> types.SimpleNamespace:
@@ -654,7 +673,7 @@ def test_model_registry_reports_missing_optional_dependencies(
 
     monkeypatch.setattr(
         "experiments.models.registry._MODEL_REGISTRATIONS",
-        {"river": registration},
+        {"deepcase": registration},
     )
     monkeypatch.setattr("experiments.models.registry.import_module", _import_module)
 
@@ -662,9 +681,9 @@ def test_model_registry_reports_missing_optional_dependencies(
     try:
         with pytest.raises(
             ConfigError,
-            match=r"Detector 'river' requires optional backend dependencies",
+            match=r"Detector 'deepcase' requires optional backend dependencies",
         ):
-            resolve_model_config_type("river")
+            resolve_model_config_type("deepcase")
     finally:
         resolve_model_config_type.cache_clear()
 
@@ -683,7 +702,7 @@ def test_model_configs_reject_direct_construction() -> None:
     [
         lambda: _template_frequency_config(name="template_frequency").build_detector(),
         lambda: _naive_bayes_config(name="naive_bayes").build_detector(),
-        lambda: _river_config(name="river").build_detector(),
+        lambda: _markov_config(name="markov").build_detector(),
     ],
 )
 def test_detectors_only_accept_one_successful_fit(
@@ -746,7 +765,16 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
         detector.fit(train_sequences, progress=progress)
 
     normal_scores = [
-        detector.score(sequence) for sequence in train_sequences if sequence.label == 0
+        detector.score(
+            _sequence(
+                100 + index,
+                templates=sequence.templates,
+                label=0,
+                split_label=SplitLabel.TEST,
+            ),
+        )
+        for index, sequence in enumerate(train_sequences)
+        if sequence.label == 0
     ]
     anomalous_sequence = _sequence(
         23,
@@ -756,9 +784,341 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
     )
 
     assert detector.threshold_source == "train_score_quantile"
+    assert detector.event_threshold_source == "train_event_score_quantile"
     assert detector.score_threshold <= max(normal_scores)
     assert detector.predict(train_sequences[0]).predicted_label == 0
     assert detector.predict(anomalous_sequence).predicted_label == 1
+
+
+def test_template_frequency_detector_treats_missing_labels_as_normal() -> None:
+    """Template-frequency calibration should accept missing labels as normal."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    train_sequences = [
+        _sequence(40, templates=["normal login"], label=None),
+        _sequence(41, templates=["normal read"], label=None),
+        _sequence(42, templates=["panic failure"], label=1),
+    ]
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+
+    assert detector.threshold_source == "train_score_quantile"
+    assert detector.predict(train_sequences[0]).predicted_label == 0
+
+
+def test_template_frequency_detector_uses_event_masks_for_fit_and_scoring() -> None:
+    """Template-frequency should honour DeepLog-style train and eval masks."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    expected_total_events = 2
+    train_sequence = _sequence(
+        40,
+        templates=["normal login", "panic failure", "normal read"],
+        label=1,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True),
+    )
+    test_sequence = _sequence(
+        41,
+        templates=["normal login", "rare failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        evaluation_event_mask=(False, True),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert detector.total_events == expected_total_events
+    assert detector.template_counts == Counter(
+        {
+            "normal login": 1,
+            "normal read": 1,
+        },
+    )
+    assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
+
+
+def test_template_frequency_detector_reports_event_level_metrics() -> None:
+    """Template-frequency event metrics should count events, not sequences."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    train_sequences = [
+        _sequence(
+            50,
+            templates=["normal login", "normal read", "normal read"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+        _sequence(
+            51,
+            templates=["normal read", "normal login"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True),
+        ),
+    ]
+    test_sequences = [
+        _sequence(
+            60,
+            templates=["normal login", "panic failure", "normal read"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 1, 0),
+            evaluation_event_mask=(True, True, True),
+        ),
+        _sequence(
+            61,
+            templates=["normal read", "normal read"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0),
+            evaluation_event_mask=(True, True),
+        ),
+    ]
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    for sequence in test_sequences:
+        detector.predict(sequence)
+
+    expected_event_count = sum(len(sequence.events) for sequence in test_sequences)
+    expected_anomalous_event_count = 1
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=4,
+            train_sequence_count=2,
+            test_sequence_count=2,
+            train_label_counts={0: 2},
+            test_label_counts={0: 1, 1: 1},
+        ),
+    )
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    event_metrics = metrics["event_level_detection"]
+
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
+    assert event_metrics["events_seen"] == expected_event_count
+    assert event_metrics["events_eligible"] == expected_event_count
+    assert event_metrics["events_seen"] > len(test_sequences)
+    assert event_metrics["anomalous_event_count"] == expected_anomalous_event_count
+    assert (
+        event_metrics["tp"]
+        + event_metrics["tn"]
+        + event_metrics["fp"]
+        + event_metrics["fn"]
+        == expected_event_count
+    )
+
+
+def test_markov_detector_predictions_are_repeatable() -> None:
+    """Repeated predictions from the transition detector should be identical."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequences = _supervised_train_sequences()
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    normal_sequence = train_sequences[0]
+    anomalous_sequence = _sequence(
+        24,
+        templates=["panic failure", "disk failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+    )
+
+    first = detector.predict(anomalous_sequence)
+    second = detector.predict(anomalous_sequence)
+
+    assert detector.threshold_source == "train_score_quantile"
+    assert detector.predict(normal_sequence).predicted_label == 0
+    assert first == second
+
+
+def test_markov_detector_uses_event_masks_for_fit_and_scoring() -> None:
+    """Markov should respect DeepLog-style masking without losing context."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequence = _sequence(
+        42,
+        templates=["A", "B", "C", "D"],
+        label=0,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True, False),
+    )
+    test_sequence = _sequence(
+        43,
+        templates=["A", "B", "C", "D"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        evaluation_event_mask=(False, False, False, True),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert detector.normal_sequence_count == 1
+    assert detector.normal_transition_count == 1
+    assert detector.context_counts == Counter({("B",): 1})
+    assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
+    assert detector.score(test_sequence) == pytest.approx(math.log(4.0))
+
+
+def test_markov_detector_accepts_mixed_training_chunks_with_eligible_targets() -> None:
+    """Markov should fit BGL-style mixed training chunks via event masks."""
+    detector = _markov_config(name="markov").build_detector()
+    mixed_train_sequence = _sequence(
+        42,
+        templates=["A", "B", "C", "D"],
+        label=1,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, False, True, False),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([mixed_train_sequence], progress=progress)
+
+    assert detector.normal_sequence_count == 1
+    assert detector.normal_transition_count == 1
+    assert detector.context_counts == Counter({("B",): 1})
+    assert detector.transition_counts_by_context == {("B",): Counter({"C": 1})}
+
+
+def test_markov_detector_fit_builds_eligible_indexes_once_per_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Markov fit should reuse eligible target indexes instead of rescanning them.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to count Markov module
+            set construction calls.
+    """
+    detector = _markov_config(name="markov").build_detector()
+    train_sequence = _sequence(
+        44,
+        templates=[f"template-{index % 5}" for index in range(200)],
+        label=0,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=tuple(True for _ in range(200)),
+    )
+    call_count = 0
+
+    def counting_set(values: Iterable[object] = ()) -> set[object]:
+        nonlocal call_count
+        call_count += 1
+        return builtins.set(values)
+
+    monkeypatch.setattr(markov_module, "set", counting_set, raising=False)
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    assert call_count == 1
+
+
+def test_markov_detector_reports_event_level_metrics() -> None:
+    """Markov event metrics should count labelled events, not chunks."""
+    detector = _markov_config(name="markov").build_detector()
+    train_sequences = [
+        _sequence(
+            70,
+            templates=["A", "B", "C"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+        _sequence(
+            71,
+            templates=["B", "C", "D"],
+            label=0,
+            split_label=SplitLabel.TRAIN,
+            training_event_mask=(True, True, True),
+        ),
+    ]
+    test_sequences = [
+        _sequence(
+            80,
+            templates=["A", "B", "panic failure"],
+            label=1,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0, 1),
+            evaluation_event_mask=(True, True, True),
+        ),
+        _sequence(
+            81,
+            templates=["B", "C"],
+            label=0,
+            split_label=SplitLabel.TEST,
+            event_labels=(0, 0),
+            evaluation_event_mask=(True, True),
+        ),
+    ]
+
+    with Progress(disable=True) as progress:
+        detector.fit(train_sequences, progress=progress)
+    for sequence in test_sequences:
+        detector.predict(sequence)
+
+    expected_event_count = sum(
+        max(len(sequence.events) - detector.order, 0) for sequence in test_sequences
+    )
+    expected_anomalous_event_count = 1
+    manifest = detector.model_manifest(
+        sequence_summary=SequenceSummary(
+            sequence_count=4,
+            train_sequence_count=2,
+            test_sequence_count=2,
+            train_label_counts={0: 2},
+            test_label_counts={0: 1, 1: 1},
+        ),
+    )
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    event_metrics = metrics["event_level_detection"]
+
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
+    assert event_metrics["events_seen"] == expected_event_count
+    assert event_metrics["events_eligible"] == expected_event_count
+    assert event_metrics["events_seen"] > len(test_sequences)
+    assert event_metrics["anomalous_event_count"] == expected_anomalous_event_count
+    assert (
+        event_metrics["tp"]
+        + event_metrics["tn"]
+        + event_metrics["fp"]
+        + event_metrics["fn"]
+        == expected_event_count
+    )
+
+
+def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:
+    """Markov manifests should expose normal-only transition statistics."""
+    detector = _markov_config(name="markov").build_detector()
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
+    sequence_summary = SequenceSummary(
+        sequence_count=4,
+        train_sequence_count=3,
+        test_sequence_count=1,
+        train_label_counts={0: 2, 1: 1},
+        test_label_counts={0: 1},
+    )
+
+    manifest: MarkovManifest = detector.model_manifest(
+        sequence_summary=sequence_summary,
+    )
+
+    assert manifest.detector == "markov"
+    assert manifest.order == 1
+    assert manifest.score_threshold >= 0.0
+    assert manifest.threshold_source == "train_score_quantile"
+    assert manifest.event_score_threshold >= 0.0
+    assert manifest.event_threshold_source == "train_event_score_quantile"
+    assert manifest.normal_sequence_count == EXPECTED_MARKOV_NORMAL_SEQUENCE_COUNT
+    assert manifest.normal_transition_count == EXPECTED_MARKOV_NORMAL_TRANSITION_COUNT
+    assert manifest.normal_context_vocabulary == EXPECTED_MARKOV_CONTEXT_VOCABULARY
+    assert manifest.normal_template_vocabulary == EXPECTED_MARKOV_TEMPLATE_VOCABULARY
 
 
 @pytest.mark.allow_no_new_coverage
@@ -780,44 +1140,6 @@ def test_naive_bayes_detector_predictions_are_repeatable() -> None:
     second = detector.predict(sequence)
 
     assert first == second
-
-
-@pytest.mark.allow_no_new_coverage
-def test_river_detector_predictions_are_stable_across_equal_fits() -> None:
-    """Two fits on the same training data should produce the same prediction."""
-    # This protects experiment-layer detector determinism, which sits outside
-    # the configured `anomalog` coverage target.
-    config = _river_config(name="river")
-    left = config.build_detector()
-    right = config.build_detector()
-    train_sequences = _supervised_train_sequences()
-    sequence = _sequence(
-        22,
-        templates=["panic failure", "disk failure"],
-        label=1,
-        split_label=SplitLabel.TEST,
-    )
-
-    with Progress(disable=True) as left_progress:
-        left.fit(train_sequences, progress=left_progress)
-    with Progress(disable=True) as right_progress:
-        right.fit(train_sequences, progress=right_progress)
-
-    assert left.predict(sequence) == right.predict(sequence)
-
-
-@pytest.mark.allow_no_new_coverage
-def test_river_model_config_supports_additional_count_based_estimators() -> None:
-    """River configs should accept the supported alternate Naive Bayes estimators."""
-    # This protects experiment-layer estimator registration outside the
-    # configured `anomalog` coverage target.
-    assert isinstance(
-        _river_config(
-            name="river-bernoulli",
-            estimator="naive_bayes.BernoulliNB",
-        ).build_detector(),
-        RiverDetector,
-    )
 
 
 @pytest.mark.allow_no_new_coverage
@@ -845,10 +1167,3 @@ def test_naive_bayes_manifest_includes_shared_sequence_summary_fields() -> None:
     assert manifest.test_sequence_count == sequence_summary.test_sequence_count
     assert manifest.train_label_counts == sequence_summary.train_label_counts
     assert manifest.test_label_counts == sequence_summary.test_label_counts
-    assert isinstance(
-        _river_config(
-            name="river-complement",
-            estimator="naive_bayes.ComplementNB",
-        ).build_detector(),
-        RiverDetector,
-    )

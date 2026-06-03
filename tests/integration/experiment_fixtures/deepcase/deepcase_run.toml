@@ -1,4 +1,22 @@
 name = "deepcase_runner_smoke"
-dataset = "deepcase_dataset"
-model = "deepcase"
+
+[dataset]
+name = "deepcase_dataset"
+dataset_name = "deepcase-bgl-fixture"
+structured_parser = "bgl"
+
+[dataset.source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/deepcase_fixture.log"
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.5
+test_fraction = 0.5
+train_on_normal_entities_only = false
+
+[[models]]
+ref = "deepcase"
+
 results_root = "experiments/results"

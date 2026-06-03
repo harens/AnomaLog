@@ -26,6 +26,7 @@ from experiments.models.progress import (
     score_stage_description,
     with_known_total,
 )
+from experiments.models.sequence_masks import evaluation_event_mask_for_sequence
 
 if TYPE_CHECKING:
     import logging
@@ -93,11 +94,11 @@ class RunMetrics:
         self,
         sequence: TemplateSequence,
     ) -> None:
-        """Record one train-split sequence without scoring it.
+        """Record one training-target sequence without scoring it.
 
         Args:
-            sequence (TemplateSequence): Train-split sequence seen while
-                streaming the dataset.
+            sequence (TemplateSequence): Sequence seen while streaming the
+                dataset that contributes training targets.
         """
         self.sequence_count += 1
         self.train_sequence_count += 1
@@ -160,25 +161,20 @@ class RunMetrics:
         """Return finalised run metrics.
 
         Returns:
-            dict[str, int | float | dict[int, int]]: Aggregate classification
-                and split metrics.
+            dict[str, int | float | dict[int, int]]: Aggregate split counts,
+                label histograms, and raw decision totals for later
+                task-aware metric reporting.
         """
         decision_count = self.tp + self.tn + self.fp + self.fn
         test_count = self.test_sequence_count
-        accuracy = (self.tp + self.tn) / decision_count if decision_count else 0.0
-        precision = self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 0.0
-        recall = self.tp / (self.tp + self.fn) if (self.tp + self.fn) else 0.0
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if (precision + recall)
-            else 0.0
-        )
         mean_test_score = self.test_score_sum / test_count if test_count else 0.0
         metrics: dict[str, int | float | dict[int, int]] = {
             "sequence_count": self.sequence_count,
             "train_sequence_count": self.train_sequence_count,
             "test_sequence_count": self.test_sequence_count,
             "ignored_sequence_count": self.ignored_sequence_count,
+            "train_label_counts": dict(self.train_label_counts),
+            "test_label_counts": dict(self.test_label_counts),
             "ignored_label_counts": dict(self.ignored_label_counts),
             "tp": self.tp,
             "tn": self.tn,
@@ -186,10 +182,6 @@ class RunMetrics:
             "fn": self.fn,
             "counted_predictions": decision_count,
             "abstained_prediction_count": self.abstained_prediction_count,
-            "accuracy": round(accuracy, 8),
-            "precision": round(precision, 8),
-            "recall": round(recall, 8),
-            "f1": round(f1, 8),
             "mean_test_score": round(mean_test_score, 8),
         }
         return metrics
@@ -396,7 +388,7 @@ def _iter_test_sequences(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
     accumulator: RunMetrics,
 ) -> Iterator[TemplateSequence]:
-    """Yield test sequences while accounting for train sequences inline.
+    """Yield sequences that contain at least one evaluation target.
 
     Args:
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
@@ -405,16 +397,19 @@ def _iter_test_sequences(
             sequences.
 
     Yields:
-        TemplateSequence: Test-split sequences in dataset order.
+        TemplateSequence: Sequences with evaluation targets in dataset order.
     """
     for sequence in sequence_factory():
+        evaluation_event_mask = evaluation_event_mask_for_sequence(sequence)
+        if any(evaluation_event_mask):
+            yield sequence
+            continue
         if sequence.split_label is SplitLabel.TRAIN:
             accumulator.record_train(sequence)
             continue
         if sequence.split_label is SplitLabel.IGNORED:
             accumulator.record_ignored(sequence)
             continue
-        yield sequence
 
 
 def _prediction_is_abstained(prediction: PredictionOutcome) -> bool:

@@ -11,6 +11,7 @@ TIMESTAMP_FIELD = "timestamp_unix_ms"
 ENTITY_FIELD = "entity_id"
 UNTEMPLATED_FIELD = "untemplated_message_text"
 ANOMALOUS_FIELD = "anomalous"
+RAW_PARAMETERS_FIELD = "raw_parameters"
 
 
 def is_anomalous_label(label: int | None) -> bool:
@@ -78,9 +79,12 @@ class StructuredLine(BaseStructuredLine):
 
     Attributes:
         line_order (int): Stable zero-based ordering key for the parsed record.
+        raw_parameters (list[str] | None): Optional parameter payload preserved
+            separately from template text for detectors that need it.
     """
 
     line_order: int
+    raw_parameters: list[str] | None = None
 
     @classmethod
     def with_line_order(
@@ -109,6 +113,9 @@ class StructuredLine(BaseStructuredLine):
             untemplated_message_text=base.untemplated_message_text,
             anomalous=base.anomalous,
             line_order=line_order,
+            raw_parameters=base.raw_parameters
+            if isinstance(base, StructuredLine)
+            else None,
         )
 
 
@@ -161,13 +168,13 @@ class StructuredSink(Protocol):
     raw_dataset_path: Path
     parser: StructuredParser
 
-    # Returns whether any line has a non-zero anomalous label.
+    # Returns whether any line carries an inline anomaly label.
     def write_structured_lines(self) -> bool:
-        """Persist structured lines and report whether inline anomalies exist.
+        """Persist structured lines and report whether inline labels exist.
 
         Returns:
-            bool: `True` when at least one persisted row carries a non-zero
-                inline anomaly label.
+            bool: `True` when at least one persisted row carries an inline
+            anomaly label, even if every label is normal (`0`).
         """
 
     # Batched access to structured rows, returned as StructuredLine instances.
@@ -185,6 +192,16 @@ class StructuredSink(Protocol):
         Returns:
             Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
                 yields structured rows when invoked.
+        """
+
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Return structured rows in the original raw-entry order.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields structured rows ordered by `line_order`.
         """
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:

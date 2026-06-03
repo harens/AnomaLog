@@ -1,5 +1,7 @@
 """Tests for template parser implementations."""
 
+import math
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias
@@ -8,11 +10,20 @@ import pytest
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import CachePathsConfig
+from anomalog.parsers.template import parsers as template_parsers
 from anomalog.parsers.template import (
     resolve_template_parser,
     template_parser_names,
 )
-from anomalog.parsers.template.parsers import Drain3Parser, IdentityTemplateParser
+from anomalog.parsers.template.parsers import (
+    Drain3Parser,
+    IdentityTemplateParser,
+    SpellTemplateParser,
+)
+
+_DRAIN3_MAKE_INFERENCE_FUNC = vars(Drain3Parser)["_make_inference_func"]
+_DRAIN3_LOAD_INFERENCE_FROM_CACHE = vars(Drain3Parser)["_load_inference_from_cache"]
+_SPEL_TEMPLATE_REGEX = vars(template_parsers)["_compile_spell_template_regex"]
 
 ZeroArgFn: TypeAlias = Callable[[], None]
 MaterializeDecorator: TypeAlias = Callable[[ZeroArgFn], ZeroArgFn]
@@ -109,6 +120,34 @@ def test_drain3_parser_uses_bound_dataset_name_for_cache_paths(tmp_path: Path) -
     )
 
 
+def test_drain3_parser_make_inference_func_rejects_unmatched_lines() -> None:
+    """Drain3 inference helpers should fail when no template matches."""
+
+    class _FakeMiner:
+        @staticmethod
+        def match(_log_line: str) -> None:
+            return None
+
+    inference = _DRAIN3_MAKE_INFERENCE_FUNC(_FakeMiner())
+
+    with pytest.raises(ValueError, match="did not match any template"):
+        inference("unmatched line")
+
+
+def test_drain3_parser_loads_inference_from_existing_cache_requires_file(
+    tmp_path: Path,
+) -> None:
+    """Drain3 cache recovery should fail when the persisted cache is absent.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for parser cache files.
+    """
+    parser = Drain3Parser(dataset_name="demo", cache_path=tmp_path / "cache")
+
+    with pytest.raises(ValueError, match="No trained Drain3 cache found"):
+        _DRAIN3_LOAD_INFERENCE_FROM_CACHE(parser)
+
+
 @pytest.mark.allow_no_new_coverage
 def test_drain3_parser_recovers_when_prefect_skips_and_local_cache_is_missing(
     tmp_path: Path,
@@ -150,7 +189,8 @@ def test_template_parser_registry_resolves_builtins() -> None:
     """Built-in template parsers register themselves by config name."""
     assert resolve_template_parser("drain3") is Drain3Parser
     assert resolve_template_parser("identity") is IdentityTemplateParser
-    assert set(template_parser_names()) >= {"drain3", "identity"}
+    assert resolve_template_parser("spell") is SpellTemplateParser
+    assert set(template_parser_names()) >= {"drain3", "identity", "spell"}
 
 
 def test_template_parser_registry_rejects_unknown_names() -> None:
@@ -259,3 +299,324 @@ def test_identity_template_parser_is_a_no_op_for_train_and_inference() -> None:
     parser.train(lambda: iter(["hello"]))
 
     assert parser.inference("hello") == ("hello", [])
+
+
+def test_spell_template_parser_trains_and_infers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser should expose trained templates through inference.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch the working directory so
+            Spell artefacts stay inside the per-test sandbox.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(
+        lambda: iter(
+            [
+                "Build vm-1 complete",
+                "Build vm-2 complete",
+                "Delete vm-1 complete",
+            ],
+        ),
+    )
+
+    template, parameters = parser.inference("Build vm-3 complete")
+    assert template == "Build <*> complete"
+    assert parameters == ["vm-3"]
+
+
+def test_spell_template_parser_requires_training_before_inference() -> None:
+    """Spell parser inference should reject calls before training."""
+    parser = SpellTemplateParser(dataset_name="demo")
+
+    with pytest.raises(ValueError, match="has not been trained yet"):
+        parser.inference("Build vm-3 complete")
+
+
+def test_spell_template_parser_requires_optional_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser should fail fast when the optional dependency is absent.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the working directory and
+            `spellpy` import for the optional-dependency failure path.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: (_ for _ in ()).throw(ModuleNotFoundError("spellpy")),
+    )
+
+    with pytest.raises(ModuleNotFoundError, match="requires optional dependency"):
+        SpellTemplateParser(dataset_name="demo").train(lambda: iter(["one"]))
+
+
+def test_spell_template_parser_handles_empty_training_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Spell parser training should tolerate an empty cluster set.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the working directory and
+            `spellpy` import for the optional-dependency failure path.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+        caplog (pytest.LogCaptureFixture): Log capture fixture used to assert
+            the warning emitted for empty training output.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.logCluL = []
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    with caplog.at_level("WARNING"):
+        parser.train(lambda: iter(["Build vm-1 complete"]))
+
+    assert "No logs were parsed during training" in caplog.text
+    assert parser.inference("Build vm-2 complete") == ("Build vm-2 complete", [])
+
+
+def test_spell_template_parser_trains_without_materialising_legacy_spellpy_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser training should mine templates without legacy raw artefacts.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patches the working directory and
+            guards against accidental `list(...)` materialisation.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+
+    def _forbid_list_materialisation(*_args: object, **_kwargs: object) -> None:
+        msg = "Spell training should not materialise the full input stream."
+        raise AssertionError(msg)
+
+    monkeypatch.chdir(tmp_path)
+    stale_output_dir = tmp_path / ".cache" / "spell" / "demo_spell_output"
+    stale_output_dir.mkdir(parents=True, exist_ok=True)
+    (stale_output_dir / "stale.txt").write_text("stale", encoding="utf-8")
+    parser = SpellTemplateParser(dataset_name="demo")
+    with monkeypatch.context() as m:
+        m.setattr(
+            "anomalog.parsers.template.parsers.list",
+            _forbid_list_materialisation,
+            raising=False,
+        )
+        parser.train(
+            lambda: iter(
+                [
+                    "Build vm-1 complete",
+                    "Build vm-2 complete",
+                ],
+            ),
+        )
+
+    raw_path = tmp_path / ".cache" / "spell" / "demo_spell_input.log"
+    output_dir = tmp_path / ".cache" / "spell" / "demo_spell_output"
+    assert not raw_path.exists()
+    assert output_dir.exists()
+    assert not (output_dir / "stale.txt").exists()
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "demo.log_structured.csv",
+        "demo.log_templates.csv",
+    ]
+    assert parser.inference("Build vm-3 complete") == (
+        "Build <*> complete",
+        ["vm-3"],
+    )
+
+
+def test_spell_template_parser_falls_back_when_no_template_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser inference should return the input unchanged when unmatched.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the working directory and
+            `spellpy` import for the unmatched-template branch.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.logCluL = [
+                types.SimpleNamespace(
+                    logTemplate=["Build", "<*>", "complete"],
+                    logIDL=[],
+                    occurrence_count=1,
+                ),
+            ]
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(lambda: iter(["Build vm-1 complete"]))
+
+    assert parser.inference("Delete vm-9 failed") == ("Delete vm-9 failed", [])
+
+
+def test_spell_template_parser_omits_removed_persist_state_argument(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Spell parser training should match the installed LogParser signature.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Redirect the `spellpy` import to a
+            strict fake module that rejects removed keyword arguments.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+        caplog (pytest.LogCaptureFixture): Captures the training summary so the
+            occurrence-count regression stays observable through the public log
+            output.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            expected_tau = 0.5
+            expected_max_lcs_comparisons_per_line = 10_000
+            assert "persist_state" not in kwargs
+            assert set(kwargs) == {
+                "indir",
+                "outdir",
+                "log_format",
+                "tau",
+                "keep_para",
+                "max_lcs_comparisons_per_line",
+                "resume_state",
+            }
+            indir = kwargs["indir"]
+            assert isinstance(indir, str)
+            assert Path(indir).parent == tmp_path / ".cache" / "spell"
+            outdir = kwargs["outdir"]
+            assert isinstance(outdir, str)
+            assert outdir == str(
+                tmp_path / ".cache" / "spell" / "demo_spell_output",
+            )
+            log_format = kwargs["log_format"]
+            assert isinstance(log_format, str)
+            assert log_format == "<Content>"
+            tau = kwargs["tau"]
+            assert isinstance(tau, float)
+            assert math.isclose(tau, expected_tau)
+            keep_para = kwargs["keep_para"]
+            assert isinstance(keep_para, bool)
+            assert keep_para is False
+            max_lcs_comparisons_per_line = kwargs["max_lcs_comparisons_per_line"]
+            assert isinstance(max_lcs_comparisons_per_line, int)
+            assert max_lcs_comparisons_per_line == expected_max_lcs_comparisons_per_line
+            resume_state = kwargs["resume_state"]
+            assert isinstance(resume_state, bool)
+            assert resume_state is False
+            self.logCluL = [
+                types.SimpleNamespace(
+                    logTemplate=["Build", "<*>", "complete"],
+                    logIDL=[],
+                    occurrence_count=2,
+                ),
+            ]
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    with caplog.at_level("INFO"):
+        parser.train(lambda: iter(["Build vm-1 complete", "Build vm-2 complete"]))
+
+    assert "Spell parser training finished: templates=1 occurrences=2" in caplog.text
+    assert parser.inference("Build vm-3 complete") == (
+        "Build <*> complete",
+        ["vm-3"],
+    )
+
+
+def test_spell_template_parser_counts_clusters_without_explicit_occurrences(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spell parser should fall back to log line counts when needed.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the working directory and
+            `spellpy` import for the missing-occurrence-count branch.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeLogParser:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.logCluL = [
+                types.SimpleNamespace(
+                    logTemplate=["Build", "<*>", "complete"],
+                    logIDL=[1, 2, 3],
+                ),
+            ]
+
+        @staticmethod
+        def parse(_filename: str) -> None:
+            return None
+
+    fake_spell_module = types.SimpleNamespace(
+        spell=types.SimpleNamespace(LogParser=_FakeLogParser),
+    )
+    monkeypatch.setattr(
+        "anomalog.parsers.template.parsers.importlib.import_module",
+        lambda _name: fake_spell_module,
+    )
+
+    parser = SpellTemplateParser(dataset_name="demo")
+    parser.train(lambda: iter(["Build vm-1 complete"]))
+
+    assert parser.inference("Build vm-9 complete") == (
+        "Build <*> complete",
+        ["vm-9"],
+    )

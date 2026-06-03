@@ -1,0 +1,7 @@
+time = "24:00:00"
+cpus_per_task = 3
+mem = "32G"
+gres = "gpu:1"
+# Optional base roots for cluster-local AnomaLog data and cache paths.
+# data_root = "/data/hs1822"
+# cache_root = "/data/hs1822/.cache"

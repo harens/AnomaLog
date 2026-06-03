@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.progress import Progress
 from typing_extensions import override
@@ -58,7 +58,7 @@ def test_stream_predictions_uses_known_test_total_when_supplied(
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
-        detector_name: str = "recording"
+        detector_name: ClassVar[str] = "recording"
 
         @override
         def fit(

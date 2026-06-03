@@ -1,3 +1,0 @@
-name = "tiny_river_run"
-dataset = "tiny_dataset_nb"
-model = "river"

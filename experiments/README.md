@@ -5,11 +5,17 @@ AnomaLog preprocessing.
 
 ## Layout
 
-- `configs/datasets/`: dataset variants, usually built from AnomaLog presets like `bgl` and `hdfs_v1`, but also able to define custom sources and parsers.
 - `configs/models/`: detector configurations such as template-frequency,
-  handwritten Naive Bayes, `river`-backed baselines, and the scoped DeepLog and DeepCASE models.
-- `configs/sweeps/`: experiment sweep definitions that reference one base dataset variant and one base model config, then optionally override them through fixed overrides and Cartesian-product axes.
+  a normal-only Markov transition baseline, handwritten Naive Bayes,
+  and the scoped DeepLog and DeepCASE models.
+- `configs/datasets/`: dataset-owned manifests grouped by family, with
+  reusable base manifests for dataset contracts, sequence settings, and shared
+  overrides.
+- `configs/registry.toml`: named experiment registry that combines dataset
+  names with explicit model configs into reproducible run targets.
+- `configs/slurm.toml`: Slurm submission defaults for the optional backend.
 - `runners/`: Python entrypoints for executing experiments.
+- `execution/`: optional execution backends such as Slurm.
 - `analysis/`: notebooks and one-off visual analysis only.
 - `results/`: generated run artifacts. These are not source-controlled.
 
@@ -21,33 +27,122 @@ Preprocessing stays in the dataset config layer. A dataset variant controls:
 - how they are parsed and templated
 - how sequences are generated
 
-Model experimentation stays in the sweep config layer. A sweep config binds one
-base dataset variant to one base detector config, chooses the results root,
-and can expand into multiple concrete runs through validated override axes.
-Sweep execution defaults `max_workers` to `"auto"`, which uses up to the
-concrete run count and local CPU count.
-Set an explicit positive integer when a sweep needs a stricter cap.
+Model experimentation stays in the dataset-manifest layer for dataset-specific
+shape and sequencing, while the registry owns the named experiment catalogue.
+A dataset manifest binds one base dataset variant to fixed overrides and
+validated override axes. The preferred path is to keep the dataset file
+focused on the dataset contract and let the registry tie that manifest to
+explicit model configs under `configs/models/`.
+If a manifest mixes heavyweight and lightweight detectors, keep the detector
+family next to the dataset manifest rather than hiding it behind another
+registry alias. The runner still executes one concrete run at a time, but the
+registry now expands the listed model configs directly.
+Manifest execution defaults `max_workers` to `"auto"`, which uses up to the
+concrete run count and local CPU count. Set an explicit positive integer when a
+manifest needs a stricter cap.
 
 That keeps preprocessing ablations separate from experiment matrices while
 still using the existing `DatasetSpec(...).build()` API as the source of
 truth.
 
-The checked-in sweep set is split by detector family:
+The checked-in dataset-manifest set is split by dataset family:
 
-- `bgl.toml` and `hdfs_v1.toml` sweep the chronological baseline models
-  (`template_frequency_default` and `naive_bayes_default`) across train
-  fractions `0.01`, `0.1`, and `0.2`
-- `bgl_deeplog.toml` and `hdfs_v1_deeplog.toml` sweep the DeepLog model on the
-  normal-only dataset variants
-- `bgl_deepcase.toml` and `hdfs_v1_deepcase.toml` sweep the DeepCASE model on
-  the chronological dataset variants
+- `shared/entity_chronological_base.toml`
+  holds the shared chronological entity dataset contract.
+- `bgl/entity_chronological.toml` and `hdfs/v1_entity_chronological.toml`
+  are the concrete chronological entity variants built from that base.
+- `bgl/bgl_deeplog_ccs2017_paper_1pct_normal_entry_stream_no_online.toml` and
+  `bgl/bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online.toml` keep the BGL DeepLog
+  paper-reproduction probes separate because they differ in the normal-entry
+  prefix fraction, which changes how much anomalous context is preserved in the
+  mixed stream batches.
+- `hdfs/v1_deeplog_paper_entry100k_split_partial.toml` and
+  `hdfs/v1_deeplog_paper_entry100k_assign_first.toml` each bundle the HDFS
+  paper DeepLog variant with template-frequency and Markov baselines, so the
+  model choice sits next to the dataset split policy instead of living in a
+  separate file.
+- `hdfs/wuyifan18_deeplog_preprocessed.toml` keeps the exact `hdfs_train` /
+  `hdfs_test` boundary for the wuyifan18 archive and now lists the DeepLog
+  key-only, template-frequency, and Markov model configs against the same
+  dataset manifest.
+- `openstack/deeplog_preprocessed.toml` is the matching OpenStack
+  file-boundary reproduction probe. It materialises LogHub's OpenStack archive,
+  parses with Spell (`tau=0.5`) over a canonicalised message body, builds the
+  DeepLog event-id vocabulary from `openstack_normal1.log`, and then evaluates
+  `openstack_normal2.log` and `openstack_abnormal.log` on the same exact
+  boundary. The OpenStack parser prefixes recovered `instance_id` values with
+  the split name so the file boundary survives grouping, and it also strips the
+  leading session tag plus volatile UUID, IP, path, hex, and numeric tokens
+  before Spell sees the message text. That keeps session identity out of the
+  template vocabulary while preserving the file-boundary split contract.
+  The manifest also carries template-frequency, Markov, and DeepCASE
+  comparators for the same file boundary.
+- `thunderbird.toml` is the LogHub Thunderbird corpus reproduction. It points
+  at `https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1`
+  with MD5 `0891b048df2919dc78c99c4428686b44`, reads the canonical
+  `Thunderbird.log` member, materialises the `160,000,000`-`170,000,000`
+  raw-line slice used by later public Thunderbird benchmark code, and builds
+  100-log chronological windows over that contiguous slice. The current
+  parser-backed measurement is `99,996` total windows with a `79,996 / 20,000`
+  train/test split and `837 / 29` anomalous windows in train/test. The fixed
+  window builder drops any incomplete tail window and labels each 100-log block
+  from the rows it contains, rather than promoting the whole window from an
+  entity-level anomaly cache. That is closer to the ICSE 2022 "How Far Are We?"
+  table (`99,593` total windows and `79,674 / 19,919` train/test) than the full
+  archive prefix, but the paper's table still reports a slightly shorter
+  derived stream. The smoke preset keeps only a shorter raw prefix of the same
+  file so the parser and template pipeline stay testable without pulling the
+  benchmark slice in normal development. The Thunderbird parser also preserves
+  the message tail for template mining, strips an optional `component[pid]: `
+  prefix when one is present, and trims a trailing colon from bare
+  command-like tails so the template vocabulary is driven by the normalised
+  message body rather than
+  Thunderbird header noise.
+  Template training is cached against the materialised raw slice asset as well
+  as the Drain3 config, so a Thunderbird slice change invalidates stale mined
+  templates instead of reusing an incompatible cache.
+  Header-only Thunderbird rows whose tail is empty after normalisation are
+  skipped quietly rather than logged as warnings, because they do not add any
+  message text for template mining.
+  The Thunderbird DeepCASE entry is an AnomaLog benchmark extension; the
+  original DeepCASE paper does not evaluate Thunderbird.
+- `ait_ads/base.toml` is the paper-compatible AIT-ADS public-dataset probe.
+  It combines all eight scenarios into one globally chronological alert
+  stream, uses the combined `AIT_ADS` preset, and keeps the evaluation unit on
+  the continuous event stream so the alert order mirrors the published data.
+  The companion `ait_ads/entity_chronological.toml` keeps entity-local
+  DeepCASE context but applies the split on the global alert chronology before
+  entity grouping, rather than holding out whole entities.
 
 That keeps detector-specific training policy explicit. DeepLog-style runs use
-`train_on_normal_entities_only` for the training prefix, whereas DeepCASE-style
-runs leave it disabled and only use the chronological prefix/suffix split. If
-those detectors are both benchmarked on the same dataset family, use separate
-sweep variants or fixed overrides rather than letting a shared dataset preset
-imply the wrong training contract.
+`train_on_normal_entities_only` for the training prefix on entity-grouped
+datasets, whereas DeepCASE-style runs leave it disabled and only use the
+chronological prefix/suffix split. The wuyifan18 reproduction dataset is
+intentionally separate from that policy: it reproduces the preprocessed file
+boundary directly, so the full training file and both test files are preserved
+exactly. The same dataset manifest can list both detector families, so the
+model choice stays next to the dataset contract. If those detectors are both
+benchmarked on the same dataset family, keep them in the same manifest or use
+fixed overrides rather than letting a shared dataset preset imply the wrong
+training contract.
+
+The central registry is intentionally small. It has two concepts:
+
+- `experiments` name one dataset and the concrete model configs that should run
+  on it.
+- `experiment_sets` name a dataset family, act as selectable groups, and expand
+  one dataset list line into the concrete experiment names for that family.
+- `model_sets` capture repeated detector bundles such as the shared baseline
+  stacks, so the registry can keep singleton detectors inline with the dataset.
+
+The runner derives reporting groups from the experiment or experiment-set name
+and the shared model-set names, so the TOML does not need `groups` or
+`run_group` in the normal case. If you need a small or CI-friendly check,
+select the explicit experiment name instead of inventing another registry tag.
+
+The DeepLog reproduction manifests also carry simple sanity baselines on the
+same mask-aware split, so the paper target is always compared against a
+sequence-statistics floor rather than only against the neural model.
 
 Custom datasets are still supported through the same config model by setting `source` and `structured_parser` instead of `preset`.
 
@@ -70,6 +165,21 @@ sequence configs through the `sequence.train_fraction` and
 `sequence.test_fraction` pair. The defaults are `0.2` and `0.8`, respectively,
 so omitted values still preserve the same fixed suffix behaviour.
 
+The baseline supervision split is intentional:
+
+- Naive Bayes is supervised at the sequence level.
+- Template Frequency is unsupervised apart from optional normal-score
+  calibration, and on the BGL stream configs it follows the same eligible-event
+  masks as DeepLog.
+- Markov is a sequence-order comparator for DeepLog-style runs, and it also
+  follows the same eligible-event masks on the BGL stream configs.
+- DeepCASE is label-aware during fit and falls back to sequence labels when event labels are missing.
+- DeepLog trains on eligible normal targets at fit time, with labels used for
+  eligibility bookkeeping and evaluation rather than class-target learning.
+
+Treat the baseline scores as checks on corpus separability and template
+statistics rather than as direct competitors to DeepLog or DeepCASE.
+
 When `sequence.train_on_normal_entities_only = true`, the requested
 `train_fraction` still applies to the full entity population. Anomalous
 entities are forced into test, so some requested overall train fractions are
@@ -85,13 +195,141 @@ From the repository root:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --config experiments/configs/sweeps/bgl.toml
+  --experiment bgl_entity_chronological
 ```
 
-Add `--force` to replace the deterministic output directories for the same
-concrete sweep variants.
-Add `--write-predictions` if you want each run to persist `predictions.jsonl`
+To list the curated registry:
+
+```bash
+uv run python -m experiments.runners.run_suite --list
+```
+
+The listing shows the registry name, dataset config, model names, and the
+derived reporting groups. Use explicit experiment names when you need a
+specific dataset/model combination.
+
+To run one concrete dataset variant from the registry, pass `--experiment`
+with the exact registry name. For example, to run only the BGL 10% DeepLog
+paper-reproduction dataset variant:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --experiment bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online
+```
+
+If you want the full BGL DeepLog paper set instead, keep using the family
+group:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --group bgl_deeplog_ccs2017_paper
+```
+
+Thunderbird has one public registry entry for the chronological DeepLog
+reproduction split:
+
+```bash
+uv run python -m experiments.runners.run_suite --experiment thunderbird
+```
+
+The entity-grouped DeepCASE extension is exposed separately:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --experiment thunderbird_entity_chronological
+```
+
+The smaller `thunderbird_smoke` preset remains available for tests and local
+development, but it is not exposed as a registry experiment.
+
+To submit the same single dataset variant on Slurm, use the backend submit
+command with the exact same registry experiment name:
+
+```bash
+uv run python -m experiments.execution.slurm submit \
+  --experiment bgl_deeplog_ccs2017_paper_10pct_entry_stream_no_online
+```
+
+To run a local group:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --group bgl_deeplog_ccs2017_paper \
+  --group hdfs_deeplog_paper \
+  --max-parallel 2
+```
+
+Add `--force` to replace deterministic output directories for completed runs.
+If a result directory exists but `metrics.json` is missing, the runner treats
+it as stale and replaces it without requiring `--force`. Add
+`--write-predictions` if you want each run to persist `predictions.jsonl`
 alongside the other result artefacts.
+
+The same registry also drives the optional Slurm backend:
+
+```bash
+uv run python -m experiments.execution.slurm submit \
+  --group bgl_deeplog_ccs2017_paper \
+  --group hdfs_deeplog_paper
+```
+
+Use `--data-root` and `--cache-root` when the cluster should write the
+AnomaLog dataset materialisation and cache roots somewhere other than the
+repository tree. These act as base roots: a dataset manifest that declares
+`[dataset.cache_paths] namespace = "hdfs_entity"` will resolve to
+`<data-root>/hdfs_entity` and `<cache-root>/hdfs_entity`, and the dataset
+builder will then place the dataset-specific artefacts beneath those
+directories. For example, if you want the HDFS entity runs to live under
+`/data/hs1822`, submit with `--data-root /data/hs1822` and
+`--cache-root /data/hs1822/.cache`.
+
+The generated Slurm wrapper also defaults Prefect telemetry off by setting
+`PREFECT_SERVER_ANALYTICS_ENABLED=false` and `DO_NOT_TRACK=1`, while still
+allowing either variable to be overridden in the submission environment.
+
+Use `--dry-run` with either runner to preview the selected experiments without
+executing them. The Slurm backend now submits one Slurm job array for the
+selected experiments, leaving scheduling and any cluster-side concurrency
+policy to Slurm itself. The selected experiment names are embedded directly
+into the wrapped script, so no manifest file is written. Array task logs are
+written beneath `experiments/results/slurm-logs/<selection-label>/` with
+`%A_%a` in the filenames.
+
+To check the full registry matrix for concrete runs that still need results,
+use:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --check-missing
+```
+
+The check reports one line per missing concrete run, including the dataset and
+model config paths, concrete run name, and expected output directory, then
+prints a `total` / `completed` / `missing` summary.
+
+If you do not have Slurm, the local suite runner is the canonical path for
+reproducing the paper experiments:
+
+```bash
+uv run python -m experiments.runners.run_suite \
+  --group bgl_deeplog_ccs2017_paper \
+  --group hdfs_deeplog_paper \
+  --max-parallel 2
+```
+
+To audit dataset/split readiness for DeepLog paper reproduction, including the
+embedded dataset tables in the DeepLog experiment matrices:
+
+```bash
+uv run python -m experiments.runners.audit_deeplog_data
+```
+
+The DeepCASE paper-readiness report is checked in at
+`experiments/reports/deepcase_reproduction_readiness.md`.
+The Thunderbird reproduction note is checked in at
+`experiments/reports/thunderbird_reproduction_readiness.md`.
+The baseline sanity report is checked in at
+`experiments/reports/baseline_sanity_report.md`.
 
 ## Caching Strategy
 
@@ -100,17 +338,32 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Dataset sourcing, structured parsing, template mining, and other
   preprocessing stages reuse the existing AnomaLog and Prefect-backed caches
   when their inputs and upstream assets have not changed.
+- Local-output materialisation also guards against stale Prefect cache hits
+  that point at an incompatible storage base path, so reruns keep working
+  after a checkout moves or a local storage root changes, even when Prefect
+  wraps the underlying storage error in a chained exception or
+  `ExceptionGroup`.
+- Prefect-backed materialisations use a versioned cache namespace under the
+  user cache root, with a stable shared result-storage base, so cached dataset
+  preprocessing does not inherit run-specific `PREFECT_HOME` paths.
+  The generated Slurm wrappers pin that base to `${PREFECT_ROOT}/storage`
+  while keeping `PREFECT_HOME` separate for the local Prefect database.
 - Cold dataset builds are serialised per dataset namespace
-  (`dataset_name` plus cache roots), so multi-process sweeps do not race while
+  (`dataset_name` plus cache roots), so multi-process runs do not race while
   materialising the shared AnomaLog dataset cache for the first time.
 - Structured parquet materialisation now writes a tiny entity chronology
   sidecar alongside the parquet partitions, so entity-grouped readers can
   reuse first-seen ordering without rescanning all rows.
-- Concrete sweep runs write to deterministic directories under
+  If the structured parquet cache is missing or a cached parquet fragment is
+  unreadable, the sink rebuilds that dataset namespace under the same
+  dataset-build lock before any model sees it, rather than letting one model
+  observe an empty train prefix while another repairs the cache.
+- Concrete runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
-  fingerprint comes from the fully resolved sweep, dataset, and model config.
+  fingerprint comes from the fully resolved manifest, dataset, and model config.
 - Re-running the exact same config reuses that deterministic output directory.
-  Use `--force` when you want to overwrite it.
+  Completed runs still require `--force` to overwrite, but stale directories
+  without `metrics.json` are replaced automatically.
 - Changing the dataset, sequence settings, or model config produces a new
   fingerprint and therefore a new result directory.
 - Detector training and test scoring are intentionally not cached as separate
@@ -121,11 +374,10 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   fractions, train pool size, realised train size, excluded prefix count, and
   realised fractions in `sequence_split_summary`.
 
-To run `river`-backed or DeepLog/DeepCASE experiments, install the matching
-optional extras first:
+To run DeepLog/DeepCASE experiments, install the matching optional extras
+first:
 
 ```bash
-uv sync --extra experiments --extra river
 uv sync --extra experiments --extra deeplog
 uv sync --extra experiments --extra deepcase
 ```
@@ -135,16 +387,33 @@ environment.
 
 ## Result Artifacts
 
-Each concrete run writes a deterministic directory under `experiments/results/<concrete-run-name>/<fingerprint>/` containing:
+Each concrete run writes a deterministic directory under
+`experiments/results/<concrete-run-name>/<fingerprint>/` containing:
 
-- `experiment_config.json`: normalised sweep, concrete override, dataset, and model config
-- `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash, cache roots, sequence settings, and dataset statistics
+- `experiment_config.json`: normalised manifest, concrete override, dataset,
+  model, and named-experiment metadata
+- `dataset_manifest.json`: dataset fingerprint, source summary, raw-log hash,
+  sequence settings, compact dataset statistics, and named-experiment
+  metadata when the run came from the registry
   It also records `sequence_split_summary`, which makes the effective split
   explicit when training is restricted to normal entities only.
-- `metrics.json`: detector metrics
+- `metrics.json`: task-aware detector metrics, including the selected
+  `primary_metric_scope`, `evaluation_unit`, split policy details, and
+  canonical scoped metric blocks. The block map is the source of truth for
+  scope-specific result units and status. By default this file keeps the
+  paper-facing summaries only; pass `--debug-reporting` if you need the fuller
+  diagnostic payloads during development. DeepLog runs also record an exact-rank
+  `top_g_replay` curve using the configured paper cut-offs, so you can inspect
+  multiple top-`g` thresholds from one fitted model without re-running
+  inference.
+- `figure9_parameter_ci.json`: concise publication-facing summary for the
+  parameter-value OpenStack approximation.
+- `figure9_parameter_ci_debug.json`: optional verbose DeepLog parameter trace
+  written only when `--debug-reporting` is enabled.
 - `predictions.jsonl`: optional test-sequence outputs, including detector
   scores and any emitted key phrases when `--write-predictions` is supplied
-- `environment.json`: Python, platform, package, and git metadata
+- `environment.json`: Python, platform, package, git metadata, and the command
+  used to launch the run
 - `run.log`: run-time logging from dataset build through detector evaluation
 
 Predictions are still scored from a streaming replay of the sequence builder
@@ -157,17 +426,61 @@ written to the prediction stream unless you explicitly opt in with
 
 To add a preprocessing ablation, create another file in `configs/datasets/`.
 
-For built-in datasets, prefer `preset = "bgl"` or `preset = "hdfs_v1"`.
+For built-in datasets, prefer `preset = "bgl"`, `preset = "hdfs_v1"`, or
+`preset = "openstack_deeplog_preprocessed"` depending on whether you want the
+LogHub-style raw corpus or the DeepLog-style preprocessed session files with
+the exact train/test file boundary. For AIT-ADS, prefer the checked-in
+`ait_ads/base.toml` manifest so the chronological stream split and canonical
+alert-key contract stay consistent across detector families. Use the registry
+to choose which model config should run for each named experiment.
 For custom datasets, define `source`, `structured_parser`, optional `label_reader`, and sequence settings directly in the dataset config.
-Omit `[cache_paths]` to use AnomaLog's default platformdirs-based cache/data locations.
+Use `[dataset.cache_paths] namespace = "..."` when you want dataset-scoped
+cache and data roots without spelling out both paths separately. The namespace
+is resolved relative to the active base roots, so it stays portable across the
+repository tree and cluster-local overrides. Omit `[cache_paths]` entirely to
+use AnomaLog's default platformdirs-based cache/data locations.
 
-To add or update an experiment matrix, create another file in `configs/sweeps/`.
-Use `[overrides]` for fixed adjustments such as changing
+To add or update a dataset manifest, edit the relevant file in
+`configs/datasets/`. Use `[overrides]` for fixed adjustments such as changing
 `dataset.sequence.train_on_normal_entities_only`, and `[[axes]]` when you want
-Cartesian products across fields such as `sweep.model` or
-`dataset.sequence.train_fraction`. Add `max_workers = 2` or another positive
-integer only when the default `"auto"` parallelism is too aggressive for a
-particular backend or machine.
+Cartesian products across fields such as `dataset.sequence.train_fraction`.
+For a one-off reproduction, keep the dataset file focused on the dataset
+contract and use the registry for the model pairing. Add `max_workers = 2` or
+another positive integer only when the default `"auto"` parallelism is too
+aggressive for a particular backend or machine.
+
+When several manifests share the same dataset shape, use `extends = "base.toml"`
+at the top of the child manifest. Nested tables merge recursively, so the base
+file can hold the shared boilerplate while each scenario keeps only its
+specific overrides.
+
+To add a named experiment to the canonical registry, add a table to
+`configs/registry.toml` that points at one dataset manifest, the inline model
+configs that should stay visible next to the dataset, and any shared
+`model_sets` that recur across experiments. You do not need to spell out
+`groups` or `run_group` for the normal case.
+
+Example:
+
+```toml
+[experiments.bgl_entity_chronological]
+dataset = "bgl/entity_chronological"
+model_sets = ["baselines_with_nb"]
+models = [
+  "deepcase",
+  "deeplog_default",
+]
+```
+
+For a dataset family such as AIT-ADS, keep the combined dataset list in one
+experiment set when you want the paper-compatible chronology:
+
+```toml
+[experiment_sets.ait_ads]
+model_sets = ["baselines_no_nb"]
+models = ["deeplog_default"]
+datasets = ["ait_ads/base"]
+```
 
 To add a new detector implementation, extend `experiments/models/` with a tagged config subclass and detector subclass so the built-in registries pick them up automatically.
 

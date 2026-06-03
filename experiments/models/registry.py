@@ -36,9 +36,9 @@ _MODEL_REGISTRATIONS: dict[str, _ModelRegistration] = {
         module_path="experiments.models.naive_bayes",
         config_type_name="NaiveBayesModelConfig",
     ),
-    "river": _ModelRegistration(
-        module_path="experiments.models.river",
-        config_type_name="RiverModelConfig",
+    "markov": _ModelRegistration(
+        module_path="experiments.models.markov",
+        config_type_name="MarkovModelConfig",
     ),
     "template_frequency": _ModelRegistration(
         module_path="experiments.models.template_frequency",
@@ -49,7 +49,6 @@ _MODEL_REGISTRATIONS: dict[str, _ModelRegistration] = {
 _MODEL_INSTALL_HINTS: dict[str, str] = {
     "deepcase": "uv sync --extra experiments --extra deepcase",
     "deeplog": "uv sync --extra experiments --extra deeplog",
-    "river": "uv sync --extra experiments --extra river",
 }
 
 

@@ -5,4 +5,4 @@ phrase_ngram_min = 1
 phrase_ngram_max = 2
 top_k_phrases = 5
 anomalous_posterior_threshold = 0.5
-description = "Supervised multinomial Naive Bayes baseline over extracted template phrases."
+description = "Supervised sequence-level Naive Bayes sanity baseline over template phrase n-grams."

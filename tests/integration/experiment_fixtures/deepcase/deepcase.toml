@@ -1,5 +1,6 @@
 name = "deepcase"
 detector = "deepcase"
+primary_metric_scope = "sequence_level_detection"
 context_length = 2
 timeout_seconds = 86400
 hidden_size = 8
@@ -12,6 +13,7 @@ batch_size = 4
 learning_rate = 0.01
 teach_ratio = 0.5
 iterations = 100
+attention_query_iterations = 100
 query_batch_size = 8
 cluster_score_strategy = "max"
 no_score = -1

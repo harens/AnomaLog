@@ -32,10 +32,12 @@ DeepCase training reports progress per context-builder epoch before moving on
 to interpreter clustering. That keeps long training runs visibly alive instead
 of appearing to stall once sequence preparation has finished.
 
-Test-time DeepCase scoring now uses the configured attention-query iteration
-budget. The `iterations` value still controls interpreter clustering during
-fit, and it also governs the prediction-time attention query path so the
-runner stays faithful to the paper's semi-automatic inference loop.
+Test-time DeepCase scoring uses the `attention_query_iterations` knob, which
+uses 100 for the paper-faithful path. The `iterations` value still controls
+interpreter clustering during fit, and `attention_query_iterations = 0` is
+reserved for explicit ablation, smoke-test, or engineering runs. If a helper
+calls `ContextBuilder.query()` directly, it must pass `iterations=100`
+explicitly because the low-level default is zero.
 
 The experiment runner is non-interactive. Ground-truth labels therefore stand in
 for the operator-provided labels that DeepCASE would receive during manual
@@ -62,9 +64,21 @@ underlying automatic decisions separately from abstentions.
 
 ### Metric Interpretation
 
-Sequence-level precision, recall, F1, and accuracy remain the shared wrapper
-view over sequence decisions. Event-level automatic-decision metrics evaluate
-DeepCASE at its contextual-sample level, where:
+`metrics.json` now reports scoped blocks with explicit
+`status` fields, and the block map itself carries the per-scope meaning. The
+shared sequence-level wrapper remains useful when it is the configured primary
+scope, but it is no longer treated as the universal headline metric. The
+canonical payload lives in `metric_blocks`. DeepCASE runs should foreground the
+configured `primary_metric_scope` and keep sequence-level results separate from
+the event-level abstention diagnostics.
+
+The paper-comparison block for HDFS Table IV lives at
+`metric_blocks.next_event_prediction.classification_top1_weighted`. It mirrors
+the weighted multi-class next-event metrics and is the block that should be
+compared to the paper's prediction table.
+
+Event-level automatic-decision metrics evaluate DeepCASE at its
+contextual-sample level, where:
 
 - `known_benign_cluster` maps to a predicted normal event
 - `known_malicious_cluster` maps to a predicted anomalous event
@@ -111,8 +125,46 @@ Run metrics also carry detector-owned next-event diagnostics from the Context
 Builder. This is a separate, deterministic diagnostic pass that uses the
 padded context windows produced by DeepCASE. The diagnostic vocabulary policy
 is configurable on `DeepCaseModelConfig` and defaults to `full_dataset`, with
-`train_only` still available for closed-world comparisons. The anomaly
-detector itself remains unchanged.
+`train_only` still available for closed-world comparisons.
+
+The HDFS workload-reduction formulas are surfaced as `manual_workload_reduction`
+and `semi_automatic_workload_reduction`. Those summaries encode the paper's
+alert, coverage, reduction, and overall calculations, and should be used for
+Table X style reporting instead of the shared anomaly F1 wrapper.
+
+Manual mode uses fit-time clustering counts from the training split:
+
+- `total_contextual_sequence_count`: event-centred training samples processed
+  during fit
+- `covered_contextual_sequence_count`: training samples assigned to a
+  non-noise cluster
+- `uncovered_contextual_sequence_count`: training samples left unclustered or
+  unscored
+
+Semi-automatic mode uses prediction-time event counts from the scored split:
+
+- `total_contextual_sequence_count`: scored contextual event samples
+- `covered_contextual_sequence_count`: confident automatic event decisions
+- `uncovered_contextual_sequence_count`: abstained event samples
+
+That split keeps the workload metrics aligned with the paper's manual and
+semi-automatic definitions. It also avoids the old behaviour where the
+reported coverage could accidentally mirror the sequence-level anomaly
+wrapper.
+
+Cluster labelling is now exposed as an ablation policy on top of the stable
+DeepCASE clustering pipeline. `max` remains the conservative any-anomalous
+baseline, while `majority_vote`, `threshold_fraction`, and `abstain_mixed`
+are sensitivity checks for how mixed clusters should be treated.
+
+For HDFS, read those runs as label-smearing sensitivity analyses rather than
+paper reproduction improvements. For BGL, and for Thunderbird as a benchmark
+extension, the same cluster policies are a meaningful event-label ablation
+because event-level labels are available.
+
+`mean anomaly rate` is not used as a final decision policy here, because by
+itself it does not create a distinct binary or abstain decision rule under the
+shared AnomaLog score thresholding contract.
 
 The model should be run with entity grouping:
 
@@ -124,9 +176,19 @@ grouping = "entity"
 The detector validates the observable invariant by rejecting sequences that span
 multiple entity ids.
 
+For AIT-ADS, the stream benchmark stays in `ait_ads/base`, while the
+entity-local sequence view uses `ait_ads/entity_chronological` with the raw
+alert chronology split before entity grouping. That keeps host-local context
+for DeepCASE without turning the protocol into an entity-heldout benchmark.
+
+For the BGL extension, the same DeepCASE runtime is still used, but the run is
+treated as an extension rather than a paper reproduction target.
+
 ## Remaining Gaps
 
 - No interactive operator labeling workflow.
 - No persistent cluster database shared across experiment runs.
 - No online update loop for newly inspected clusters or outliers.
 - No separate threshold sweep for alternative abstain / confidence settings.
+- No automatic importer for the public DeepCASE HDFS files referenced by the
+  paper.

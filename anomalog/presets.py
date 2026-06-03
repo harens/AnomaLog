@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 from anomalog.dataset import DatasetSpec
 from anomalog.labels import CSVReader
-from anomalog.parsers import BGLParser, HDFSV1Parser
-from anomalog.sources import RemoteZipSource
+from anomalog.parsers import (
+    AITADSParser,
+    BGLParser,
+    HDFSV1Parser,
+    OpenStackDeepLogParser,
+    ThunderbirdParser,
+)
+from anomalog.parsers.structured import DelimitedLabelledEventParser
+from anomalog.parsers.template import IdentityTemplateParser
+from anomalog.sources import (
+    AITADSScenarioSource,
+    PostProcessedSource,
+    RemoteZipSource,
+)
+from anomalog.sources.deeplog_preprocessed import (
+    materialise_labelled_raw_stream,
+    materialise_labelled_session_stream,
+)
+from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
+from anomalog.sources.raw_prefix import (
+    materialise_raw_log_prefix,
+    materialise_raw_log_segment,
+)
 
 # See https://github.com/logpai/loghub/issues/61
 # Datasets could have mistakes in labeling.
@@ -15,6 +37,25 @@ from anomalog.sources import RemoteZipSource
 # See LogHub: https://zenodo.org/records/8196385
 # Originally tried using LogHub-2.0 (https://zenodo.org/record/8275861),
 # but HDFS does not appear to be annotated there.
+
+_HDFS_WUYIFAN18_SPLIT_FILES = (
+    ("hdfs_train", 0),
+    ("hdfs_test_normal", 0),
+    ("hdfs_test_abnormal", 1),
+)
+
+_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_SPLIT_FILES = (("hdfs_test_normal", 0),)
+
+_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_EXCLUDED_FILES = (
+    "hdfs_train",
+    "hdfs_test_abnormal",
+)
+
+_OPENSTACK_SPLIT_FILES = (
+    ("openstack_normal1.log", "openstack_train", 0),
+    ("openstack_normal2.log", "openstack_test_normal", 0),
+    ("openstack_abnormal.log", "openstack_test_abnormal", 1),
+)
 
 hdfs_v1 = (
     DatasetSpec("HDFS_V1")
@@ -49,9 +90,145 @@ bgl = (
     .parse_with(BGLParser())
 )
 
+hdfs_wuyifan18_deeplog_preprocessed = (
+    DatasetSpec("HDFS_WUYIFAN18_DEEPLOG_PREPROCESSED")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+                md5_checksum="36a2f69d4a4def7b4b6a19b27838291e",
+            ),
+            post_process=partial(
+                materialise_labelled_session_stream,
+                split_files=_HDFS_WUYIFAN18_SPLIT_FILES,
+            ),
+            raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
+        ),
+    )
+    .parse_with(DelimitedLabelledEventParser())
+    .template_with(IdentityTemplateParser)
+)
+
+hdfs_wuyifan18_deepcase_table_iv_compat = (
+    DatasetSpec("HDFS_WUYIFAN18_DEEPCASE_TABLE_IV_COMPAT")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://github.com/wuyifan18/DeepLog/archive/refs/heads/master.zip",
+                md5_checksum="36a2f69d4a4def7b4b6a19b27838291e",
+            ),
+            post_process=partial(
+                materialise_labelled_session_stream,
+                split_files=_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_SPLIT_FILES,
+                excluded_source_files=_HDFS_WUYIFAN18_TEST_NORMAL_ONLY_EXCLUDED_FILES,
+                excluded_anomalous_source_files=("hdfs_test_abnormal",),
+            ),
+            raw_logs_relpath=Path("preprocessed/hdfs_test_normal_compat.log"),
+        ),
+    )
+    .parse_with(DelimitedLabelledEventParser())
+    .template_with(IdentityTemplateParser)
+)
+
+openstack_deeplog_preprocessed = (
+    DatasetSpec("OPENSTACK_DEEPLOG_PREPROCESSED")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/OpenStack.tar.gz",
+                md5_checksum="66bd42c07837a094d9b0ea2d036b5713",
+            ),
+            post_process=partial(
+                materialise_labelled_raw_stream,
+                split_files=_OPENSTACK_SPLIT_FILES,
+            ),
+            raw_logs_relpath=Path("preprocessed/openstack_labelled_raw.log"),
+        ),
+    )
+    .parse_with(OpenStackDeepLogParser())
+    .template_with(IdentityTemplateParser)
+)
+
+openstack_deeplog_parameter_ci_approx = (
+    DatasetSpec("OPENSTACK_DEEPLOG_PARAMETER_CI_APPROX")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/OpenStack.tar.gz",
+                md5_checksum="66bd42c07837a094d9b0ea2d036b5713",
+            ),
+            post_process=partial(
+                materialise_openstack_deeplog_parameter_ci_subset,
+            ),
+            raw_logs_relpath=Path(
+                "preprocessed/openstack_deeplog_parameter_subset.log",
+            ),
+        ),
+    )
+    .parse_with(OpenStackDeepLogParser())
+    .template_with(IdentityTemplateParser)
+)
+
+thunderbird = (
+    DatasetSpec("THUNDERBIRD")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1",
+                md5_checksum="0891b048df2919dc78c99c4428686b44",
+                raw_logs_relpath=Path("Thunderbird.log"),
+            ),
+            post_process=partial(
+                materialise_raw_log_segment,
+                source_log_relpath=Path("Thunderbird.log"),
+                start_line=160_000_000,
+                line_limit=10_000_000,
+            ),
+            raw_logs_relpath=Path("preprocessed/thunderbird_slice_160m_10m.log"),
+        ),
+    )
+    .parse_with(ThunderbirdParser())
+)
+
+thunderbird_smoke = (
+    DatasetSpec("THUNDERBIRD_SMOKE")
+    .from_source(
+        PostProcessedSource(
+            base_source=RemoteZipSource(
+                url="https://zenodo.org/records/8196385/files/Thunderbird.tar.gz?download=1",
+                md5_checksum="0891b048df2919dc78c99c4428686b44",
+                raw_logs_relpath=Path("Thunderbird.log"),
+            ),
+            post_process=partial(
+                materialise_raw_log_prefix,
+                source_log_relpath=Path("Thunderbird.log"),
+                line_limit=50_000,
+            ),
+            raw_logs_relpath=Path("preprocessed/thunderbird_prefix_50k.log"),
+        ),
+    )
+    .parse_with(ThunderbirdParser())
+)
+
+
+ait_ads = (
+    DatasetSpec("AIT_ADS")
+    .from_source(AITADSScenarioSource())
+    .parse_with(AITADSParser())
+    .template_with(IdentityTemplateParser)
+)
+
+
 _PRESETS: dict[str, DatasetSpec] = {
     "bgl": bgl,
     "hdfs_v1": hdfs_v1,
+    "hdfs_wuyifan18_deeplog_preprocessed": hdfs_wuyifan18_deeplog_preprocessed,
+    "hdfs_wuyifan18_deepcase_table_iv_compat": hdfs_wuyifan18_deepcase_table_iv_compat,
+    "openstack_deeplog_preprocessed": openstack_deeplog_preprocessed,
+    "openstack_deeplog_parameter_ci_approx": openstack_deeplog_parameter_ci_approx,
+    "thunderbird": thunderbird,
+    "thunderbird_smoke": thunderbird_smoke,
+    "ait_ads": ait_ads,
 }
 
 

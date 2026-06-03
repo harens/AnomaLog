@@ -34,12 +34,16 @@ if TYPE_CHECKING:
     from anomalog.sequences import TemplateSequence
 
 
+ParameterEventsByTemplate = dict[str, list[tuple[list[str], int | None]]]
+
+
 def score_parameter_sequence(
     *,
     sequence: TemplateSequence,
     parameter_models: dict[str, ParameterModelState],
     history_size: int,
     eligible_event_indexes: set[int] | None = None,
+    prefix_events_by_template: ParameterEventsByTemplate | None = None,
 ) -> dict[int, DeepLogParameterFinding]:
     """Score one sequence with the template-specific parameter models.
 
@@ -55,80 +59,141 @@ def score_parameter_sequence(
         sequence (TemplateSequence): Sequence to score.
         parameter_models (dict[str, ParameterModelState]): Fitted models by template.
         history_size (int): Number of prior template events per inference history.
-        eligible_event_indexes (set[int] | None): Optional event indexes allowed
-            for parameter scoring.
+        eligible_event_indexes (set[int] | None): Optional event indexes
+            allowed for parameter scoring.
+        prefix_events_by_template (ParameterEventsByTemplate | None): Optional
+            carried-over template histories from the immediately preceding
+            chronological batch boundary.
 
     Returns:
         dict[int, DeepLogParameterFinding]: Event index to parameter finding.
     """
     findings: dict[int, DeepLogParameterFinding] = {}
-    indexed_events_by_template: dict[str, list[tuple[int, list[str], int | None]]] = (
-        defaultdict(list)
+    history_by_template, raw_history_by_template = _prime_parameter_histories(
+        prefix_events_by_template=prefix_events_by_template or {},
+        parameter_models=parameter_models,
+        history_size=history_size,
     )
-    for event_index, (template, parameters, dt_prev_ms) in enumerate(sequence.events):
-        if template in parameter_models:
-            indexed_events_by_template[template].append(
-                (event_index, parameters, dt_prev_ms),
-            )
 
-    for template, indexed_events in indexed_events_by_template.items():
-        if len(indexed_events) <= history_size:
+    for event_index, (template, parameters, dt_prev_ms) in enumerate(sequence.events):
+        state = parameter_models.get(template)
+        if state is None:
             continue
-        state = parameter_models[template]
-        raw_vectors = [
-            raw_parameter_vector_for_event(
+        raw_vector = raw_parameter_vector_for_event(
+            parameters=parameters,
+            dt_prev_ms=dt_prev_ms,
+            schema=state.schema,
+        )
+        normalized_vector = normalize_vector(
+            vector=raw_vector,
+            normalisation=state.normalisation,
+        )
+        history = history_by_template[template]
+        if len(history) < history_size:
+            history.append(normalized_vector)
+            raw_history_by_template[template].append(raw_vector)
+            _trim_parameter_history(
+                history_by_template=history_by_template,
+                raw_history_by_template=raw_history_by_template,
+                template=template,
+                history_size=history_size,
+            )
+            continue
+        if (
+            eligible_event_indexes is not None
+            and event_index not in eligible_event_indexes
+        ):
+            history.append(normalized_vector)
+            raw_history_by_template[template].append(raw_vector)
+            _trim_parameter_history(
+                history_by_template=history_by_template,
+                raw_history_by_template=raw_history_by_template,
+                template=template,
+                history_size=history_size,
+            )
+            continue
+        if not any(raw_vector.mask):
+            history.append(normalized_vector)
+            raw_history_by_template[template].append(raw_vector)
+            _trim_parameter_history(
+                history_by_template=history_by_template,
+                raw_history_by_template=raw_history_by_template,
+                template=template,
+                history_size=history_size,
+            )
+            continue
+        model_device = next(state.model.parameters()).device
+        inputs = torch.tensor(
+            [history[-history_size:]],
+            dtype=torch.float32,
+            device=model_device,
+        )
+        with torch.inference_mode():
+            predicted = state.model(inputs).cpu().squeeze(0).tolist()
+        findings[event_index] = build_parameter_finding(
+            event_index=event_index,
+            state=state,
+            raw_target=raw_vector,
+            normalized_target=normalized_vector,
+            predicted=predicted,
+        )
+        history.append(normalized_vector)
+        raw_history_by_template[template].append(raw_vector)
+        _trim_parameter_history(
+            history_by_template=history_by_template,
+            raw_history_by_template=raw_history_by_template,
+            template=template,
+            history_size=history_size,
+        )
+    return findings
+
+
+def _prime_parameter_histories(
+    *,
+    prefix_events_by_template: dict[str, list[tuple[list[str], int | None]]],
+    parameter_models: dict[str, ParameterModelState],
+    history_size: int,
+) -> tuple[dict[str, list[list[float]]], dict[str, list[RawParameterVector]]]:
+    history_by_template: dict[str, list[list[float]]] = defaultdict(list)
+    raw_history_by_template: dict[str, list[RawParameterVector]] = defaultdict(list)
+
+    for template, prefix_events in prefix_events_by_template.items():
+        state = parameter_models.get(template)
+        if state is None:
+            continue
+        for parameters, dt_prev_ms in prefix_events:
+            raw_vector = raw_parameter_vector_for_event(
                 parameters=parameters,
                 dt_prev_ms=dt_prev_ms,
                 schema=state.schema,
             )
-            for _, parameters, dt_prev_ms in indexed_events
-        ]
-        normalized_vectors = [
-            normalize_vector(vector=vector, normalisation=state.normalisation)
-            for vector in raw_vectors
-        ]
-
-        target_offsets: list[int] = []
-        histories: list[list[list[float]]] = []
-        # Each template is scored as its own time series, exactly like training.
-        # The surrounding sequence may mix many templates, but the model for
-        # template `T` only sees the ordered subsequence of `T` events.
-        for target_offset in range(history_size, len(indexed_events)):
-            event_index, _, _ = indexed_events[target_offset]
-            if (
-                eligible_event_indexes is not None
-                and event_index not in eligible_event_indexes
-            ):
-                continue
-            raw_target = raw_vectors[target_offset]
-            if not any(raw_target.mask):
-                continue
-            target_offsets.append(target_offset)
-            histories.append(
-                normalized_vectors[target_offset - history_size : target_offset],
+            history_by_template[template].append(
+                normalize_vector(vector=raw_vector, normalisation=state.normalisation),
+            )
+            raw_history_by_template[template].append(raw_vector)
+            _trim_parameter_history(
+                history_by_template=history_by_template,
+                raw_history_by_template=raw_history_by_template,
+                template=template,
+                history_size=history_size,
             )
 
-        if not histories:
-            continue
+    return history_by_template, raw_history_by_template
 
-        model_device = next(state.model.parameters()).device
-        inputs = torch.tensor(histories, dtype=torch.float32, device=model_device)
-        with torch.inference_mode():
-            predicted_batch = state.model(inputs).cpu().tolist()
 
-        for target_offset, predicted in zip(
-            target_offsets,
-            predicted_batch,
-            strict=True,
-        ):
-            findings[indexed_events[target_offset][0]] = build_parameter_finding(
-                event_index=indexed_events[target_offset][0],
-                state=state,
-                raw_target=raw_vectors[target_offset],
-                normalized_target=normalized_vectors[target_offset],
-                predicted=predicted,
-            )
-    return findings
+def _trim_parameter_history(
+    *,
+    history_by_template: dict[str, list[list[float]]],
+    raw_history_by_template: dict[str, list[RawParameterVector]],
+    template: str,
+    history_size: int,
+) -> None:
+    history = history_by_template[template]
+    if len(history) > history_size:
+        history_by_template[template] = history[-history_size:]
+        raw_history_by_template[template] = raw_history_by_template[template][
+            -history_size:
+        ]
 
 
 def build_parameter_finding(

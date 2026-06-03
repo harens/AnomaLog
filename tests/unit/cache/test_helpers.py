@@ -1,6 +1,7 @@
 """Additional tests for cache helper functions."""
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
@@ -12,8 +13,10 @@ from prefect.assets import Asset, AssetProperties
 from prefect.logging import disable_run_logger
 
 from anomalog.cache import CachePathsConfig, asset_from_local_path, materialize
+from anomalog.cache import core as cache_core
 from anomalog.cache import files as cache_files
 from anomalog.cache.core import dataset_build_lock, dataset_build_lock_path
+from anomalog.cache.core import task as cache_task
 from anomalog.cache.files import AssetDepsFingerprintPolicy
 from tests.unit.helpers import task_run_context
 
@@ -26,12 +29,34 @@ class _AssetContext:
     direct_asset_dependencies: list[Asset]
 
 
+@dataclass(frozen=True)
+class _GroupedFailureError(RuntimeError):
+    """Minimal group-like wrapper for stale-cache regression tests.
+
+    Attributes:
+        message (str): Human-readable wrapper message.
+        exceptions (tuple[BaseException, ...]): Wrapped failures exposed via a
+            group-like attribute so the cache helper can recurse through them.
+    """
+
+    message: str
+    exceptions: tuple[BaseException, ...]
+
+    def __post_init__(self) -> None:
+        super().__init__(self.message)
+
+
 class _FallbackAsset(Asset):
     url: str
 
 
 class _MissingUrlAsset(Asset):
     url: str | None = None
+
+
+@dataclass(frozen=True)
+class _BasepathResultStorage:
+    basepath: str | Path | None
 
 
 def _skip_materialize(*_args: object, **_kwargs: object) -> MaterializeDecorator:
@@ -56,16 +81,6 @@ def _hold_dataset_build_lock(
         ready_path.touch()
         while not release_path.exists():
             sleep(0.01)
-
-
-def test_try_file_path_from_asset_url_decodes_localhost_and_spaces() -> None:
-    """File URLs should decode path segments and accept the localhost variant."""
-    try_file_path_from_asset_url = vars(cache_files)["_try_file_path_from_asset_url"]
-    path = try_file_path_from_asset_url("file://localhost/tmp/a%20b.txt")
-
-    assert path is not None
-    assert path.name == "a b.txt"
-    assert path.parent.name == "tmp"
 
 
 def test_asset_file_path_reads_properties_url_and_ignores_non_file_assets(
@@ -175,7 +190,7 @@ def test_materialize_reruns_function_when_output_path_is_missing(
     """
     output_path = tmp_path / "artifact.txt"
 
-    monkeypatch.setattr("anomalog.cache.materialize", _skip_materialize)
+    monkeypatch.setattr("anomalog.cache.core._prefect_materialize", _skip_materialize)
 
     @materialize(output_path)
     def _build() -> str:
@@ -185,6 +200,305 @@ def test_materialize_reruns_function_when_output_path_is_missing(
     with disable_run_logger():
         assert _build() == "rebuilt"
     assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_reruns_function_when_prefect_cached_result_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-output materialization should recover from stale Prefect cache paths.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that simulates a stale local filesystem result.
+    """
+
+    def _raise_stale_path_error(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                message = (
+                    "Provided path /old/run/storage is outside of the base path "
+                    "/new/run/storage."
+                )
+                raise ValueError(message)
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _raise_stale_path_error,
+    )
+
+    @materialize(output_path)
+    def _build() -> str:
+        output_path.write_text("hello", encoding="utf-8")
+        return "rebuilt"
+
+    with disable_run_logger():
+        assert _build() == "rebuilt"
+    assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_reruns_function_when_prefect_cached_result_is_stale_in_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-output materialisation should unwrap grouped stale cache failures.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that simulates a wrapped stale filesystem result.
+    """
+
+    def _raise_stale_path_group(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                message = (
+                    "Provided path /old/run/storage is outside of the base path "
+                    "/new/run/storage."
+                )
+                group_message = "task run failed"
+                raise _GroupedFailureError(
+                    group_message,
+                    (
+                        RuntimeError("Task run failed with exception"),
+                        ValueError(message),
+                    ),
+                )
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _raise_stale_path_group,
+    )
+
+    @materialize(output_path)
+    def _build() -> str:
+        output_path.write_text("hello", encoding="utf-8")
+        return "rebuilt"
+
+    with disable_run_logger():
+        assert _build() == "rebuilt"
+    assert output_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_materialize_propagates_non_stale_cache_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialize should only recover from the specific stale-cache failure.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for local outputs.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialization with a
+            cache-hit stub that emits a non-stale failure.
+    """
+    error_message = "different failure"
+
+    def _raise_other_error(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        def _decorate(_func: ZeroArgFn) -> ZeroArgFn:
+            def _raise() -> str:
+                raise RuntimeError(error_message)
+
+            return _raise
+
+        return _decorate
+
+    output_path = tmp_path / "artifact.txt"
+    monkeypatch.setattr("anomalog.cache.core._prefect_materialize", _raise_other_error)
+
+    @materialize(output_path)
+    def _build() -> str:
+        return "rebuilt"
+
+    with disable_run_logger(), pytest.raises(RuntimeError, match=error_message):
+        _build()
+
+
+def test_materialize_and_task_use_shared_result_storage_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prefect result storage should be pinned to the shared cache namespace.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the fabricated asset.
+        monkeypatch (pytest.MonkeyPatch): Replaces Prefect materialisation so
+            the test can inspect the forwarded task options directly.
+    """
+    expected_basepath = CachePathsConfig().cache_root / "prefect" / "storage"
+    result_storage = cache_task.keywords["result_storage"]
+
+    assert Path(result_storage) == expected_basepath
+
+    captured: dict[str, object] = {}
+
+    def _capture_materialize(
+        *_args: object,
+        **kwargs: object,
+    ) -> Callable[[ZeroArgFn], ZeroArgFn]:
+        captured.update(kwargs)
+
+        def _decorate(func: ZeroArgFn) -> ZeroArgFn:
+            return func
+
+        return _decorate
+
+    monkeypatch.setattr(
+        "anomalog.cache.core._prefect_materialize",
+        _capture_materialize,
+    )
+
+    @materialize(tmp_path / "demo.txt")
+    def _build() -> str:
+        return "demo"
+
+    _build()
+
+    captured_result_storage = captured["result_storage"]
+    assert isinstance(captured_result_storage, (str, Path))
+    assert Path(captured_result_storage) == expected_basepath
+
+
+def test_cache_paths_config_uses_cluster_root_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Environment overrides should redirect the default cache roots.
+
+    Args:
+        tmp_path (Path): Temporary directory used to host the synthetic root
+            paths.
+        monkeypatch (pytest.MonkeyPatch): Environment helper used to inject
+            cluster roots.
+    """
+    monkeypatch.setenv("ANOMALOG_DATA_ROOT", (tmp_path / "data").as_posix())
+    monkeypatch.setenv("ANOMALOG_CACHE_ROOT", (tmp_path / "cache").as_posix())
+
+    cache_paths = CachePathsConfig()
+
+    assert cache_paths.data_root == tmp_path / "data"
+    assert cache_paths.cache_root == tmp_path / "cache"
+
+
+def test_clear_dataset_cache_removes_file_and_directory_roots(
+    tmp_path: Path,
+) -> None:
+    """Dataset cache cleanup should unlink files and remove directories.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache roots.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+    file_root = cache_paths.data_root / "demo"
+    dir_root = cache_paths.cache_root / "demo"
+    file_root.parent.mkdir(parents=True, exist_ok=True)
+    file_root.write_text("demo", encoding="utf-8")
+    dir_root.mkdir(parents=True, exist_ok=True)
+    (dir_root / "artifact.txt").write_text("demo", encoding="utf-8")
+
+    cache_core.clear_dataset_cache("demo", cache_paths=cache_paths)
+
+    assert not file_root.exists()
+    assert not dir_root.exists()
+
+
+def test_clear_dataset_cache_rejects_empty_dataset_name(
+    tmp_path: Path,
+) -> None:
+    """Cache cleanup should reject empty dataset names.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache roots.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+
+    with pytest.raises(ValueError, match="non-empty dataset name"):
+        cache_core.clear_dataset_cache("", cache_paths=cache_paths)
+
+
+def test_result_storage_cache_policy_changes_with_basepath(tmp_path: Path) -> None:
+    """Result storage moves should force Prefect to miss stale cached states.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for fabricated result
+            storage roots.
+    """
+    build_cache_policy = vars(cache_core)["_cache_policy_for_result_storage"]
+    first_policy = build_cache_policy(tmp_path / "one" / "storage")
+    second_policy = build_cache_policy(tmp_path / "two" / "storage")
+
+    first_key = first_policy.compute_key(task_run_context(), {}, {})
+    second_key = second_policy.compute_key(task_run_context(), {}, {})
+
+    assert first_key is not None
+    assert second_key is not None
+    assert first_key != second_key
+
+
+def test_is_stale_materialize_cache_error_recurses_through_context_and_cause() -> None:
+    """Stale-cache detection should follow chained exceptions."""
+    is_stale = vars(cache_core)["_is_stale_materialize_cache_error"]
+
+    cause = RuntimeError("Provided path /old/storage is outside of the base path")
+    context = RuntimeError("wrapped")
+    context.__cause__ = cause
+
+    assert is_stale(context) is True
+    assert is_stale(RuntimeError("different failure")) is False
+
+
+def test_is_stale_materialize_cache_error_handles_context_cycles() -> None:
+    """Stale-cache detection should stop traversing already-seen exceptions."""
+    is_stale = vars(cache_core)["_is_stale_materialize_cache_error"]
+
+    left = RuntimeError("left")
+    right = RuntimeError("right")
+    left.__context__ = right
+    right.__context__ = left
+
+    assert is_stale(left) is False
+
+
+def test_resolve_result_storage_basepath_prefers_explicit_basepath(
+    tmp_path: Path,
+) -> None:
+    """Result-storage objects with a basepath should resolve that path directly.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox used to fabricate the
+            storage base path.
+    """
+    resolve_result_storage_basepath = vars(cache_core)[
+        "_resolve_result_storage_basepath"
+    ]
+    storage = _BasepathResultStorage(basepath=tmp_path / "storage")
+
+    assert resolve_result_storage_basepath(storage) == (tmp_path / "storage").resolve()
 
 
 def test_dataset_build_lock_path_changes_with_cache_namespace(tmp_path: Path) -> None:
@@ -251,3 +565,22 @@ def test_dataset_build_lock_blocks_other_processes_for_same_namespace(
         process.join(timeout=5)
 
     assert process.exitcode == 0
+
+
+def test_dataset_build_lock_allows_reentrant_acquisition_for_same_namespace(
+    tmp_path: Path,
+) -> None:
+    """The namespace lock should be reusable within one build flow.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for cache namespace paths.
+    """
+    cache_paths = CachePathsConfig(
+        data_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(dataset_build_lock("demo", cache_paths=cache_paths))
+        stack.enter_context(dataset_build_lock("demo", cache_paths=cache_paths))
+        assert True

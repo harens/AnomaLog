@@ -1,16 +1,24 @@
-"""Template parser implementations (Drain3 and identity)."""
+"""Template parser implementations."""
 
 import hashlib
+import importlib
+import re
+import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
+from operator import itemgetter
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import ClassVar
 
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
-from prefect.logging import get_run_logger
+from prefect.assets import Asset
+from prefect.exceptions import MissingContextError
+from prefect.logging import get_logger, get_run_logger
 from typing_extensions import override
 
 from anomalog.cache import (
@@ -178,12 +186,16 @@ class Drain3Parser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Train Drain3 on the dataset's untemplated message stream.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Optional upstream asset
+                dependencies to include in the training cache key.
         """
         self.resolved_cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -195,7 +207,10 @@ class Drain3Parser(TemplateParser):
         def _run_train() -> None:
             return self._train(untemplated_text_iterator)
 
-        materialize(self.cache_file_path)(_run_train)()
+        materialize(
+            self.cache_file_path,
+            asset_deps=asset_deps,
+        )(_run_train)()
 
         # The training task might be skipped if the Prefect asset cache hits.
         # Ensure we still have a callable bound to the persisted miner state.
@@ -285,15 +300,190 @@ class IdentityTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
         """Ignore the training stream because identity inference is stateless.
 
         Args:
             untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
                 Iterator factory accepted for contract compatibility.
+            asset_deps (list[Asset] | None): Ignored upstream asset
+                dependencies accepted for interface compatibility.
         """
-        del untemplated_text_iterator
+        del untemplated_text_iterator, asset_deps
         # No training needed for the identity parser
+
+
+@dataclass(slots=True)
+class SpellTemplateParser(TemplateParser):
+    """Spell-based template parser for DeepLog-style key extraction.
+
+    This parser trains Spell on the provided text stream, then performs
+    inference by matching lines against the mined templates. Training now
+    delegates to the upstream `spellpy` parser directly, which keeps the
+    implementation small while still avoiding the old raw CSV bottleneck.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+        dataset_name (str | None): Optional dataset name used for cache paths.
+        tau (float): Spell similarity threshold passed to Spell training.
+        max_lcs_comparisons_per_line (int | None): Maximum number of LCS
+            comparisons spellpy may perform for one line before it falls back
+            to creating or reusing a less-specific template.
+    """
+
+    name: ClassVar[str] = "spell"
+    dataset_name: str | None = None
+    tau: float = 0.5
+    max_lcs_comparisons_per_line: int | None = 10000
+    _patterns: list[tuple[str, re.Pattern[str], int]] | None = None
+    _occurrence_count: int | None = None
+
+    @property
+    def _spell_cache_dir(self) -> Path:
+        return Path.cwd() / ".cache" / "spell"
+
+    @property
+    def _spell_dataset_prefix(self) -> str:
+        return self.dataset_name or "dataset"
+
+    @property
+    def _spell_output_dir(self) -> Path:
+        return self._spell_cache_dir / f"{self._spell_dataset_prefix}_spell_output"
+
+    @override
+    def train(
+        self,
+        untemplated_text_iterator: Callable[[], Iterator[UntemplatedText]],
+        *,
+        asset_deps: list[Asset] | None = None,
+    ) -> None:
+        """Train Spell templates from the text stream.
+
+        Args:
+            untemplated_text_iterator (Callable[[], Iterator[UntemplatedText]]):
+                Zero-argument iterator factory over untemplated message text.
+            asset_deps (list[Asset] | None): Ignored upstream asset
+                dependencies accepted for interface compatibility.
+
+        Raises:
+            ModuleNotFoundError: If optional `spellpy` is not installed.
+        """
+        del asset_deps
+        try:
+            spell_module = importlib.import_module("spellpy")
+        except ModuleNotFoundError as exc:
+            msg = "Spell template parsing requires optional dependency 'spellpy'."
+            raise ModuleNotFoundError(msg) from exc
+        try:
+            logger = get_run_logger()
+        except MissingContextError:
+            logger = get_logger(__name__)
+
+        if self._spell_output_dir.exists():
+            shutil.rmtree(self._spell_output_dir)
+        self._spell_output_dir.mkdir(parents=True, exist_ok=True)
+        started_at = perf_counter()
+        with TemporaryDirectory(dir=str(self._spell_cache_dir)) as input_dir:
+            input_path = Path(input_dir) / f"{self._spell_dataset_prefix}.log"
+            with input_path.open("w", encoding="utf-8") as raw_file:
+                for log_line in untemplated_text_iterator():
+                    raw_file.write(log_line)
+                    raw_file.write("\n")
+
+            spell_log_parser = spell_module.spell.LogParser(
+                indir=input_dir,
+                outdir=str(self._spell_output_dir),
+                log_format="<Content>",
+                tau=self.tau,
+                keep_para=False,
+                max_lcs_comparisons_per_line=self.max_lcs_comparisons_per_line,
+                resume_state=False,
+            )
+            spell_log_parser.parse(input_path.name)
+
+            log_clust_l = spell_log_parser.logCluL
+            if not log_clust_l:
+                logger.warning("No logs were parsed during training")
+                self._patterns = []
+                self._occurrence_count = 0
+                return
+
+            rows: list[tuple[str, re.Pattern[str], int]] = []
+            for cluster in log_clust_l:
+                template = " ".join(getattr(cluster, "logTemplate", ()))
+                occurrences = getattr(cluster, "occurrence_count", None)
+                if occurrences is None:
+                    occurrences = len(getattr(cluster, "logIDL", ()))
+                rows.append(
+                    (
+                        template,
+                        _compile_spell_template_regex(template),
+                        occurrences,
+                    ),
+                )
+
+            rows.sort(key=itemgetter(2), reverse=True)
+            self._patterns = rows
+            self._occurrence_count = sum(
+                occurrences for _template, _pattern, occurrences in rows
+            )
+
+        elapsed = perf_counter() - started_at
+        occurrence_count = self._occurrence_count
+        logger.info(
+            (
+                "Spell parser training finished: templates=%d "
+                "occurrences=%d elapsed=%.3fs"
+            ),
+            0 if self._patterns is None else len(self._patterns),
+            0 if occurrence_count is None else occurrence_count,
+            elapsed,
+        )
+
+    @override
+    def inference(
+        self,
+        unstructured_text: UntemplatedText,
+    ) -> tuple[LogTemplate, ExtractedParameters]:
+        """Infer template and extracted parameters for one log line.
+
+        Args:
+            unstructured_text (UntemplatedText): Raw line to match.
+
+        Returns:
+            tuple[LogTemplate, ExtractedParameters]: Matched template and
+                captured parameters, or a self-template fallback when unmatched.
+
+        Raises:
+            ValueError: If the parser has not been trained yet.
+        """
+        if self._patterns is None:
+            msg = "Parser has not been trained yet"
+            raise ValueError(msg)
+
+        for template, pattern, _ in self._patterns:
+            match = pattern.fullmatch(unstructured_text)
+            if match is None:
+                continue
+            return template, list(match.groups())
+        return unstructured_text, []
+
+
+def _compile_spell_template_regex(template: str) -> re.Pattern[str]:
+    """Compile a Spell template into a parameter-capturing regex.
+
+    Args:
+        template (str): Spell template containing zero or more `<*>` markers.
+
+    Returns:
+        re.Pattern[str]: Full-line regex for inference matching.
+    """
+    sentinel = "__ANOMALOG_SPELL_WILDCARD__"
+    escaped = re.escape(template.replace("<*>", sentinel))
+    pattern_text = escaped.replace(sentinel, "(.*?)")
+    return re.compile(pattern_text)
 
 
 # class LogParser(Parser):

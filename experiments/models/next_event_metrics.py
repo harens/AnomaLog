@@ -25,6 +25,44 @@ class VocabularyPolicy(str, Enum):
     FULL_DATASET = "full_dataset"
 
 
+class NextEventPredictionSegmentSourceType(str, Enum):
+    """Stable source-object labels for next-event prediction segments.
+
+    Attributes:
+        CHRONOLOGICAL_CHUNK: A preserved chronological stream chunk.
+        ENTITY: An entity-grouped sequence.
+        FILE_CHUNK: A chunked file-level sequence.
+        CACHED_SEQUENCE: A cached sequence replay.
+        STREAM_PARTITION: A stream partition or mixed sequence batch.
+        UNKNOWN: A fallback label when the source type cannot be inferred.
+    """
+
+    CHRONOLOGICAL_CHUNK = "chronological_chunk"
+    ENTITY = "entity"
+    FILE_CHUNK = "file_chunk"
+    CACHED_SEQUENCE = "cached_sequence"
+    STREAM_PARTITION = "stream_partition"
+    UNKNOWN = "unknown"
+
+
+class NextEventPredictionSegmentBoundaryReason(str, Enum):
+    """Stable reasons for segment boundaries in next-event diagnostics.
+
+    Attributes:
+        STREAM_START: The first segment in the scored stream.
+        CONTINUOUS_CONTEXT: A segment that continues across internal chunks.
+        CONTEXT_RESET: A new segment after a prior continuity break.
+        STANDALONE_SEQUENCE: A sequence that is scored independently.
+        UNKNOWN: A fallback label when the boundary reason cannot be inferred.
+    """
+
+    STREAM_START = "stream_start"
+    CONTINUOUS_CONTEXT = "continuous_context"
+    CONTEXT_RESET = "context_reset"
+    STANDALONE_SEQUENCE = "standalone_sequence"
+    UNKNOWN = "unknown"
+
+
 class NextEventPredictionExclusionReason(str, Enum):
     """Stable exclusion reasons for next-event diagnostics.
 
@@ -118,6 +156,51 @@ class NextEventPredictionExclusions(msgspec.Struct, frozen=True):
     insufficient_history: int
 
 
+class NextEventPredictionSegmentSummary(msgspec.Struct, frozen=True):
+    """Per-segment warm-up accounting for next-event prediction.
+
+    Attributes:
+        segment_id (int): Monotonic segment identifier within the run.
+        length (int): Number of scored evaluation events in the segment.
+        insufficient_history (int): Events excluded because the segment did
+            not yet have enough carried history.
+        boundary_reason (NextEventPredictionSegmentBoundaryReason): Why this
+            segment begins as a distinct prediction run.
+        source_object_type (NextEventPredictionSegmentSourceType): Source
+            object type that produced the segment.
+    """
+
+    segment_id: int
+    length: int
+    insufficient_history: int
+    boundary_reason: NextEventPredictionSegmentBoundaryReason
+    source_object_type: NextEventPredictionSegmentSourceType
+
+
+class NextEventPredictionSegmentDiagnostics(msgspec.Struct, frozen=True):
+    """Aggregate segment-level diagnostics for next-event prediction.
+
+    Attributes:
+        segment_count (int): Number of effective prediction segments.
+        history_size (int): DeepLog history length used for scoring.
+        expected_insufficient_history_from_segments (int): Sum of the
+            per-segment insufficient-history counts.
+        largest_segments (list[NextEventPredictionSegmentSummary]): Largest
+            segments by scored length.
+        smallest_segments (list[NextEventPredictionSegmentSummary]): Smallest
+            segments by scored length.
+        segment_length_histogram (dict[str, int]): Histogram of segment
+            lengths keyed by length as text.
+    """
+
+    segment_count: int
+    history_size: int
+    expected_insufficient_history_from_segments: int
+    largest_segments: list[NextEventPredictionSegmentSummary]
+    smallest_segments: list[NextEventPredictionSegmentSummary]
+    segment_length_histogram: dict[str, int]
+
+
 class NextEventPredictionDiagnostics(msgspec.Struct, frozen=True):
     """Serialisable next-event prediction diagnostics for model manifests.
 
@@ -134,6 +217,8 @@ class NextEventPredictionDiagnostics(msgspec.Struct, frozen=True):
             reason.
         vocabulary_policy (VocabularyPolicy): Stable vocabulary policy label
             for the diagnostic run.
+        segment_diagnostics (NextEventPredictionSegmentDiagnostics | None):
+            Optional segment-level warm-up breakdown.
     """
 
     task: str
@@ -143,6 +228,7 @@ class NextEventPredictionDiagnostics(msgspec.Struct, frozen=True):
     classification_top1_weighted: NextEventPredictionWeightedMetrics
     exclusions: NextEventPredictionExclusions
     vocabulary_policy: VocabularyPolicy
+    segment_diagnostics: NextEventPredictionSegmentDiagnostics | None = None
 
 
 @dataclass(slots=True)
@@ -281,8 +367,16 @@ class NextEventPredictionState:
                     self.top_k_hit_counts.get(k_value, 0) + 1
                 )
 
-    def snapshot(self) -> NextEventPredictionDiagnostics | None:
+    def snapshot(
+        self,
+        *,
+        segment_diagnostics: NextEventPredictionSegmentDiagnostics | None = None,
+    ) -> NextEventPredictionDiagnostics | None:
         """Return serialisable diagnostics for the accumulated run.
+
+        Args:
+            segment_diagnostics (NextEventPredictionSegmentDiagnostics | None):
+                Optional segment-level warm-up diagnostics to attach.
 
         Returns:
             NextEventPredictionDiagnostics | None: Aggregated next-event
@@ -355,6 +449,7 @@ class NextEventPredictionState:
                 ),
             ),
             vocabulary_policy=self.vocabulary_policy,
+            segment_diagnostics=segment_diagnostics,
         )
 
 

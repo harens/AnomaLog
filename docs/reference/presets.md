@@ -8,7 +8,7 @@ reuse, and modify for preprocessing ablations.
 ```pycon
 >>> from anomalog.presets import bgl, preset_names
 >>> preset_names()
-('bgl', 'hdfs_v1')
+('bgl', 'hdfs_v1', 'hdfs_wuyifan18_deeplog_preprocessed', 'openstack_deeplog_preprocessed')
 >>> bgl.dataset_name
 'BGL'
 >>> bgl.structured_parser.name

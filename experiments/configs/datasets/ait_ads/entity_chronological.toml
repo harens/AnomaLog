@@ -1,0 +1,22 @@
+name = "ait_ads_entity_chronological"
+description = "AIT-ADS entity-local experiment with a chronological raw-entry split."
+
+[dataset]
+template_parser = "identity"
+name = "ait_ads_entity_chronological"
+dataset_name = "AIT_ADS"
+preset = "ait_ads"
+description = "AIT-ADS source grouped by entity so DeepCASE can consume entity-local sequences without entity-heldout splitting."
+evaluation_unit = "sequence"
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.5
+test_fraction = 0.5
+train_on_normal_entities_only = false
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_fraction"
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+train_entry_fraction = 0.5

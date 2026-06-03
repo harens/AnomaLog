@@ -1,5 +1,6 @@
-"""Concrete StructuredParser implementations for HDFS and BGL log formats."""
+"""Concrete StructuredParser implementations for built-in log formats."""
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,7 +9,16 @@ from typing import ClassVar
 from prefect.logging import get_logger
 from typing_extensions import override
 
-from anomalog.parsers.structured.contracts import BaseStructuredLine, StructuredParser
+from anomalog.parsers.structured.contracts import (
+    BaseStructuredLine,
+    StructuredLine,
+    StructuredParser,
+)
+from anomalog.sources.openstack import (
+    extract_openstack_parameters,
+    normalise_openstack_message,
+    parse_openstack_payload,
+)
 
 UTC = timezone.utc
 
@@ -149,7 +159,7 @@ class BGLParser(StructuredParser):
     # with optional leading "-" that indicates "normal" in BGL.
     # e.g. - 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 2005-06-03-15.42.50.363779
     # R02-M1-N0-C:J12-U11 RAS KERNEL INFO instruction cache parity error corrected
-    _BGL_RE = re.compile(
+    _BGL_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"""
         ^\s*
         (?P<dash>-)?\s*
@@ -244,3 +254,305 @@ class BGLParser(StructuredParser):
             untemplated_message_text=untemplated,
             anomalous=anomalous,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ThunderbirdParser(StructuredParser):
+    """Parse Thunderbird supercomputer log lines into structured fields.
+
+    Loghub's Thunderbird corpus uses a labelled raw-line format where the first
+    token marks alert status (`-` for normal, any other tag for an alert) and
+    the remaining header fields expose the event chronology plus the host and
+    location tokens. The parser keeps the free-text tail as the message body
+    for template mining, stripping an optional ``component[pid]: `` prefix
+    when the raw line includes one. It also trims a trailing colon from bare
+    message tails such as `mysql_install_db:` so the template miner sees the
+    underlying command name rather than the punctuation artefact. The parser
+    collapses the label into AnomaLog's binary anomaly flag.
+
+    The parser deliberately stays close to the observed raw structure so the
+    downstream template miner sees the message body rather than a Thunderbird-
+    specific normalisation of the header fields.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "thunderbird"
+
+    _THUNDERBIRD_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"""
+        ^\s*
+        (?P<label>\S+)\s+
+        (?:(?P<timestamp>\d+)\s+)?
+        (?P<date>\d{4}\.\d{2}\.\d{2})\s+
+        (?P<user>\S+)\s+
+        (?P<month>[A-Z][a-z]{2})\s+
+        (?P<day>\d{1,2})\s+
+        (?P<time>\d{2}:\d{2}:\d{2})\s+
+        (?P<location>\S+)
+        (?:\s+(?P<tail>.*))?
+        \s*$
+        """,
+        re.VERBOSE,
+    )
+
+    @staticmethod
+    def _timestamp_seconds_to_unix_ms(timestamp_s: str | None) -> int | None:
+        """Convert a Thunderbird epoch-second timestamp to milliseconds.
+
+        Args:
+            timestamp_s (str | None): Timestamp string from the raw log header.
+
+        Returns:
+            int | None: Parsed timestamp in Unix milliseconds, or `None` when
+                the source omits the field or the value is malformed.
+        """
+        if timestamp_s is None:
+            return None
+        try:
+            return int(timestamp_s) * 1000
+        except ValueError:
+            return None
+
+    @classmethod
+    def analyse_line(
+        cls,
+        raw_line: str,
+    ) -> tuple[BaseStructuredLine | None, str | None]:
+        """Parse one Thunderbird line and report the reason when skipped.
+
+        Args:
+            raw_line (str): Raw Thunderbird log line to inspect.
+
+        Returns:
+            tuple[BaseStructuredLine | None, str | None]: Parsed structured row
+            and an optional skip reason.
+        """
+        s = raw_line.rstrip("\n")
+        if not s.strip():
+            return None, "blank"
+
+        m = cls._THUNDERBIRD_RE.match(s)
+        if m is None:
+            return None, "malformed"
+
+        d = m.groupdict()
+        content = (d["tail"] or "").strip()
+        if ": " in content:
+            content = content.split(": ", maxsplit=1)[1].strip()
+        if content.endswith(":"):
+            content = content.rstrip(":").rstrip()
+        if not content:
+            return None, "empty_message"
+
+        label = d["label"].strip()
+        anomalous = 0 if label == "-" else 1
+        timestamp_ms = cls._timestamp_seconds_to_unix_ms(d["timestamp"])
+        entity_id = d["location"].strip() or d["user"].strip()
+
+        return (
+            BaseStructuredLine(
+                timestamp_unix_ms=timestamp_ms,
+                entity_id=entity_id,
+                untemplated_message_text=content,
+                anomalous=anomalous,
+            ),
+            None,
+        )
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse a single Thunderbird line; return `None` for skipped rows.
+
+        Args:
+            raw_line (str): Raw Thunderbird log line to parse.
+
+        Returns:
+            BaseStructuredLine | None: Parsed structured record, or `None`
+                when the line is blank, malformed, or has no message body.
+        """
+        logger = get_logger()
+        parsed, reason = self.analyse_line(raw_line)
+        if parsed is None:
+            if reason not in {"blank", "empty_message"}:
+                logger.warning(
+                    "Cannot parse Thunderbird line (%s): %r",
+                    reason,
+                    raw_line,
+                )
+            return None
+        return parsed
+
+
+@dataclass(frozen=True, slots=True)
+class AITADSParser(StructuredParser):
+    """Parse the canonical JSONL alert stream derived from AIT-ADS.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "ait_ads"
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse one canonical AIT-ADS alert row.
+
+        Args:
+            raw_line (str): Canonical JSONL row emitted by the AIT-ADS source.
+
+        Returns:
+            BaseStructuredLine | None: Parsed canonical alert, or `None` when
+                the row is malformed.
+        """
+        s = raw_line.strip()
+        logger = get_logger()
+        if not s:
+            return None
+
+        try:
+            payload = json.loads(s)
+        except json.JSONDecodeError:
+            logger.warning("Cannot parse AIT-ADS canonical row: %r", s)
+            return None
+
+        if not isinstance(payload, dict):
+            logger.warning("AIT-ADS canonical row must be a JSON object: %r", s)
+            return None
+
+        template_key = payload.get("template_key")
+        if template_key is None:
+            logger.warning("AIT-ADS canonical row is missing template_key: %r", s)
+            return None
+
+        timestamp_unix_ms = _coerce_optional_int(payload.get("timestamp_unix_ms"))
+        anomalous = _coerce_optional_int(payload.get("anomalous"))
+
+        return BaseStructuredLine(
+            timestamp_unix_ms=timestamp_unix_ms,
+            entity_id=(
+                None if payload.get("entity_id") is None else str(payload["entity_id"])
+            ),
+            untemplated_message_text=str(template_key),
+            anomalous=anomalous,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenStackLabelledRow:
+    """Parsed labelled OpenStack row used by the DeepLog parser.
+
+    Attributes:
+        split_name (str): Split prefix attached to the row in the preprocessed
+            stream.
+        label (int): Inline anomaly label from the labelled OpenStack stream.
+        timestamp_unix_ms (int): Parsed event timestamp in Unix milliseconds.
+        instance_id (str): Instance identifier extracted from the payload.
+        content (str): Raw message body after removing the OpenStack envelope.
+        raw_parameters (list[str]): Numeric payload tokens preserved for
+            parameter-aware downstream stages.
+    """
+
+    split_name: str
+    label: int
+    timestamp_unix_ms: int
+    instance_id: str
+    content: str
+    raw_parameters: list[str]
+
+
+def _parse_openstack_labelled_row(
+    raw_line: str,
+) -> _OpenStackLabelledRow | None:
+    """Parse a labelled OpenStack row into its canonical fields.
+
+    Args:
+        raw_line (str): Raw labelled OpenStack line from the preprocessed
+            stream.
+
+    Returns:
+        _OpenStackLabelledRow | None: Parsed row data, or `None` when the row
+            is malformed.
+    """
+    if "\t" not in raw_line:
+        return None
+    split_name, label_text, raw_payload = raw_line.rstrip("\n").split("\t", 2)
+    if label_text not in {"0", "1"}:
+        return None
+
+    parsed = parse_openstack_payload(raw_payload)
+    if parsed is None:
+        return None
+    return _OpenStackLabelledRow(
+        split_name=split_name.strip(),
+        label=int(label_text),
+        timestamp_unix_ms=parsed.timestamp_unix_ms,
+        instance_id=parsed.instance_id,
+        content=parsed.content,
+        raw_parameters=extract_openstack_parameters(parsed.content or ""),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenStackDeepLogParser(StructuredParser):
+    r"""Parse labelled OpenStack rows used by the DeepLog reproduction preset.
+
+    Attributes:
+        name (ClassVar[str]): Registry/config name for the built-in parser.
+    """
+
+    name: ClassVar[str] = "openstack_deeplog"
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        """Parse one labelled OpenStack row into the shared structured schema.
+
+        Args:
+            raw_line (str): Raw labelled OpenStack row from the preprocessed
+                stream.
+
+        Returns:
+            BaseStructuredLine | None: Structured row, or `None` when the
+                labelled OpenStack row is malformed.
+        """
+        logger = get_logger()
+        parsed = _parse_openstack_labelled_row(raw_line)
+        if parsed is None:
+            logger.warning(
+                "Cannot parse OpenStack labelled row: %r",
+                raw_line.rstrip("\n"),
+            )
+            return None
+        entity_id = f"{parsed.split_name}:{parsed.instance_id}"
+        return StructuredLine(
+            timestamp_unix_ms=parsed.timestamp_unix_ms,
+            entity_id=entity_id,
+            untemplated_message_text=normalise_openstack_message(
+                parsed.content,
+                preserve_numeric_values=False,
+            ),
+            anomalous=parsed.label,
+            line_order=0,
+            raw_parameters=parsed.raw_parameters,
+        )
+
+
+OptionalIntLike = int | float | str | None
+
+
+def _coerce_optional_int(value: OptionalIntLike) -> int | None:
+    """Convert a possibly-null payload field to an integer.
+
+    Args:
+        value (OptionalIntLike): Payload field to coerce.
+
+    Returns:
+        int | None: Parsed integer, or `None` when absent or malformed.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

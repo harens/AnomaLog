@@ -1,0 +1,14 @@
+name = "hdfs_v1_deeplog_paper_base"
+description = "Shared HDFS DeepLog paper-reproduction matrix with the DeepLog run, template-frequency baseline, and Markov baseline."
+
+[dataset]
+dataset_name = "HDFS_V1"
+preset = "hdfs_v1"
+template_parser = "spell"
+description = "DeepLog HDFS paper-reproduction config with entity grouping and normal-only entity training."
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.01
+test_fraction = 0.99
+train_on_normal_entities_only = true

@@ -1,0 +1,20 @@
+name = "thunderbird_smoke"
+description = "Capped Thunderbird smoke dataset using the first 50,000 raw Thunderbird.log lines."
+
+[dataset]
+name = "thunderbird_smoke"
+dataset_name = "THUNDERBIRD_SMOKE"
+preset = "thunderbird_smoke"
+template_parser = "drain3"
+description = "Thunderbird smoke config using a bounded Thunderbird.log prefix and 100-log chronological windows."
+evaluation_unit = "sequence"
+
+[dataset.sequence]
+grouping = "fixed"
+window_size = 100
+step = 100
+train_fraction = 0.8
+test_fraction = 0.2
+
+[dataset.cache_paths]
+namespace = "thunderbird_smoke"

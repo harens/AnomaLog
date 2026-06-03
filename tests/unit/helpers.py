@@ -3,11 +3,12 @@
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from types import SimpleNamespace
+from typing import ClassVar, TypedDict
 from unittest.mock import create_autospec
 
 from prefect.context import TaskRunContext
-from typing_extensions import override
+from typing_extensions import NotRequired, Unpack, override
 
 from anomalog.labels import AnomalyLabelLookup
 from anomalog.parsers.structured.contracts import (
@@ -21,32 +22,39 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.writer_worker import EntityChronologyKey
 
 
+class _StructuredLineFields(TypedDict):
+    timestamp_unix_ms: int | None
+    entity_id: str | None
+    untemplated_message_text: str
+    anomalous: int | None
+    raw_parameters: NotRequired[list[str] | None]
+
+
 def structured_line(
     *,
     line_order: int,
-    timestamp_unix_ms: int | None,
-    entity_id: str | None,
-    untemplated_message_text: str,
-    anomalous: int | None,
+    **fields: Unpack[_StructuredLineFields],
 ) -> StructuredLine:
     """Build a concise StructuredLine fixture.
 
     Args:
         line_order (int): Stable line order to assign to the fixture row.
-        timestamp_unix_ms (int | None): Optional timestamp for the fixture row.
-        entity_id (str | None): Optional entity identifier for the fixture row.
-        untemplated_message_text (str): Raw message text for the fixture row.
-        anomalous (int | None): Optional anomaly label for the fixture row.
+        **fields (Unpack[_StructuredLineFields]): Field values used to
+            construct the fixture row. Expected keys are `timestamp_unix_ms`,
+            `entity_id`,
+            `untemplated_message_text`, `anomalous`, and optionally
+            `raw_parameters`.
 
     Returns:
         StructuredLine: Structured row with the supplied field values.
     """
     return StructuredLine(
         line_order=line_order,
-        timestamp_unix_ms=timestamp_unix_ms,
-        entity_id=entity_id,
-        untemplated_message_text=untemplated_message_text,
-        anomalous=anomalous,
+        timestamp_unix_ms=fields["timestamp_unix_ms"],
+        entity_id=fields["entity_id"],
+        untemplated_message_text=fields["untemplated_message_text"],
+        anomalous=fields["anomalous"],
+        raw_parameters=fields.get("raw_parameters"),
     )
 
 
@@ -56,7 +64,9 @@ def task_run_context() -> TaskRunContext:
     Returns:
         TaskRunContext: Autospecced task-run context double.
     """
-    return create_autospec(TaskRunContext, instance=True)
+    context = create_autospec(TaskRunContext, instance=True)
+    context.task = SimpleNamespace(source_code="task()")
+    return context
 
 
 def label_lookup(
@@ -143,11 +153,11 @@ class InMemoryStructuredSink(StructuredSink):
         """Report whether the sink should be treated as having inline labels.
 
         Returns:
-            bool: Whether the sink should be treated as having inline labels.
+            bool: Whether any stored row carries an inline anomaly label field.
         """
         if self.anomalies_inline is not None:
             return self.anomalies_inline
-        return any(is_anomalous_label(row.anomalous) for row in self.rows)
+        return any(row.anomalous is not None for row in self.rows)
 
     def iter_structured_lines(
         self,
@@ -165,6 +175,21 @@ class InMemoryStructuredSink(StructuredSink):
 
         def _iter() -> Iterator[StructuredLine]:
             yield from self.rows
+
+        return _iter
+
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        """Yield stored rows ordered by their raw line order.
+
+        Returns:
+            Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
+                yields stored rows ordered by `line_order`.
+        """
+
+        def _iter() -> Iterator[StructuredLine]:
+            yield from sorted(self.rows, key=lambda row: row.line_order)
 
         return _iter
 
@@ -284,9 +309,13 @@ class InMemoryStructuredSink(StructuredSink):
         step = window_size if step_size is None else step_size
 
         def _iter() -> Iterator[Sequence[StructuredLine]]:
-            for start in range(0, len(self.rows), step):
+            if window_size <= 0 or step <= 0:
+                return
+            if len(self.rows) < window_size:
+                return
+            for start in range(0, len(self.rows) - window_size + 1, step):
                 window = self.rows[start : start + window_size]
-                if window:
+                if len(window) == window_size:
                     yield window
 
         return _iter

@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import Self, override
 
+from anomalog._sequence_split_policy import (
+    RawEntrySplitRequest,
+    build_raw_entry_split_plan,
+    count_straddling_groups,
+    resolve_straddling_group_label,
+    split_rows_by_label,
+)
 from anomalog.parsers.structured.contracts import is_anomalous_label
 from anomalog.representations import (
     SequenceRepresentation,
@@ -49,6 +56,111 @@ class SplitLabel(str, Enum):
     TRAIN = "train"
     TEST = "test"
     IGNORED = "ignored"
+
+
+class SplitApplicationOrder(str, Enum):
+    """When to apply a configured split relative to grouping.
+
+    Attributes:
+        AFTER_GROUPING: Apply the split after grouping has produced sequences.
+        BEFORE_GROUPING: Apply the split on raw entries before grouping.
+    """
+
+    AFTER_GROUPING = "after_grouping"
+    BEFORE_GROUPING = "before_grouping"
+
+
+class StraddlingGroupPolicy(str, Enum):
+    """How to handle grouped rows that cross a raw-entry split boundary.
+
+    Attributes:
+        SPLIT_PARTIAL_SEQUENCES: Emit one sequence per contiguous segment.
+        ASSIGN_BY_FIRST_EVENT: Assign the whole group by the first segment.
+        ASSIGN_BY_LAST_EVENT: Assign the whole group by the last segment.
+        DROP_STRADDLERS: Drop groups that span both sides of the split.
+    """
+
+    SPLIT_PARTIAL_SEQUENCES = "split_partial_sequences"
+    ASSIGN_BY_FIRST_EVENT = "assign_by_first_event"
+    ASSIGN_BY_LAST_EVENT = "assign_by_last_event"
+    DROP_STRADDLERS = "drop_straddlers"
+
+
+class RawEntrySplitMode(str, Enum):
+    """Chronological raw-entry split modes supported by sequence builders.
+
+    Attributes:
+        PREFIX_COUNT: Split by the first N raw entries.
+        PREFIX_FRACTION: Split by the first fraction of raw entries.
+        PREFIX_NORMAL_FRACTION: Split by the first fraction of normal entries.
+    """
+
+    PREFIX_COUNT = "raw_entry_prefix_count"
+    PREFIX_FRACTION = "raw_entry_prefix_fraction"
+    PREFIX_NORMAL_FRACTION = "raw_entry_prefix_normal_fraction"
+
+
+@dataclass(slots=True, frozen=True)
+class RawEntrySplitSummary:
+    """Audit summary for a chronological raw-entry split.
+
+    Attributes:
+        split_mode (str): Configured raw-entry split mode.
+        application_order (str): Whether the split was applied before or after
+            grouping.
+        cutoff_entry_index (int): Zero-based raw-entry cutoff where the test
+            suffix begins.
+        train_raw_entry_count (int): Raw entries assigned to train.
+        train_normal_entry_count (int): Normal raw entries assigned to train.
+        train_anomalous_entry_count (int): Anomalous raw entries assigned to train.
+        test_raw_entry_count (int): Raw entries assigned to test.
+        test_normal_entry_count (int): Normal raw entries assigned to test.
+        test_anomalous_entry_count (int): Anomalous raw entries assigned to test.
+        ignored_raw_entry_count (int): Raw entries withheld from both train and test.
+        ignored_normal_entry_count (int): Normal raw entries withheld.
+        ignored_anomalous_entry_count (int): Anomalous raw entries withheld.
+        straddling_group_count (int): Number of grouped windows that crossed the
+            split boundary.
+        straddling_group_policy (str | None): Policy applied to straddling groups.
+    """
+
+    split_mode: str
+    application_order: str
+    cutoff_entry_index: int
+    train_raw_entry_count: int
+    train_normal_entry_count: int
+    train_anomalous_entry_count: int
+    test_raw_entry_count: int
+    test_normal_entry_count: int
+    test_anomalous_entry_count: int
+    ignored_raw_entry_count: int = 0
+    ignored_normal_entry_count: int = 0
+    ignored_anomalous_entry_count: int = 0
+    straddling_group_count: int = 0
+    straddling_group_policy: str | None = None
+
+    def as_dict(self) -> dict[str, int | str | None]:
+        """Return a JSON-friendly representation.
+
+        Returns:
+            dict[str, int | str | None]: Serialisable split summary payload.
+        """
+        return {
+            "split_mode": self.split_mode,
+            "application_order": self.application_order,
+            "cutoff_entry_index": self.cutoff_entry_index,
+            "train_raw_entry_count": self.train_raw_entry_count,
+            "train_normal_entry_count": self.train_normal_entry_count,
+            "train_anomalous_entry_count": self.train_anomalous_entry_count,
+            "test_raw_entry_count": self.test_raw_entry_count,
+            "test_normal_entry_count": self.test_normal_entry_count,
+            "test_anomalous_entry_count": self.test_anomalous_entry_count,
+            "ignored_raw_entry_count": self.ignored_raw_entry_count,
+            "ignored_normal_entry_count": self.ignored_normal_entry_count,
+            "ignored_anomalous_entry_count": self.ignored_anomalous_entry_count,
+            "straddling_group_count": self.straddling_group_count,
+            "straddling_group_policy": self.straddling_group_policy,
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -168,6 +280,16 @@ class TemplateSequence:
         event_labels (tuple[int | None, ...] | None): Optional per-event anomaly
             labels aligned positionally with `events`. When present, each entry
             may be `None` if that event has no direct label.
+        training_event_mask (tuple[bool, ...] | None): Optional per-event
+            eligibility mask for training-target selection. This is used when a
+            preserved chronological chunk must stay intact even though only a
+            subset of its events are valid training targets.
+        evaluation_event_mask (tuple[bool, ...] | None): Optional per-event
+            eligibility mask for scoring targets. This is used when a
+            preserved chronological chunk must stay intact even though only a
+            subset of its events belong to the evaluation split.
+        continuous_context (bool): Whether adjacent sequences should be treated
+            as a single chronological stream for model state carryover.
     """
 
     events: list[
@@ -178,6 +300,9 @@ class TemplateSequence:
     window_id: int
     split_label: SplitLabel = SplitLabel.TRAIN
     event_labels: tuple[int | None, ...] | None = None
+    training_event_mask: tuple[bool, ...] | None = None
+    evaluation_event_mask: tuple[bool, ...] | None = None
+    continuous_context: bool = False
 
     def __post_init__(self) -> None:
         """Validate that any event labels stay aligned with the events.
@@ -186,12 +311,26 @@ class TemplateSequence:
             ValueError: If `event_labels` is provided with a different length
                 from `events`.
         """
-        if self.event_labels is None:
-            return
-        if len(self.event_labels) != len(self.events):
+        if self.event_labels is not None and len(self.event_labels) != len(self.events):
             msg = (
                 "TemplateSequence.event_labels must match the number of events "
                 "when provided."
+            )
+            raise ValueError(msg)
+        if self.training_event_mask is not None and len(
+            self.training_event_mask,
+        ) != len(self.events):
+            msg = (
+                "TemplateSequence.training_event_mask must match the number of "
+                "events when provided."
+            )
+            raise ValueError(msg)
+        if self.evaluation_event_mask is not None and len(
+            self.evaluation_event_mask,
+        ) != len(self.events):
+            msg = (
+                "TemplateSequence.evaluation_event_mask must match the number "
+                "of events when provided."
             )
             raise ValueError(msg)
 
@@ -227,6 +366,21 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             Template inference function for row message text.
         label_for_group (Callable[[str], int | None]): Group-level anomaly label
             lookup by entity id.
+        split_mode (RawEntrySplitMode | None): Raw-entry split mode used for
+            special reproduction protocols. `None` preserves the legacy
+            sequence-fraction split behaviour.
+        split_application_order (SplitApplicationOrder): Whether the split is
+            applied before or after grouping.
+        straddling_group_policy (StraddlingGroupPolicy): Policy for grouped rows
+            that cross a raw-entry split boundary.
+        train_entry_count (int | None): Requested raw-entry prefix length when
+            `split_mode = PREFIX_COUNT`.
+        train_entry_fraction (float | None): Requested raw-entry prefix
+            fraction when `split_mode = PREFIX_FRACTION`.
+        train_normal_entry_fraction (float | None): Requested normal-entry
+            prefix fraction when `split_mode = PREFIX_NORMAL_FRACTION`.
+        stream_chunk_size (int | None): Optional chunk size used by stream
+            grouping strategies.
         train_frac (float): Requested training fraction for the builder.
         test_frac (float): Fixed test suffix fraction.
     """
@@ -234,14 +388,167 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
     sink: StructuredSink
     infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
+    split_mode: RawEntrySplitMode | None = None
+    split_application_order: SplitApplicationOrder = (
+        SplitApplicationOrder.AFTER_GROUPING
+    )
+    straddling_group_policy: StraddlingGroupPolicy = (
+        StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+    )
+    train_entry_count: int | None = None
+    train_entry_fraction: float | None = None
+    train_normal_entry_fraction: float | None = None
+    stream_chunk_size: int | None = None
     train_frac: float = 0.2
     test_frac: float = 0.8
 
-    def __post_init__(self) -> None:
-        """Validate the requested split fractions."""
-        validate_split_fractions(
-            train_frac=self.train_frac,
-            test_frac=self.test_frac,
+    def __post_init__(self) -> None:  # noqa: C901, PLR0912
+        """Validate the requested split fractions and raw-entry split inputs.
+
+        Raises:
+            ValueError: If the requested split settings are inconsistent.
+        """
+        if (
+            self.split_mode is None
+            or self.split_application_order == SplitApplicationOrder.AFTER_GROUPING
+        ):
+            validate_split_fractions(
+                train_frac=self.train_frac,
+                test_frac=self.test_frac,
+            )
+        if self.split_mode == RawEntrySplitMode.PREFIX_COUNT:
+            if self.train_entry_count is None or self.train_entry_count < 0:
+                msg = "train_entry_count must be a non-negative integer."
+                raise ValueError(msg)
+            if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+                msg = (
+                    "raw-entry count splits must use "
+                    "split_application_order = BEFORE_GROUPING."
+                )
+                raise ValueError(msg)
+        elif self.split_mode == RawEntrySplitMode.PREFIX_FRACTION:
+            if self.train_entry_fraction is None:
+                msg = (
+                    "train_entry_fraction must be provided for raw-entry "
+                    "fraction splits."
+                )
+                raise ValueError(msg)
+            if self.train_entry_fraction <= 0.0 or self.train_entry_fraction > 1.0:
+                msg = "train_entry_fraction must be between 0 and 1."
+                raise ValueError(msg)
+            if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+                msg = (
+                    "raw-entry fraction splits must use "
+                    "split_application_order = BEFORE_GROUPING."
+                )
+                raise ValueError(msg)
+        elif self.split_mode == RawEntrySplitMode.PREFIX_NORMAL_FRACTION:
+            if self.train_normal_entry_fraction is None:
+                msg = (
+                    "train_normal_entry_fraction must be provided for raw-entry "
+                    "normal-fraction splits."
+                )
+                raise ValueError(msg)
+            if (
+                self.train_normal_entry_fraction <= 0.0
+                or self.train_normal_entry_fraction > 1.0
+            ):
+                msg = "train_normal_entry_fraction must be between 0 and 1."
+                raise ValueError(msg)
+            if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+                msg = (
+                    "raw-entry normal-fraction splits must use "
+                    "split_application_order = BEFORE_GROUPING."
+                )
+                raise ValueError(msg)
+            if (
+                self.straddling_group_policy
+                != StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+            ):
+                msg = (
+                    "raw-entry normal-fraction splits only support "
+                    "split_partial_sequences."
+                )
+                raise ValueError(msg)
+        elif (
+            self.split_mode is not None
+            and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            if self.straddling_group_policy not in {
+                StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+                StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+                StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT,
+                StraddlingGroupPolicy.DROP_STRADDLERS,
+            }:
+                msg = (
+                    "Unsupported straddling policy: "
+                    f"{self.straddling_group_policy.value}"
+                )
+                raise ValueError(msg)
+        if self.stream_chunk_size is not None and self.stream_chunk_size <= 0:
+            msg = "stream_chunk_size must be a positive integer."
+            raise ValueError(msg)
+
+    def _iter_source_order_rows(self) -> Iterator[StructuredLine]:
+        """Yield structured rows in raw-entry order.
+
+        Yields:
+            StructuredLine: Structured rows ordered by `line_order`.
+
+        The parquet sink already knows how to merge entity buckets by
+        `line_order`, so this helper preserves source chronology without
+        forcing callers to materialise the full dataset first.
+        """
+        source_order_iter = self.sink.iter_structured_lines_in_source_order()
+        yield from source_order_iter()
+        return
+
+    def _build_row_split_labels(
+        self,
+    ) -> tuple[dict[int, SplitLabel], RawEntrySplitSummary | None]:
+        """Build raw-entry split labels keyed by line order.
+
+        Returns:
+            tuple[dict[int, SplitLabel], RawEntrySplitSummary | None]: Row-level
+                split labels and an audit summary when a raw-entry split is
+                active.
+        """
+        if (
+            self.split_mode is None
+            or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            return {}, None
+
+        plan = build_raw_entry_split_plan(
+            list(self._iter_source_order_rows()),
+            request=RawEntrySplitRequest(
+                split_mode=self.split_mode.value,
+                application_order=self.split_application_order.value,
+                train_entry_count=self.train_entry_count,
+                train_entry_fraction=self.train_entry_fraction,
+                train_normal_entry_fraction=self.train_normal_entry_fraction,
+            ),
+        )
+        summary = RawEntrySplitSummary(
+            split_mode=plan.summary.split_mode,
+            application_order=plan.summary.application_order,
+            cutoff_entry_index=plan.summary.cutoff_entry_index,
+            train_raw_entry_count=plan.summary.train_raw_entry_count,
+            train_normal_entry_count=plan.summary.train_normal_entry_count,
+            train_anomalous_entry_count=plan.summary.train_anomalous_entry_count,
+            test_raw_entry_count=plan.summary.test_raw_entry_count,
+            test_normal_entry_count=plan.summary.test_normal_entry_count,
+            test_anomalous_entry_count=plan.summary.test_anomalous_entry_count,
+            ignored_raw_entry_count=plan.summary.ignored_raw_entry_count,
+            ignored_normal_entry_count=plan.summary.ignored_normal_entry_count,
+            ignored_anomalous_entry_count=plan.summary.ignored_anomalous_entry_count,
+        )
+        return (
+            {
+                line_order: SplitLabel(label)
+                for line_order, label in plan.row_labels.items()
+            },
+            summary,
         )
 
     def _split_counts(self, total_count: int) -> SequenceSplitCounts:
@@ -436,6 +743,33 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             ),
         )
 
+    def build_raw_entry_split_summary(self) -> RawEntrySplitSummary | None:
+        """Return diagnostics for a configured raw-entry split, if any.
+
+        Returns:
+            RawEntrySplitSummary | None: Raw-entry split diagnostics when a
+                before-grouping split is configured, otherwise `None`.
+        """
+        if (
+            self.split_mode is None
+            or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            return None
+        row_labels, summary = self._build_row_split_labels()
+        if summary is None:
+            return None
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
+        return replace(
+            summary,
+            straddling_group_count=count_straddling_groups(
+                self.iter_grouped_rows(),
+                row_label_values,
+            ),
+            straddling_group_policy=self.straddling_group_policy.value,
+        )
+
     @abstractmethod
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
         """Return grouped rows for the configured strategy.
@@ -446,13 +780,18 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """
         ...
 
-    def _build_sequence(
+    def _build_sequence(  # noqa: PLR0913
         self,
         window_id: int,
         rows: Collection[StructuredLine],
         infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
         label_for_group: Callable[[str], int | None],
         split_label: SplitLabel,
+        *,
+        allow_group_label_fallback: bool = True,
+        training_event_mask: tuple[bool, ...] | None = None,
+        evaluation_event_mask: tuple[bool, ...] | None = None,
+        continuous_context: bool = False,
     ) -> TemplateSequence | None:
         """Convert a non-empty row window into a labelled template sequence.
 
@@ -466,6 +805,16 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             label_for_group (Callable[[str], int | None]): Group-level anomaly
                 label lookup by entity id.
             split_label (SplitLabel): Assigned dataset split for the sequence.
+            allow_group_label_fallback (bool): Whether entity-level anomaly
+                labels may promote an otherwise normal window to anomalous.
+            training_event_mask (tuple[bool, ...] | None): Optional per-event
+                training-target eligibility mask for preserved chronological
+                chunks.
+            evaluation_event_mask (tuple[bool, ...] | None): Optional per-event
+                scoring-target eligibility mask for preserved chronological
+                chunks.
+            continuous_context (bool): Whether the emitted sequence belongs to a
+                stream that should carry context across chunk boundaries.
 
         Returns:
             TemplateSequence | None: Built sequence, or `None` for empty
@@ -485,6 +834,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
 
         for r in rows:
             template, params = infer_template(r.untemplated_message_text)
+            if r.raw_parameters is not None:
+                params = list(r.raw_parameters)
             dt, prev_ts = self._compute_dt(prev_ts, r.timestamp_unix_ms)
 
             events.append((template, list(params), dt))
@@ -492,9 +843,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             if seq_label == 1:
                 continue
 
-            line_lab = getattr(r, "anomalous", None)
-            if is_anomalous_label(line_lab):
+            if is_anomalous_label(r.anomalous):
                 seq_label = 1
+                continue
+
+            if not allow_group_label_fallback:
                 continue
 
             ent = r.entity_id
@@ -512,7 +865,127 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
                 if any(label is not None for label in event_labels)
                 else None
             ),
+            training_event_mask=training_event_mask,
+            evaluation_event_mask=evaluation_event_mask,
+            continuous_context=continuous_context,
         )
+
+    def _build_sequences_for_group(  # noqa: C901, PLR0913
+        self,
+        *,
+        window_id: int,
+        rows: Collection[StructuredLine],
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+        split_label: SplitLabel,
+        row_labels: dict[int, SplitLabel] | None = None,
+        train_only_normal_entities: bool = False,
+    ) -> Iterator[TemplateSequence]:
+        """Build one or more template sequences for a grouped window.
+
+        Args:
+            window_id (int): Monotonic window identifier for the grouped rows.
+            rows (Collection[StructuredLine]): Structured rows in the grouped
+                window.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function used to mine each event.
+            label_for_group (Callable[[str], int | None]): Group-level anomaly
+                lookup.
+            split_label (SplitLabel): Default split label for the grouped rows.
+            row_labels (dict[int, SplitLabel] | None): Optional raw-entry split
+                labels keyed by `line_order`.
+            train_only_normal_entities (bool): Whether train-side groups should
+                be forced to ignored when the entity is anomalous.
+
+        When raw-entry splitting is enabled before grouping, grouped rows can
+        be segmented into multiple sequences depending on the configured
+        straddling policy.
+
+        Yields:
+            TemplateSequence: One or more sequences derived from the grouped
+                rows.
+        """
+        if not rows:
+            return
+        if (
+            row_labels is None
+            or self.split_application_order == SplitApplicationOrder.AFTER_GROUPING
+        ):
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                split_label,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
+            return
+
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
+        segments = list(split_rows_by_label(rows, row_label_values))
+        if not segments:
+            return
+
+        if (
+            self.straddling_group_policy
+            == StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+        ):
+            for offset, (segment_label, segment_rows) in enumerate(segments):
+                effective_label = SplitLabel(segment_label)
+                if (
+                    train_only_normal_entities
+                    and effective_label is SplitLabel.TRAIN
+                    and any(
+                        row.entity_id is not None
+                        and is_anomalous_label(label_for_group(row.entity_id))
+                        for row in segment_rows
+                    )
+                ):
+                    effective_label = SplitLabel.IGNORED
+                seq = self._build_sequence(
+                    window_id + offset,
+                    segment_rows,
+                    infer_template,
+                    label_for_group,
+                    effective_label,
+                )
+                if seq is not None:
+                    yield seq
+            return
+
+        split_label_value = resolve_straddling_group_label(
+            self.straddling_group_policy.value,
+            segments,
+        )
+        if split_label_value is None:
+            return
+        split_label = SplitLabel(split_label_value)
+
+        seq = self._build_sequence(
+            window_id,
+            rows,
+            infer_template,
+            label_for_group,
+            (
+                SplitLabel.IGNORED
+                if (
+                    train_only_normal_entities
+                    and split_label is SplitLabel.TRAIN
+                    and any(
+                        row.entity_id is not None
+                        and is_anomalous_label(label_for_group(row.entity_id))
+                        for row in rows
+                    )
+                )
+                else split_label
+            ),
+        )
+        if seq is not None:
+            yield seq
 
     def _entity_ids_for_rows(self, rows: Collection[StructuredLine]) -> list[str]:
         """Return unique entity ids for one window in first-seen order.
@@ -605,9 +1078,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         if n <= 0:
             return 0
 
-        if n <= window_size:
+        if n < window_size:
+            return 0
+        if n == window_size:
             return 1
-        return 1 + math.ceil((n - window_size) / step)
+        return 1 + ((n - window_size) // step)
 
     @staticmethod
     def _count_time_windows(
@@ -668,9 +1143,12 @@ class EntitySequenceBuilder(SequenceBuilder):
     Attributes:
         train_on_normal_entities_only (bool): Whether anomalous entities are
             excluded from the training split budget.
+        continuous_context (bool): Whether adjacent entity windows should
+            carry state across sequence boundaries.
     """
 
     train_on_normal_entities_only: bool = False
+    continuous_context: bool = False
 
     @classmethod
     def from_dataset(
@@ -706,6 +1184,22 @@ class EntitySequenceBuilder(SequenceBuilder):
             Self: Copy with updated normal-only training behavior.
         """
         return replace(self, train_on_normal_entities_only=enabled)
+
+    def with_continuous_context(
+        self,
+        *,
+        enabled: bool = True,
+    ) -> Self:
+        """Treat consecutive entity windows as one continuous stream.
+
+        Args:
+            enabled (bool): Whether to carry model state across entity
+                boundaries.
+
+        Returns:
+            Self: Copy with updated continuity behaviour.
+        """
+        return replace(self, continuous_context=enabled)
 
     def _entity_split_counts(
         self,
@@ -829,7 +1323,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                 return [row.entity_id]
         return []
 
-    def __iter__(self) -> Iterator[TemplateSequence]:
+    def __iter__(self) -> Iterator[TemplateSequence]:  # noqa: C901, PLR0912
         """Iterate over template sequences yielded by the configured grouping.
 
         Yields:
@@ -837,9 +1331,47 @@ class EntitySequenceBuilder(SequenceBuilder):
         """
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        row_labels, _ = self._build_row_split_labels()
         counts, _ = self._entity_split_counts(label_for_group=label_for_group)
         normals_seen_in_train = 0
         test_start_index = counts.total_count - counts.test_count
+
+        if self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING:
+            window_id = 0
+            for rows in self.iter_grouped_rows():
+                entity_id = next(
+                    (row.entity_id for row in rows if row.entity_id is not None),
+                    None,
+                )
+                entity_is_anomalous = entity_id is not None and is_anomalous_label(
+                    label_for_group(entity_id),
+                )
+                prefixed_split_label = _split_label_from_prefixed_entity_id(entity_id)
+                if entity_id is None:
+                    split_label = SplitLabel.TRAIN
+                elif prefixed_split_label is not None and self.split_mode is None:
+                    split_label = prefixed_split_label
+                elif self.train_on_normal_entities_only and entity_is_anomalous:
+                    split_label = SplitLabel.IGNORED
+                elif self.split_mode in {
+                    RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+                    RawEntrySplitMode.PREFIX_COUNT,
+                }:
+                    split_label = SplitLabel.TRAIN
+                else:
+                    split_label = SplitLabel.TRAIN
+                for seq in self._build_sequences_for_group(
+                    window_id=window_id,
+                    rows=rows,
+                    infer_template=infer_template,
+                    label_for_group=label_for_group,
+                    split_label=split_label,
+                    row_labels=row_labels,
+                    train_only_normal_entities=self.train_on_normal_entities_only,
+                ):
+                    yield seq
+                    window_id += 1
+            return
 
         for window_id, rows in enumerate(self.iter_grouped_rows()):
             entity_id = next(
@@ -849,7 +1381,10 @@ class EntitySequenceBuilder(SequenceBuilder):
             entity_is_anomalous = entity_id is not None and is_anomalous_label(
                 label_for_group(entity_id),
             )
-            if window_id >= test_start_index:
+            prefixed_split_label = _split_label_from_prefixed_entity_id(entity_id)
+            if prefixed_split_label is not None and self.split_mode is None:
+                split_label = prefixed_split_label
+            elif window_id >= test_start_index:
                 split_label = SplitLabel.TEST
             elif self.train_on_normal_entities_only:
                 split_label = (
@@ -871,6 +1406,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                 infer_template,
                 label_for_group,
                 split_label,
+                continuous_context=self.continuous_context,
             )
             if seq is not None:
                 if (
@@ -880,6 +1416,52 @@ class EntitySequenceBuilder(SequenceBuilder):
                 ):
                     normals_seen_in_train += 1
                 yield seq
+
+
+def _split_label_from_prefixed_entity_id(entity_id: str | None) -> SplitLabel | None:
+    """Return a split label from known preprocessed-session entity prefixes.
+
+    Args:
+        entity_id (str | None): Entity id to inspect.
+
+    Returns:
+        SplitLabel | None: Derived split label, or `None` when no known
+            prefix is present.
+    """
+    if entity_id is None:
+        return None
+    prefix = entity_id.split(":", 1)[0].strip().lower()
+    if not prefix:
+        return None
+    # For post-processed pre-split datasets, entity ids are prefixed with the
+    # split file alias (for example `hdfs_train:*`, `openstack_test_normal:*`).
+    # We infer train/test directly from that alias instead of hardcoding
+    # dataset-specific names in the sequence builder.
+    if "train" in prefix:
+        return SplitLabel.TRAIN
+    if "test" in prefix:
+        return SplitLabel.TEST
+    return None
+
+
+def _split_label_from_row_split_labels(
+    row_split_labels: Collection[SplitLabel],
+) -> SplitLabel:
+    """Return the preserved split label for one grouped window.
+
+    Args:
+        row_split_labels (Collection[SplitLabel]): Raw-entry split labels
+            aligned with one grouped window.
+
+    Returns:
+        SplitLabel: Window-level split label, keeping train precedence when a
+            window straddles the raw-entry cutoff.
+    """
+    if any(label is SplitLabel.TRAIN for label in row_split_labels):
+        return SplitLabel.TRAIN
+    if any(label is SplitLabel.TEST for label in row_split_labels):
+        return SplitLabel.TEST
+    return SplitLabel.IGNORED
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -936,6 +1518,7 @@ class NonEntitySequenceBuilder(SequenceBuilder):
                 infer_template,
                 label_for_group,
                 split_label,
+                allow_group_label_fallback=False,
             )
             if seq is not None:
                 yield seq
@@ -1035,3 +1618,163 @@ class TimeSequenceBuilder(NonEntitySequenceBuilder):
             time_span_ms=self.time_span_ms,
             step=self.step,
         )
+
+    @override
+    def __iter__(self) -> Iterator[TemplateSequence]:
+        """Iterate over time windows with optional raw-entry split semantics.
+
+        Yields:
+            TemplateSequence: One grouped time window, optionally segmented
+                according to a raw-entry split applied before grouping.
+        """
+        if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+            yield from NonEntitySequenceBuilder.__iter__(self)
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        row_labels, _ = self._build_row_split_labels()
+
+        for window_id, rows in enumerate(self.iter_grouped_rows()):
+            split_label = _split_label_from_row_split_labels(
+                [row_labels.get(row.line_order, SplitLabel.TRAIN) for row in rows],
+            )
+            yield from self._build_sequences_for_group(
+                window_id=window_id,
+                rows=rows,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+                split_label=split_label,
+                row_labels=row_labels,
+                train_only_normal_entities=False,
+            )
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ChronologicalStreamSequenceBuilder(NonEntitySequenceBuilder):
+    """Sequence builder for chronological raw-entry stream chunks.
+
+    Attributes:
+        chunk_size (int): Maximum number of raw entries per emitted chunk.
+    """
+
+    chunk_size: int = 100_000
+
+    @override
+    def __post_init__(self) -> None:
+        if self.chunk_size <= 0:
+            msg = "chunk_size must be a positive integer."
+            raise ValueError(msg)
+        SequenceBuilder.__post_init__(self)
+
+    @override
+    def train_sequence_count_unit_hint(self) -> str:
+        """Return the unit label for stream chunks.
+
+        Returns:
+            str: Human-readable unit label for stream progress.
+        """
+        return "chunks"
+
+    @override
+    def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
+        """Return rows grouped into deterministic chronological chunks.
+
+        Returns:
+            Iterator[Collection[StructuredLine]]: Deterministic chronological
+                chunks of structured rows.
+        """
+
+        def _iter() -> Iterator[Collection[StructuredLine]]:
+            chunk: list[StructuredLine] = []
+            for row in self._iter_source_order_rows():
+                chunk.append(row)
+                if len(chunk) >= self.chunk_size:
+                    yield tuple(chunk)
+                    chunk = []
+            if chunk:
+                yield tuple(chunk)
+
+        return _iter()
+
+    @override
+    def count_windows(self) -> int:
+        """Return the number of chronological stream chunks.
+
+        Returns:
+            int: Count of chronological stream chunks implied by the sink.
+        """
+        row_count = sum(1 for _ in self._iter_source_order_rows())
+        if row_count <= 0:
+            return 0
+        return math.ceil(row_count / self.chunk_size)
+
+    def __iter__(self) -> Iterator[TemplateSequence]:
+        """Iterate over chronological stream chunks with optional raw splits.
+
+        Yields:
+            TemplateSequence: One preserved chronological chunk per emitted
+            sequence. When a raw-entry split is active, per-event training
+            eligibility is attached through `training_event_mask` instead of
+            fragmenting the chunk.
+        """
+        if self.split_application_order == SplitApplicationOrder.AFTER_GROUPING:
+            yield from NonEntitySequenceBuilder.__iter__(self)
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        row_labels, _ = self._build_row_split_labels()
+
+        for window_id, rows in enumerate(self.iter_grouped_rows()):
+            row_split_labels = [
+                row_labels.get(row.line_order, SplitLabel.TRAIN) for row in rows
+            ]
+            split_label = self._split_label_for_chronological_chunk(
+                row_split_labels,
+            )
+            evaluation_event_mask = tuple(
+                row_labels.get(row.line_order, SplitLabel.TRAIN) is SplitLabel.TEST
+                for row in rows
+            )
+            training_event_mask = tuple(
+                (row_labels.get(row.line_order, SplitLabel.TRAIN) is SplitLabel.TRAIN)
+                and not is_anomalous_label(row.anomalous)
+                for row in rows
+            )
+            sequence = self._build_sequence(
+                window_id=window_id,
+                rows=rows,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+                split_label=split_label,
+                training_event_mask=training_event_mask,
+                evaluation_event_mask=evaluation_event_mask,
+                continuous_context=True,
+            )
+            if sequence is not None:
+                yield sequence
+
+    @staticmethod
+    def _split_label_for_chronological_chunk(
+        row_split_labels: Collection[SplitLabel],
+    ) -> SplitLabel:
+        """Return the preserved split label for one chronological chunk.
+
+        Args:
+            row_split_labels (Collection[SplitLabel]): Raw-entry split labels
+                aligned with one preserved chronological chunk.
+
+        Returns:
+            SplitLabel: Chunk-level split label.
+
+        The raw-entry stream keeps chunk boundaries intact. When a chunk
+        straddles the split cutoff, training takes precedence so the chunk
+        remains available to the training prefix while the event-level mask
+        suppresses ineligible targets.
+        """
+        if any(label is SplitLabel.TRAIN for label in row_split_labels):
+            return SplitLabel.TRAIN
+        if any(label is SplitLabel.TEST for label in row_split_labels):
+            return SplitLabel.TEST
+        return SplitLabel.IGNORED

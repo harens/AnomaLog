@@ -1,3 +1,21 @@
 name = "tiny_runner_smoke"
-dataset = "tiny_dataset"
-model = "template_frequency"
+
+[dataset]
+name = "tiny_dataset"
+dataset_name = "tiny-bgl-runner"
+structured_parser = "bgl"
+
+[dataset.source]
+type = "local_dir"
+path = "."
+raw_logs_relpath = "logs/tiny_bgl_happy_path.log"
+
+[dataset.sequence]
+grouping = "fixed"
+window_size = 3
+step = 2
+train_fraction = 0.34
+test_fraction = 0.25
+
+[[models]]
+ref = "template_frequency"

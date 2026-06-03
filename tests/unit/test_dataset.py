@@ -2,27 +2,59 @@
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from prefect.assets import Asset
 from prefect.logging import disable_run_logger
 from typing_extensions import override
 
 from anomalog import DatasetSpec
 from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader
-from anomalog.parsers import BGLParser, Drain3Parser, ParquetStructuredSink
+from anomalog.parsers import (
+    BGLParser,
+    Drain3Parser,
+    OpenStackDeepLogParser,
+    ParquetStructuredSink,
+)
 from anomalog.parsers.structured import (
     BaseStructuredLine,
+    DelimitedLabelledEventParser,
     StructuredParser,
     StructuredSink,
 )
 from anomalog.parsers.structured.contracts import EntityLabelCounts, StructuredLine
-from anomalog.parsers.template import ExtractedParameters, LogTemplate, TemplateParser
-from anomalog.presets import bgl, hdfs_v1, preset_names, resolve_preset
-from anomalog.sources import DatasetSource
+from anomalog.parsers.template import (
+    ExtractedParameters,
+    IdentityTemplateParser,
+    LogTemplate,
+    TemplateParser,
+)
+from anomalog.presets import (
+    bgl,
+    hdfs_v1,
+    hdfs_wuyifan18_deepcase_table_iv_compat,
+    hdfs_wuyifan18_deeplog_preprocessed,
+    openstack_deeplog_parameter_ci_approx,
+    openstack_deeplog_preprocessed,
+    preset_names,
+    resolve_preset,
+    thunderbird,
+    thunderbird_smoke,
+)
+from anomalog.sequences import (
+    EntitySequenceBuilder,
+    RawEntrySplitMode,
+    SplitApplicationOrder,
+    SplitLabel,
+    StraddlingGroupPolicy,
+)
+from anomalog.sources import DatasetSource, PostProcessedSource, RemoteZipSource
 from anomalog.sources.local import LocalZipSource
+from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
 from tests.unit.helpers import InMemoryStructuredSink, structured_line
 
 
@@ -78,7 +110,10 @@ class _RecordingTemplateParser(TemplateParser):
     def train(
         self,
         untemplated_text_iterator: Callable[[], Iterator[str]],
+        *,
+        asset_deps: list[Asset] | None = None,
     ) -> None:
+        del asset_deps
         type(self).seen_lines.extend(list(untemplated_text_iterator()))
 
 
@@ -124,6 +159,11 @@ class _RecordingSink(StructuredSink):
         columns: Sequence[str] | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         return self._sink.iter_structured_lines(columns=columns)
+
+    def iter_structured_lines_in_source_order(
+        self,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        return self._sink.iter_structured_lines_in_source_order()
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         return self._sink.load_inline_label_cache()
@@ -199,6 +239,118 @@ def test_dataset_spec_build_requires_source_and_structured_parser() -> None:
         ).build()
 
 
+def test_dataset_spec_builds_inline_labelled_streams_with_only_normal_rows(
+    tmp_path: Path,
+) -> None:
+    """Inline-labelled datasets should not require a separate label reader.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the raw dataset and
+            cache roots.
+    """
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    raw_logs_file = dataset_root / "hdfs_events.log"
+    expected_row_count = 2
+    raw_logs_file.write_text("session-a\t0\tE1\nsession-b\t0\tE2\n", encoding="utf-8")
+
+    dataset = (
+        DatasetSpec("demo-inline-labelled")
+        .from_source(
+            _StubSource(
+                dataset_root=dataset_root,
+                raw_logs_file=raw_logs_file,
+            ),
+        )
+        .parse_with(DelimitedLabelledEventParser())
+        .template_with(IdentityTemplateParser)
+        .with_cache_paths(
+            CachePathsConfig(
+                data_root=tmp_path / "data",
+                cache_root=tmp_path / "cache",
+            ),
+        )
+    )
+
+    with disable_run_logger():
+        built = dataset.build()
+
+    rows = list(built.sink.iter_structured_lines_in_source_order()())
+
+    assert [row.anomalous for row in rows] == [0, 0]
+    assert built.sink.count_rows() == expected_row_count
+    assert built.anomaly_labels.label_for_group("session-a") is None
+
+
+def test_entity_sequence_builder_splits_partial_entities() -> None:
+    """Raw-entry splits should still yield entity-local train and test sequences."""
+    expected_sequence_count = 4
+    expected_train_sequence_count = 2
+    expected_test_sequence_count = 2
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=_NullParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="entity-a",
+                untemplated_message_text="a-0",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=130,
+                entity_id="entity-a",
+                untemplated_message_text="a-1",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=110,
+                entity_id="entity-b",
+                untemplated_message_text="b-0",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=120,
+                entity_id="entity-b",
+                untemplated_message_text="b-1",
+                anomalous=0,
+            ),
+        ],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=lambda text: (text, ()),
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_fraction=0.5,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert len(sequences) == expected_sequence_count
+    assert sum(sequence.split_label is SplitLabel.TRAIN for sequence in sequences) == (
+        expected_train_sequence_count
+    )
+    assert sum(sequence.split_label is SplitLabel.TEST for sequence in sequences) == (
+        expected_test_sequence_count
+    )
+
+
 # Protects the default-Drain3 contract.
 # The nearby uncovered branch is an internal impossible-state guard.
 @pytest.mark.allow_no_new_coverage
@@ -221,7 +373,98 @@ def test_builtin_presets_register_and_resolve_by_name() -> None:
     """Built-in presets should be available through the public registry."""
     assert resolve_preset("bgl") is bgl
     assert resolve_preset("hdfs_v1") is hdfs_v1
-    assert set(preset_names()) >= {"bgl", "hdfs_v1"}
+    assert (
+        resolve_preset("hdfs_wuyifan18_deeplog_preprocessed")
+        is hdfs_wuyifan18_deeplog_preprocessed
+    )
+    assert (
+        resolve_preset("openstack_deeplog_preprocessed")
+        is openstack_deeplog_preprocessed
+    )
+    assert resolve_preset("thunderbird") is thunderbird
+    assert resolve_preset("thunderbird_smoke") is thunderbird_smoke
+    thunderbird_source = thunderbird.source
+    assert isinstance(thunderbird_source, PostProcessedSource)
+    assert thunderbird_source.raw_logs_relpath == Path(
+        "preprocessed/thunderbird_slice_160m_10m.log",
+    )
+    assert isinstance(thunderbird_source.base_source, RemoteZipSource)
+    assert thunderbird_source.base_source.raw_logs_relpath == Path(
+        "Thunderbird.log",
+    )
+    assert isinstance(thunderbird_source.post_process, partial)
+    assert thunderbird_source.post_process.keywords == {
+        "source_log_relpath": Path("Thunderbird.log"),
+        "start_line": 160_000_000,
+        "line_limit": 10_000_000,
+    }
+    assert set(preset_names()) >= {
+        "bgl",
+        "hdfs_v1",
+        "hdfs_wuyifan18_deeplog_preprocessed",
+        "openstack_deeplog_preprocessed",
+        "openstack_deeplog_parameter_ci_approx",
+        "thunderbird",
+        "thunderbird_smoke",
+    }
+
+
+# Protects the registry contract for the new preset; the nearby preset lookup
+# branch is already covered by the existing built-in preset registry test.
+@pytest.mark.allow_no_new_coverage
+def test_wuyifan18_deeplog_hdfs_preset_uses_preprocessed_session_source() -> None:
+    """The new preset should stay pinned to the preprocessed DeepLog files."""
+    assert hdfs_wuyifan18_deeplog_preprocessed.template_parser is IdentityTemplateParser
+    source = hdfs_wuyifan18_deeplog_preprocessed.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/hdfs_events.log")
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.base_source, RemoteZipSource)
+    assert source.base_source.md5_checksum == "36a2f69d4a4def7b4b6a19b27838291e"
+
+
+def test_wuyifan18_deepcase_hdfs_preset_uses_the_same_archive_checksum() -> None:
+    """The DeepCASE compatibility preset should use the same GitHub archive hash."""
+    assert (
+        hdfs_wuyifan18_deepcase_table_iv_compat.template_parser
+        is IdentityTemplateParser
+    )
+    source = hdfs_wuyifan18_deepcase_table_iv_compat.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/hdfs_test_normal_compat.log")
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.base_source, RemoteZipSource)
+    assert source.base_source.md5_checksum == "36a2f69d4a4def7b4b6a19b27838291e"
+
+
+@pytest.mark.allow_no_new_coverage
+def test_openstack_deeplog_preset_uses_preprocessed_session_source() -> None:
+    """OpenStack DeepLog preset should expose the preprocessed event stream."""
+    assert openstack_deeplog_preprocessed.template_parser is IdentityTemplateParser
+    source = openstack_deeplog_preprocessed.source
+    assert source is not None
+    assert source.raw_logs_relpath == Path("preprocessed/openstack_labelled_raw.log")
+
+
+@pytest.mark.allow_no_new_coverage
+def test_openstack_deeplog_parameter_ci_preset_uses_parameter_preserving_source() -> (
+    None
+):
+    """The parameter-only preset should bind the raw-parameter OpenStack path."""
+    assert (
+        openstack_deeplog_parameter_ci_approx.template_parser is IdentityTemplateParser
+    )
+    source = openstack_deeplog_parameter_ci_approx.source
+    assert isinstance(source, PostProcessedSource)
+    assert isinstance(source.post_process, partial)
+    assert source.post_process.func is materialise_openstack_deeplog_parameter_ci_subset
+    assert (
+        openstack_deeplog_parameter_ci_approx.structured_parser.__class__
+        is OpenStackDeepLogParser
+    )
+    assert source.raw_logs_relpath == Path(
+        "preprocessed/openstack_deeplog_parameter_subset.log",
+    )
 
 
 def test_builtin_presets_reject_unknown_names() -> None:

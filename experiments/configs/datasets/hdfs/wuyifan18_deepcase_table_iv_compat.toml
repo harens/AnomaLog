@@ -1,0 +1,24 @@
+name = "hdfs_wuyifan18_deepcase_table_iv_compat"
+description = "DeepCASE Table-IV compatibility view over the normal-only HDFS entity-local session stream, using the first 20% for training and the remaining 80% for prediction-only evaluation."
+
+[dataset]
+name = "hdfs_wuyifan18_deepcase_table_iv_compat"
+dataset_name = "HDFS_WUYIFAN18_DEEPCASE_TABLE_IV_COMPAT"
+preset = "hdfs_wuyifan18_deepcase_table_iv_compat"
+template_parser = "identity"
+evaluation_unit = "sequence"
+description = "Prediction-only HDFS compatibility config built from hdfs_test_normal only, grouped by entity so DeepCASE can consume the 20/80 chronological split without crossing entity boundaries."
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.2
+test_fraction = 0.8
+
+[dataset.sequence.split]
+mode = "raw_entry_prefix_fraction"
+application_order = "before_grouping"
+straddling_group_policy = "split_partial_sequences"
+train_entry_fraction = 0.2
+
+[dataset.cache_paths]
+namespace = "hdfs_wuyifan18_deepcase_table_iv_compat"

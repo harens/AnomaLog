@@ -1,11 +1,16 @@
 """Registry helpers for built-in template parsers."""
 
 from anomalog.parsers.template.dataset import TemplateParser
-from anomalog.parsers.template.parsers import Drain3Parser, IdentityTemplateParser
+from anomalog.parsers.template.parsers import (
+    Drain3Parser,
+    IdentityTemplateParser,
+    SpellTemplateParser,
+)
 
 _TEMPLATE_PARSERS: dict[str, type[TemplateParser]] = {
     "drain3": Drain3Parser,
     "identity": IdentityTemplateParser,
+    "spell": SpellTemplateParser,
 }
 
 

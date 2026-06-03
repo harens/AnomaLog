@@ -1,0 +1,11 @@
+name = "entity_chronological_base"
+description = "Shared entity-grouped dataset contract for chronological baselines."
+
+[dataset]
+template_parser = "drain3"
+description = "Built-in entity-grouped preset with chronological prefix/suffix splitting."
+
+[dataset.sequence]
+grouping = "entity"
+train_fraction = 0.2
+train_on_normal_entities_only = false
