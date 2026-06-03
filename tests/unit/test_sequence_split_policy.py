@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from anomalog import _sequence_split_policy as split_policy
-from anomalog._sequence_split_policy import (
+from anomalog.sequences import (
     RawEntrySplitRequest,
     build_raw_entry_split_plan,
     count_straddling_groups,
@@ -46,33 +45,38 @@ def test_build_raw_entry_split_plan_rejects_unknown_mode() -> None:
 @pytest.mark.parametrize(
     "request_",
     [
-            RawEntrySplitRequest(
-                split_mode=split_policy.RAW_ENTRY_SPLIT_MODE_PREFIX_COUNT,
-                application_order="before_grouping",
-                train_entry_count=0,
-                train_entry_fraction=None,
-                train_normal_entry_fraction=None,
-            ),
-            RawEntrySplitRequest(
-                split_mode=split_policy.RAW_ENTRY_SPLIT_MODE_PREFIX_FRACTION,
-                application_order="before_grouping",
-                train_entry_count=None,
-                train_entry_fraction=0.0,
-                train_normal_entry_fraction=None,
-            ),
-            RawEntrySplitRequest(
-                split_mode=split_policy.RAW_ENTRY_SPLIT_MODE_PREFIX_NORMAL_FRACTION,
-                application_order="before_grouping",
-                train_entry_count=None,
-                train_entry_fraction=None,
-                train_normal_entry_fraction=0.5,
-            ),
-        ],
+        RawEntrySplitRequest(
+            split_mode="raw_entry_prefix_count",
+            application_order="before_grouping",
+            train_entry_count=0,
+            train_entry_fraction=None,
+            train_normal_entry_fraction=None,
+        ),
+        RawEntrySplitRequest(
+            split_mode="raw_entry_prefix_fraction",
+            application_order="before_grouping",
+            train_entry_count=None,
+            train_entry_fraction=0.0,
+            train_normal_entry_fraction=None,
+        ),
+        RawEntrySplitRequest(
+            split_mode="raw_entry_prefix_normal_fraction",
+            application_order="before_grouping",
+            train_entry_count=None,
+            train_entry_fraction=None,
+            train_normal_entry_fraction=0.5,
+        ),
+    ],
 )
 def test_build_raw_entry_split_plan_handles_empty_rows(
     request_: RawEntrySplitRequest,
 ) -> None:
-    """Empty raw-entry splits should produce zeroed summaries."""
+    """Empty raw-entry splits should produce zeroed summaries.
+
+    Args:
+        request_ (RawEntrySplitRequest): Parameterised split request covering
+            each supported empty-input branch.
+    """
     plan = build_raw_entry_split_plan([], request=request_)
 
     assert plan.row_labels == {}
@@ -95,11 +99,12 @@ def test_build_raw_entry_split_plan_counts_ignored_rows_for_normal_only_prefix()
     None
 ):
     """Normal-only prefix splits should count ignored anomalous rows separately."""
+    expected_test_raw_entry_count = 2
     rows = _rows(1, 0, 0, 1)
     plan = build_raw_entry_split_plan(
         rows,
         request=RawEntrySplitRequest(
-            split_mode=split_policy.RAW_ENTRY_SPLIT_MODE_PREFIX_NORMAL_FRACTION,
+            split_mode="raw_entry_prefix_normal_fraction",
             application_order="before_grouping",
             train_entry_count=None,
             train_entry_fraction=None,
@@ -108,19 +113,20 @@ def test_build_raw_entry_split_plan_counts_ignored_rows_for_normal_only_prefix()
     )
 
     assert plan.row_labels == {
-        0: split_policy.RAW_ENTRY_SPLIT_IGNORED,
-        1: split_policy.RAW_ENTRY_SPLIT_TRAIN,
-        2: split_policy.RAW_ENTRY_SPLIT_TEST,
-        3: split_policy.RAW_ENTRY_SPLIT_TEST,
+        0: "ignored",
+        1: "train",
+        2: "test",
+        3: "test",
     }
     assert plan.summary.ignored_raw_entry_count == 1
     assert plan.summary.ignored_anomalous_entry_count == 1
     assert plan.summary.train_normal_entry_count == 1
-    assert plan.summary.test_raw_entry_count == 2
+    assert plan.summary.test_raw_entry_count == expected_test_raw_entry_count
 
 
 def test_split_rows_by_label_and_straddling_policy_helpers() -> None:
     """Contiguous label grouping and straddler policies should stay stable."""
+    expected_straddling_group_count = 2
     rows = _rows(0, 0, 1, 1)
     row_labels = {0: "train", 1: "train", 2: "test", 3: "ignored"}
 
@@ -129,26 +135,41 @@ def test_split_rows_by_label_and_straddling_policy_helpers() -> None:
         ("test", [rows[2]]),
         ("ignored", [rows[3]]),
     ]
-    assert count_straddling_groups([rows[:2], rows[1:3], rows[2:]], row_labels) == 2
-    assert resolve_straddling_group_label(
-        split_policy.STRADDLING_GROUP_POLICY_DROP_STRADDLERS,
-        [("train", rows[:2]), ("train", [rows[2]])],
-    ) == "train"
-    assert resolve_straddling_group_label(
-        split_policy.STRADDLING_GROUP_POLICY_ASSIGN_BY_FIRST_EVENT,
-        [("train", rows[:2]), ("test", [rows[2]])],
-    ) == "train"
-    assert resolve_straddling_group_label(
-        split_policy.STRADDLING_GROUP_POLICY_ASSIGN_BY_LAST_EVENT,
-        [("train", rows[:2]), ("test", [rows[2]])],
-    ) == "test"
-    assert resolve_straddling_group_label(
-        split_policy.STRADDLING_GROUP_POLICY_DROP_STRADDLERS,
-        [("train", rows[:1]), ("test", rows[1:2])],
-    ) is None
+    assert (
+        count_straddling_groups([rows[:2], rows[1:3], rows[2:]], row_labels)
+        == expected_straddling_group_count
+    )
+    assert (
+        resolve_straddling_group_label(
+            "drop_straddlers",
+            [("train", rows[:2]), ("train", [rows[2]])],
+        )
+        == "train"
+    )
+    assert (
+        resolve_straddling_group_label(
+            "assign_by_first_event",
+            [("train", rows[:2]), ("test", [rows[2]])],
+        )
+        == "train"
+    )
+    assert (
+        resolve_straddling_group_label(
+            "assign_by_last_event",
+            [("train", rows[:2]), ("test", [rows[2]])],
+        )
+        == "test"
+    )
+    assert (
+        resolve_straddling_group_label(
+            "drop_straddlers",
+            [("train", rows[:1]), ("test", rows[1:2])],
+        )
+        is None
+    )
     with pytest.raises(ValueError, match="split_partial_sequences is handled"):
         resolve_straddling_group_label(
-            split_policy.STRADDLING_GROUP_POLICY_SPLIT_PARTIAL_SEQUENCES,
+            "split_partial_sequences",
             [("train", rows[:1]), ("test", rows[1:2])],
         )
     with pytest.raises(ValueError, match="Unsupported straddling policy"):

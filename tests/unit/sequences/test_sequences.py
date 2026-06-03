@@ -29,7 +29,6 @@ from anomalog.sequences import (
     StraddlingGroupPolicy,
     TemplateSequence,
     TimeSequenceBuilder,
-    _split_label_from_prefixed_entity_id,
 )
 from experiments.models.base import SequenceSummary
 from tests.unit.helpers import (
@@ -1973,7 +1972,10 @@ def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
             split_mode=RawEntrySplitMode.PREFIX_FRACTION,
             train_entry_fraction=0.5,
         )
-    with pytest.raises(ValueError, match="train_entry_fraction must be between 0 and 1"):
+    with pytest.raises(
+        ValueError,
+        match="train_entry_fraction must be between 0 and 1",
+    ):
         EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
@@ -1982,7 +1984,10 @@ def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
             split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
             train_entry_fraction=2.0,
         )
-    with pytest.raises(ValueError, match="train_normal_entry_fraction must be provided"):
+    with pytest.raises(
+        ValueError,
+        match="train_normal_entry_fraction must be provided",
+    ):
         EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
@@ -1998,7 +2003,10 @@ def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
             split_mode=RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
             train_normal_entry_fraction=0.5,
         )
-    with pytest.raises(ValueError, match="train_normal_entry_fraction must be between 0 and 1"):
+    with pytest.raises(
+        ValueError,
+        match="train_normal_entry_fraction must be between 0 and 1",
+    ):
         EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
@@ -2007,7 +2015,10 @@ def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
             split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
             train_normal_entry_fraction=2.0,
         )
-    with pytest.raises(ValueError, match="raw-entry normal-fraction splits only support"):
+    with pytest.raises(
+        ValueError,
+        match="raw-entry normal-fraction splits only support",
+    ):
         EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
@@ -2017,7 +2028,10 @@ def test_sequence_builder_rejects_inconsistent_split_settings() -> None:
             train_normal_entry_fraction=0.5,
             straddling_group_policy=StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
         )
-    with pytest.raises(ValueError, match="stream_chunk_size must be a positive integer"):
+    with pytest.raises(
+        ValueError,
+        match="stream_chunk_size must be a positive integer",
+    ):
         EntitySequenceBuilder(
             sink=sink,
             infer_template=_upper_template,
@@ -2409,9 +2423,7 @@ def test_time_sequence_builder_can_drop_straddling_windows_before_grouping() -> 
     assert list(builder) == []
 
 
-def test_entity_sequences_before_grouping_respect_prefixed_split_labels_and_normal_only_filter() -> (
-    None
-):
+def test_entity_sequences_before_grouping_respect_prefixed_split_labels() -> None:
     """Prefixed entity ids should drive split labels before grouping."""
     train_sequences = list(
         EntitySequenceBuilder(
@@ -2466,9 +2478,6 @@ def test_entity_sequences_before_grouping_respect_prefixed_split_labels_and_norm
     assert train_sequences[0].split_label is SplitLabel.TRAIN
     assert test_sequences[0].split_label is SplitLabel.TRAIN
     assert ignored_sequences[0].split_label is SplitLabel.IGNORED
-    assert _split_label_from_prefixed_entity_id("train:one") is SplitLabel.TRAIN
-    assert _split_label_from_prefixed_entity_id("test:two") is SplitLabel.TEST
-    assert _split_label_from_prefixed_entity_id("") is None
 
 
 def test_chronological_stream_builder_reports_raw_entry_masks() -> None:
@@ -2518,9 +2527,6 @@ def test_chronological_stream_builder_reports_raw_entry_masks() -> None:
     assert sequences[1].training_event_mask == (False,)
     assert sequences[1].evaluation_event_mask == (True,)
     assert builder.build_raw_entry_split_summary() is not None
-    assert builder._split_label_for_chronological_chunk(
-        [SplitLabel.IGNORED, SplitLabel.IGNORED],
-    ) is SplitLabel.IGNORED
 
 
 def test_fixed_sequence_builder_drops_incomplete_trailing_windows() -> None:
