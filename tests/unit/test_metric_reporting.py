@@ -13,7 +13,6 @@ from experiments.models.metric_reporting import (
     select_primary_metric_scope,
 )
 from experiments.models.metric_schema import (
-    AggregationPolicy,
     EvaluationUnit,
     MetricScope,
     MetricStatus,
@@ -40,13 +39,13 @@ def test_sequence_level_binary_metrics_are_valid_for_mixed_labels() -> None:
             counted_predictions=19,
             abstained_prediction_count=0,
             ignored_prediction_count=0,
-            aggregation_policy=AggregationPolicy.AUTO_DECISION,
         ),
     )
 
     assert block.status is MetricStatus.VALID
     assert block.invalid_reason is None
     assert block.class_counts == {"normal": 12, "anomalous": 7}
+    assert not hasattr(block, "aggregation_policy")
     assert block.confusion_matrix is not None
     assert block.headline_metrics["precision"] == pytest.approx(6 / 8)
     assert block.headline_metrics["recall"] == pytest.approx(6 / 7)
@@ -186,3 +185,27 @@ def test_deepcase_style_abstention_keeps_coverage_separate() -> None:
         EXPECTED_TEST_COUNT
     )
     assert block.headline_metrics["accuracy"] == pytest.approx(3 / 4)
+
+
+def test_binary_metric_blocks_require_matching_units() -> None:
+    """Binary blocks should still reject mismatched prediction and label units."""
+    block = build_binary_metric_block(
+        request=BinaryMetricBlockRequest(
+            metric_scope=MetricScope.EVENT_LEVEL_DETECTION,
+            prediction_unit=EvaluationUnit.EVENT,
+            label_unit=EvaluationUnit.SEQUENCE,
+            tp=1,
+            fp=0,
+            tn=1,
+            fn=0,
+            normal_count=1,
+            anomalous_count=1,
+            evaluation_unit_count=2,
+            counted_predictions=2,
+            abstained_prediction_count=0,
+            ignored_prediction_count=0,
+        ),
+    )
+
+    assert block.status is MetricStatus.INVALID
+    assert block.invalid_reason == "label_unit_prediction_unit_mismatch"

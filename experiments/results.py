@@ -496,11 +496,6 @@ def build_metric_metadata(
             None if primary_block is None else primary_block.prediction_unit.value
         ),
         "label_unit": None if primary_block is None else primary_block.label_unit.value,
-        "aggregation_policy": (
-            None
-            if primary_block is None or primary_block.aggregation_policy is None
-            else primary_block.aggregation_policy.value
-        ),
         "split_policy": split_policy,
         "stream_segment_policy": stream_segment_policy,
         "primary_metric_scope": (

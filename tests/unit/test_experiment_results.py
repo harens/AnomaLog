@@ -12,6 +12,8 @@ from anomalog.parsers.template import IdentityTemplateParser, TemplatedDataset
 from anomalog.sequences import EntitySequenceBuilder
 from experiments.config import load_experiment_bundles
 from experiments.models.base import ModelManifest, ModelRunSummary, SequenceSummary
+from experiments.models.metric_reporting import MetricBlock
+from experiments.models.metric_schema import EvaluationUnit, MetricScope, MetricStatus
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -125,6 +127,88 @@ def test_compact_run_metrics_report_drops_debug_only_diagnostics() -> None:
     assert diagnostics["top_k"] == {"k_values": [1, 2], "accuracy": {}}
     assert "hit_count" not in diagnostics["top_k"]
     assert diagnostics["classification_top1_weighted"] == {"precision": 0.2}
+
+
+def test_build_metric_metadata_omits_aggregation_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persisted metric metadata should not expose the retired aggregation field."""
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("data"),
+            cache_root=Path("cache"),
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    metric_block = MetricBlock(
+        metric_scope=MetricScope.SEQUENCE_LEVEL_DETECTION,
+        prediction_unit=EvaluationUnit.SEQUENCE,
+        label_unit=EvaluationUnit.SEQUENCE,
+        status=MetricStatus.VALID,
+    )
+    model_summary = ModelRunSummary(
+        metrics={},
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=0,
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+        ),
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_metric_blocks",
+        lambda **_: {MetricScope.SEQUENCE_LEVEL_DETECTION: metric_block},
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_evaluation_unit_for_dataset",
+        lambda _: EvaluationUnit.SEQUENCE,
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_split_policy",
+        lambda **_: {"train_fraction": 0.5},
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_stream_segment_policy",
+        lambda _: {"mode": "none"},
+    )
+
+    metadata = experiment_results.build_metric_metadata(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
+
+    assert "aggregation_policy" not in metadata
+    assert metadata["prediction_unit"] == EvaluationUnit.SEQUENCE.value
 
 
 def test_compact_model_manifest_trims_debug_only_fields() -> None:

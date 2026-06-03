@@ -7,12 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from experiments.models.metric_schema import (
-    AggregationPolicy,
-    EvaluationUnit,
-    MetricScope,
-    MetricStatus,
-)
+from experiments.models.metric_schema import EvaluationUnit, MetricScope, MetricStatus
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,7 +31,6 @@ class BinaryMetricBlockRequest:  # noqa: DOC601 DOC603
         counted_predictions (int | None): Optional explicit decision count.
         abstained_prediction_count (int | None): Optional abstention count.
         ignored_prediction_count (int | None): Optional ignored-label count.
-        aggregation_policy (AggregationPolicy | None): Optional aggregation policy.
         allow_single_class_reporting (bool): Whether to allow single-class blocks.
         diagnostic_only (bool): Whether to mark the block as diagnostic only.
         diagnostics (object | None): Optional diagnostic payload.
@@ -55,7 +49,6 @@ class BinaryMetricBlockRequest:  # noqa: DOC601 DOC603
     counted_predictions: int | None = None
     abstained_prediction_count: int | None = None
     ignored_prediction_count: int | None = None
-    aggregation_policy: AggregationPolicy | None = None
     allow_single_class_reporting: bool = False
     diagnostic_only: bool = False
     diagnostics: object | None = None
@@ -69,7 +62,6 @@ class DiagnosticMetricBlockRequest:  # noqa: DOC601 DOC603
         metric_scope (MetricScope): Metric block being built.
         prediction_unit (EvaluationUnit): Unit used for detector predictions.
         label_unit (EvaluationUnit): Unit used for ground-truth labels.
-        aggregation_policy (AggregationPolicy | None): Optional aggregation policy.
         status (MetricStatus): Status assigned to the diagnostic block.
         headline_metrics (object | None): Optional headline metrics payload.
         diagnostics (object | None): Optional diagnostic payload.
@@ -78,7 +70,6 @@ class DiagnosticMetricBlockRequest:  # noqa: DOC601 DOC603
     metric_scope: MetricScope
     prediction_unit: EvaluationUnit
     label_unit: EvaluationUnit
-    aggregation_policy: AggregationPolicy | None = None
     status: MetricStatus = MetricStatus.VALID
     headline_metrics: object | None = None
     diagnostics: object | None = None
@@ -107,7 +98,6 @@ class MetricBlock(msgspec.Struct, frozen=True):  # noqa: DOC601 DOC603
         metric_scope (MetricScope): Scope represented by the block.
         prediction_unit (EvaluationUnit): Unit used for predictions.
         label_unit (EvaluationUnit): Unit used for labels.
-        aggregation_policy (AggregationPolicy | None): Optional aggregation policy.
         status (MetricStatus): Validation status for the block.
         invalid_reason (str | None): Reason recorded when the block is invalid.
         evaluation_unit_count (int | None): Optional evaluation-unit total.
@@ -123,7 +113,6 @@ class MetricBlock(msgspec.Struct, frozen=True):  # noqa: DOC601 DOC603
     metric_scope: MetricScope
     prediction_unit: EvaluationUnit
     label_unit: EvaluationUnit
-    aggregation_policy: AggregationPolicy | None = None
     status: MetricStatus = MetricStatus.VALID
     invalid_reason: str | None = None
     evaluation_unit_count: int | None = None
@@ -192,9 +181,7 @@ def build_binary_metric_block(
         ):
             status = MetricStatus.INVALID
             invalid_reason = "evaluation_unit_count_mismatch"
-        elif request.label_unit is not request.prediction_unit and (
-            request.aggregation_policy is None
-        ):
+        elif request.label_unit is not request.prediction_unit:
             status = MetricStatus.INVALID
             invalid_reason = "label_unit_prediction_unit_mismatch"
         elif (
@@ -233,7 +220,6 @@ def build_binary_metric_block(
         metric_scope=request.metric_scope,
         prediction_unit=request.prediction_unit,
         label_unit=request.label_unit,
-        aggregation_policy=request.aggregation_policy,
         status=status,
         invalid_reason=invalid_reason,
         evaluation_unit_count=request.evaluation_unit_count,
@@ -302,7 +288,6 @@ def build_diagnostic_metric_block(
         metric_scope=request.metric_scope,
         prediction_unit=request.prediction_unit,
         label_unit=request.label_unit,
-        aggregation_policy=request.aggregation_policy,
         status=request.status,
         headline_metrics=headline_metrics,
         diagnostics=diagnostics,
