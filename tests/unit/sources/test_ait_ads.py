@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -15,9 +14,6 @@ from anomalog.sources.ait_ads import (
     materialise_ait_ads_alert_stream,
 )
 from anomalog.sources.local import LocalDirSource
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
@@ -538,7 +534,14 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AIT-ADS sources should validate label downloads and derived paths."""
+    """AIT-ADS sources should validate label downloads and derived paths.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree and derived output paths.
+        monkeypatch (pytest.MonkeyPatch): Replaces network and checksum helpers
+            so the materialisation path stays deterministic.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "fox_aminer.json").write_text(
@@ -601,7 +604,7 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
     source_absolute = AITADSScenarioSource(
         scenario_names=("fox",),
         base_source=LocalDirSource(path=source_root),
-        raw_logs_relpath=Path("/tmp/outside.jsonl"),
+        raw_logs_relpath=tmp_path / "outside.jsonl",
         labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
     )
     with pytest.raises(ValueError, match="must be relative to the dataset root"):
@@ -624,8 +627,7 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
 
     downloaded_labels = []
     labels_csv = (
-        "scenario,attack,start,end\n"
-        "fox,service_stop,1642410286.0,1642410288.0\n"
+        "scenario,attack,start,end\nfox,service_stop,1642410286.0,1642410288.0\n"
     )
 
     def _fake_urlretrieve(url: str, target: Path) -> None:
@@ -648,7 +650,12 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
 def test_ait_ads_helper_branches_cover_validation_and_canonicalisation(
     tmp_path: Path,
 ) -> None:
-    """AIT-ADS helper branches should stay stable for malformed inputs."""
+    """AIT-ADS helper branches should stay stable for malformed inputs.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage malformed fixture
+            files for branch coverage.
+    """
     with pytest.raises(ValueError, match="Unsupported AIT-ADS scenarios"):
         materialise_ait_ads_alert_stream(
             source_root=tmp_path,
@@ -659,11 +666,7 @@ def test_ait_ads_helper_branches_cover_validation_and_canonicalisation(
 
     overlap_labels = tmp_path / "overlap.csv"
     overlap_labels.write_text(
-        (
-            "scenario,attack,start,end\n"
-            "fox,first,0.0,2.0\n"
-            "fox,second,1.0,3.0\n"
-        ),
+        ("scenario,attack,start,end\nfox,first,0.0,2.0\nfox,second,1.0,3.0\n"),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="Overlapping label windows"):

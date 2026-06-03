@@ -207,7 +207,12 @@ def test_remote_zip_source_materialise_downloads_and_extracts_tarball(
 def test_remote_zip_source_extracts_real_tarball_members(
     tmp_path: Path,
 ) -> None:
-    """Tarball extraction should unpack real archive members to disk."""
+    """Tarball extraction should unpack real archive members to disk.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used to build the sample
+            tarball and extracted payloads.
+    """
     archive_path = tmp_path / "OpenStack.tar.gz"
     extracted_payload = tmp_path / "payload" / "preprocessed" / "demo.log"
     extracted_payload.parent.mkdir(parents=True, exist_ok=True)

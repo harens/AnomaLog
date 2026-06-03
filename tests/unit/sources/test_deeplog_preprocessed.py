@@ -167,7 +167,12 @@ def test_materialise_labelled_raw_stream_preserves_split_order_and_labels(
 def test_materialise_labelled_session_stream_skips_blank_lines(
     tmp_path: Path,
 ) -> None:
-    """Session materialisation should ignore empty rows in split files."""
+    """Session materialisation should ignore empty rows in split files.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used for the fixture
+            archive and output paths.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "train.log").write_text("a b\n\nc\n", encoding="utf-8")
@@ -181,16 +186,19 @@ def test_materialise_labelled_session_stream_skips_blank_lines(
     )
 
     assert raw_logs_path.read_text(encoding="utf-8") == (
-        "train.log:0\t0\ta\n"
-        "train.log:0\t0\tb\n"
-        "train.log:1\t0\tc\n"
+        "train.log:0\t0\ta\ntrain.log:0\t0\tb\ntrain.log:1\t0\tc\n"
     )
 
 
 def test_materialise_labelled_raw_stream_skips_blank_lines(
     tmp_path: Path,
 ) -> None:
-    """Raw materialisation should ignore blank rows while preserving labels."""
+    """Raw materialisation should ignore blank rows while preserving labels.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used for the fixture
+            archive and output paths.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "train.log").write_text("line one\n\nline two\n", encoding="utf-8")
@@ -204,21 +212,28 @@ def test_materialise_labelled_raw_stream_skips_blank_lines(
     )
 
     assert raw_logs_path.read_text(encoding="utf-8") == (
-        "train\t0\tline one\n"
-        "train\t0\tline two\n"
+        "train\t0\tline one\ntrain\t0\tline two\n"
     )
 
 
 def test_materialise_labelled_session_stream_rejects_missing_split_files(
     tmp_path: Path,
 ) -> None:
-    """Session materialisation should fail fast when an input split is absent."""
+    """Session materialisation should fail fast when an input split is absent.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used to stage the missing
+            split-file scenario.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     raw_logs_path = tmp_path / "preprocessed" / "events.log"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(FileNotFoundError, match=r"Missing missing\.log in extracted archive"):
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"Missing missing\.log in extracted archive",
+    ):
         materialise_labelled_session_stream(
             source_root,
             raw_logs_path,
@@ -229,13 +244,21 @@ def test_materialise_labelled_session_stream_rejects_missing_split_files(
 def test_materialise_labelled_raw_stream_rejects_missing_split_files(
     tmp_path: Path,
 ) -> None:
-    """Raw materialisation should fail fast when an input split is absent."""
+    """Raw materialisation should fail fast when an input split is absent.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used to stage the missing
+            split-file scenario.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     raw_logs_path = tmp_path / "preprocessed" / "events.log"
     raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(FileNotFoundError, match=r"Missing missing\.log in extracted archive"):
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"Missing missing\.log in extracted archive",
+    ):
         materialise_labelled_raw_stream(
             source_root,
             raw_logs_path,

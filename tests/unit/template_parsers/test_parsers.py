@@ -364,7 +364,15 @@ def test_spell_template_parser_handles_empty_training_output(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Spell parser training should tolerate an empty cluster set."""
+    """Spell parser training should tolerate an empty cluster set.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the working directory and
+            `spellpy` import for the optional-dependency failure path.
+        tmp_path (Path): Per-test filesystem sandbox for spell artefacts.
+        caplog (pytest.LogCaptureFixture): Log capture fixture used to assert
+            the warning emitted for empty training output.
+    """
     monkeypatch.chdir(tmp_path)
 
     class _FakeLogParser:

@@ -349,8 +349,15 @@ def test_thunderbird_parser_reports_blank_and_malformed_lines() -> None:
     assert parser.analyse_line("not a thunderbird line") == (None, "malformed")
 
 
-def test_thunderbird_parser_logs_malformed_rows(caplog: pytest.LogCaptureFixture) -> None:
-    """ThunderbirdParser should warn when malformed rows are skipped."""
+def test_thunderbird_parser_logs_malformed_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ThunderbirdParser should warn when malformed rows are skipped.
+
+    Args:
+        caplog (pytest.LogCaptureFixture): Log capture fixture used to assert
+            the warning emitted for malformed Thunderbird rows.
+    """
     parser = ThunderbirdParser()
 
     with caplog.at_level("WARNING"):
@@ -359,9 +366,14 @@ def test_thunderbird_parser_logs_malformed_rows(caplog: pytest.LogCaptureFixture
     assert "Cannot parse Thunderbird line (malformed)" in caplog.text
 
 
-def test_thunderbird_timestamp_coercion_rejects_bad_values() -> None:
-    """Thunderbird timestamps should fall back to `None` when malformed."""
-    assert ThunderbirdParser._timestamp_seconds_to_unix_ms("not-an-int") is None
+def test_thunderbird_parser_omits_timestamp_when_header_is_missing() -> None:
+    """ThunderbirdParser should leave the timestamp unset when it is omitted."""
+    parsed = ThunderbirdParser().parse_line(
+        "- 2022.01.18 zeus Jan 18 02:39:00 node-1 message body",
+    )
+
+    assert parsed is not None
+    assert parsed.timestamp_unix_ms is None
 
 
 def test_thunderbird_parser_skips_empty_message_lines_without_warning(
@@ -430,7 +442,12 @@ def test_ait_ads_parser_coerces_invalid_numeric_fields_to_none() -> None:
 def test_ait_ads_parser_rejects_blank_and_malformed_rows(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """AIT-ADS parser should skip blank, non-object, and incomplete rows."""
+    """AIT-ADS parser should skip blank, non-object, and incomplete rows.
+
+    Args:
+        caplog (pytest.LogCaptureFixture): Log capture fixture used to assert
+            warnings for malformed AIT-ADS rows.
+    """
     parser = AITADSParser()
 
     with caplog.at_level("WARNING"):

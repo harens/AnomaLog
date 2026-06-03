@@ -14,7 +14,6 @@ from prefect.logging import disable_run_logger
 from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
-from anomalog.parsers.structured.parquet import sink as parquet_sink
 from anomalog.parsers.structured.contracts import (
     LINE_FIELD,
     TIMESTAMP_FIELD,
@@ -23,6 +22,7 @@ from anomalog.parsers.structured.contracts import (
     StructuredLine,
     StructuredParser,
 )
+from anomalog.parsers.structured.parquet import sink as parquet_sink
 from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
@@ -424,7 +424,11 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
 def test_count_entities_by_label_skips_rows_without_entity_id(
     tmp_path: Path,
 ) -> None:
-    """Entity counting should ignore rows that do not belong to an entity."""
+    """Entity counting should ignore rows that do not belong to an entity.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -592,7 +596,13 @@ def test_dataset_lookup_retries_after_missing_structured_dataset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sink should rebuild and retry if the structured dataset vanishes."""
+    """The sink should rebuild and retry if the structured dataset vanishes.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the structured dataset
+            lookup so the retry path can be exercised deterministically.
+    """
     sink = _make_sink(tmp_path)
     _write_rows(
         sink,
@@ -623,7 +633,13 @@ def test_repair_structured_cache_handles_empty_and_invalid_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Structured cache repair should skip empty caches and rebuild invalid ones."""
+    """Structured cache repair should skip empty caches and rebuild invalid ones.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces cache helpers so the repair
+            branch can be exercised deterministically.
+    """
     sink = _make_sink(tmp_path)
     empty_cache_dir = sink.structured_data_cache(sink.dataset_name)
     empty_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -631,7 +647,9 @@ def test_repair_structured_cache_handles_empty_and_invalid_directories(
     with disable_run_logger():
         sink._repair_structured_cache_if_needed()  # noqa: SLF001
 
-    invalid_cache_dir = tmp_path / "cache" / sink.dataset_name / "structured_parquet_invalid"
+    invalid_cache_dir = (
+        tmp_path / "cache" / sink.dataset_name / "structured_parquet_invalid"
+    )
     invalid_cache_dir.mkdir(parents=True, exist_ok=True)
     (invalid_cache_dir / "part-0.parquet").write_text("not parquet", encoding="utf-8")
 
@@ -657,9 +675,18 @@ def test_repair_structured_cache_handles_empty_and_invalid_directories(
 def test_rebuild_structured_cache_removes_existing_cache_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
     cache_as_file: bool,
 ) -> None:
-    """Structured cache rebuilds should clear both directory and file cache roots."""
+    """Structured cache rebuilds should clear both directory and file cache roots.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces the structured cache write
+            helper so the rebuild path can be exercised deterministically.
+        cache_as_file (bool): Whether the stale cache root starts as a file or
+            a directory.
+    """
     sink = _make_sink(tmp_path)
     cache_root = sink.structured_data_cache(sink.dataset_name)
     if cache_as_file:
@@ -684,7 +711,11 @@ def test_rebuild_structured_cache_removes_existing_cache_root(
             (cache_root / "rebuilt.parquet").write_text("rebuilt", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(ParquetStructuredSink, "write_structured_lines", _write_structured_lines)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "write_structured_lines",
+        _write_structured_lines,
+    )
 
     with disable_run_logger():
         sink._rebuild_structured_cache()  # noqa: SLF001
@@ -1101,9 +1132,18 @@ def test_iter_record_batches_emits_silence_progress_for_long_parses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Slow parsing should emit the time-based progress branch."""
+    """Slow parsing should emit the time-based progress branch.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the raw log fixture.
+        monkeypatch (pytest.MonkeyPatch): Replaces the monotonic clock so the
+            elapsed-time branch is deterministic.
+    """
     raw_input_path = tmp_path / "raw.log"
-    raw_input_path.write_text("100|node-a|first|1\n101|node-a|second|1\n", encoding="utf-8")
+    raw_input_path.write_text(
+        "100|node-a|first|1\n101|node-a|second|1\n",
+        encoding="utf-8",
+    )
     perf_values = iter([0.0, 61.0, 62.0, 63.0, 64.0])
     monkeypatch.setattr(writer_worker, "perf_counter", lambda: next(perf_values))
 
@@ -1117,8 +1157,9 @@ def test_iter_record_batches_emits_silence_progress_for_long_parses(
             ),
         )
 
+    expected_rows = 2
     assert len(batches) == 1
-    assert batches[0].num_rows == 2
+    assert batches[0].num_rows == expected_rows
 
 
 def test_extract_structured_components_rejects_missing_input_path(
@@ -1214,7 +1255,11 @@ def test_extract_structured_components_tolerates_racing_output_dir_cleanup(
 def test_extract_structured_components_reports_inline_labels_when_present(
     tmp_path: Path,
 ) -> None:
-    """Inline anomaly labels should be reported when any parsed row is labelled."""
+    """Inline anomaly labels should be reported when any parsed row is labelled.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for raw input and output.
+    """
     raw_input_path = tmp_path / "raw.log"
     raw_input_path.write_text("100|node-a|first|1\n", encoding="utf-8")
 
