@@ -264,6 +264,36 @@ def test_remote_zip_source_materialise_downloads_and_extracts_gzip_archive(
     assert not zip_path.exists()
 
 
+def test_remote_zip_source_rejects_gzip_archives_without_raw_logs_relpath(
+    tmp_path: Path,
+) -> None:
+    """Gzip archives must provide an output name for the decompressed file.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used to build the sample
+            gzip archive.
+    """
+    archive_path = tmp_path / "bgl2.gz"
+    with gzip.open(archive_path, "wb") as archive:
+        archive.write(b"line-1\nline-2\n")
+
+    source = RemoteZipSource(url="https://example.com/bgl2.gz")
+    error_message = (
+        "gzip sources require raw_logs_relpath so the output file can be named"
+    )
+
+    with (
+        disable_run_logger(),
+        pytest.raises(
+            ValueError,
+            match=error_message,
+        ),
+    ):
+        source._extract_gzip(archive_path)  # noqa: SLF001 - regression coverage
+
+    assert list(archive_path.with_suffix("").iterdir()) == []
+
+
 def test_remote_zip_source_extracts_real_tarball_members(
     tmp_path: Path,
 ) -> None:
