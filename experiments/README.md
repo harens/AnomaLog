@@ -261,9 +261,10 @@ uv run python -m experiments.runners.run_suite \
 
 Add `--force` to replace deterministic output directories for completed runs.
 If a result directory exists but `metrics.json` is missing, the runner treats
-it as stale and replaces it without requiring `--force`. Add
-`--write-predictions` if you want each run to persist `predictions.jsonl`
-alongside the other result artefacts.
+it as stale and replaces it without requiring `--force`. Add `--rerun` if you
+want each invocation to preserve earlier attempts beneath the same
+fingerprint root. Add `--write-predictions` if you want each run to persist
+`predictions.jsonl` alongside the other result artefacts.
 
 The same registry also drives the optional Slurm backend:
 
@@ -361,9 +362,11 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Concrete runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved manifest, dataset, and model config.
-- Re-running the exact same config reuses that deterministic output directory.
-  Completed runs still require `--force` to overwrite, but stale directories
-  without `metrics.json` are replaced automatically.
+- Re-running the exact same config reuses that deterministic output directory
+  by default. Completed runs still require `--force` to overwrite, but stale
+  directories without `metrics.json` are replaced automatically.
+- Pass `--rerun` when you want a fresh numbered attempt under the same
+  fingerprint root instead of reusing the deterministic output directory.
 - Changing the dataset, sequence settings, or model config produces a new
   fingerprint and therefore a new result directory.
 - Detector training and test scoring are intentionally not cached as separate
@@ -415,6 +418,11 @@ Each concrete run writes a deterministic directory under
 - `environment.json`: Python, platform, package, git metadata, and the command
   used to launch the run
 - `run.log`: run-time logging from dataset build through detector evaluation
+
+If you pass `--rerun`, the new attempt is written to
+`experiments/results/<concrete-run-name>/<fingerprint>/attempt-XXXX/` instead
+of the root fingerprint directory, so repeated submissions can coexist
+without clobbering earlier artefacts.
 
 Predictions are still scored from a streaming replay of the sequence builder
 instead of materialising the full sequence list in memory. Train sequences are

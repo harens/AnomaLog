@@ -221,11 +221,13 @@ def test_run_suite_dry_run_prints_command_for_selected_experiment(
             repo_root=tmp_path,
             experiment_names=("demo",),
             dry_run=True,
+            rerun=True,
         ),
     )
 
     output = capsys.readouterr().out.strip()
     assert "--experiment demo" in output
+    assert "--rerun" in output
     assert "--registry" in output
     assert "experiments.runners.run_experiment" in output
 
@@ -438,6 +440,7 @@ def test_run_suite_build_arg_parser_exposes_cli_options() -> None:
     assert "--list" in help_text
     assert "--check-missing" in help_text
     assert "--force" in help_text
+    assert "--rerun" in help_text
     assert "--write-predictions" in help_text
     assert "--debug-reporting" in help_text
 
@@ -465,6 +468,7 @@ def test_run_suite_main_surfaces_config_errors(
                 list_only=False,
                 check_missing=False,
                 force=False,
+                rerun=False,
                 write_predictions=False,
                 debug_reporting=False,
             )

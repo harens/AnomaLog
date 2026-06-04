@@ -193,6 +193,26 @@ def test_build_run_metrics_report_drops_debug_only_diagnostics(
     assert diagnostics["classification_top1_weighted"] == {"precision": 0.2}
 
 
+def test_prepare_result_paths_places_reruns_under_attempt_directories() -> None:
+    """Reruns should keep the fingerprint root stable and add attempt folders."""
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+
+    base_paths = experiment_results.prepare_result_paths(bundle)
+    rerun_paths = experiment_results.prepare_result_paths(bundle, run_attempt=3)
+
+    assert base_paths.run_dir == base_paths.run_root
+    assert rerun_paths.run_root == base_paths.run_root
+    assert rerun_paths.run_dir.parent == base_paths.run_root
+    assert rerun_paths.run_dir.name == "attempt-0003"
+    assert rerun_paths.config_path.parent == rerun_paths.run_dir
+
+
 def test_build_metric_metadata_keeps_only_manifest_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,6 +367,7 @@ def test_build_dataset_manifest_trims_debug_only_fields(
     sequences = templated.sequences()
     result_paths = experiment_results.ResultPaths(
         run_fingerprint="fingerprint",
+        run_root=tmp_path,
         run_dir=tmp_path,
         config_path=tmp_path / "experiment_config.json",
         dataset_manifest_path=tmp_path / "dataset_manifest.json",
@@ -515,6 +536,7 @@ def test_write_run_outputs_emits_parameter_ci_report_artifact(
     )
     result_paths = experiment_results.ResultPaths(
         run_fingerprint="fingerprint",
+        run_root=tmp_path,
         run_dir=tmp_path,
         config_path=tmp_path / "experiment_config.json",
         dataset_manifest_path=tmp_path / "dataset_manifest.json",
@@ -626,6 +648,7 @@ def test_write_run_outputs_emits_parameter_ci_debug_artifact_when_enabled(
     )
     result_paths = experiment_results.ResultPaths(
         run_fingerprint="fingerprint",
+        run_root=tmp_path,
         run_dir=tmp_path,
         config_path=tmp_path / "experiment_config.json",
         dataset_manifest_path=tmp_path / "dataset_manifest.json",

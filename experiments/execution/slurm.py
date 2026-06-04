@@ -57,6 +57,9 @@ class SlurmSubmitRequest:
             `sbatch`.
         force (bool): Whether to replace existing deterministic run
             directories.
+        rerun (bool): Whether to write each job into a fresh attempt beneath
+            the fingerprint directory instead of reusing the deterministic
+            output directory.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
         debug_reporting (bool): Whether to retain verbose run diagnostics.
         data_root (Path | None): Optional base root for cluster-local data
@@ -72,6 +75,7 @@ class SlurmSubmitRequest:
     experiment_names: tuple[str, ...] = ()
     dry_run: bool = False
     force: bool = False
+    rerun: bool = False
     write_predictions: bool = False
     debug_reporting: bool = False
     data_root: Path | None = None
@@ -92,6 +96,8 @@ class _SlurmSubmission:
         log_dir (Path): Directory that receives array-task stdout and stderr
             logs.
         force (bool): Whether the run command should replace existing outputs.
+        rerun (bool): Whether the run command should place artefacts in a new
+            attempt directory beneath the fingerprint root.
         write_predictions (bool): Whether the run command should write
             predictions.
         debug_reporting (bool): Whether the run command should keep verbose
@@ -106,6 +112,7 @@ class _SlurmSubmission:
     repo_root: Path
     log_dir: Path
     force: bool
+    rerun: bool
     write_predictions: bool
     debug_reporting: bool
     data_root: Path | None
@@ -199,6 +206,7 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
         repo_root=resolved_repo_root,
         log_dir=log_dir,
         force=request.force,
+        rerun=request.rerun,
         write_predictions=request.write_predictions,
         debug_reporting=request.debug_reporting,
         data_root=data_root,
@@ -314,6 +322,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Replace any existing deterministic result directories.",
     )
     submit_parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help=(
+            "Write each selected run into a fresh numbered attempt beneath "
+            "the fingerprint directory instead of reusing the deterministic "
+            "output directory."
+        ),
+    )
+    submit_parser.add_argument(
         "--write-predictions",
         action="store_true",
         help="Write predictions.jsonl for each run.",
@@ -368,6 +385,7 @@ def main() -> int:
                 experiment_names=tuple(args.experiment),
                 dry_run=args.dry_run,
                 force=args.force,
+                rerun=args.rerun,
                 write_predictions=args.write_predictions,
                 debug_reporting=args.debug_reporting,
                 data_root=args.data_root,
@@ -469,6 +487,8 @@ def _build_run_command(submission: _SlurmSubmission) -> str:
     ]
     if submission.force:
         command.append(shlex.quote("--force"))
+    if submission.rerun:
+        command.append(shlex.quote("--rerun"))
     if submission.write_predictions:
         command.append(shlex.quote("--write-predictions"))
     if submission.debug_reporting:

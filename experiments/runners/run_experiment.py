@@ -53,8 +53,18 @@ class _BundleGroupRequest:
     bundles: list[ExperimentBundle]
     bundle_indexes: list[int]
     force: bool
+    rerun: bool
     write_predictions: bool
     debug_reporting: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _BundleRunOptions:
+    force: bool = False
+    rerun: bool = False
+    write_predictions: bool = False
+    debug_reporting: bool = False
+    console: bool = True
 
 
 class _FutureWithResult(Protocol):
@@ -77,6 +87,9 @@ class RegisteredExperimentRunRequest:
             paths.
         force (bool): Whether to replace existing deterministic run outputs and
             clear cached dataset materialisations before rebuilding.
+        rerun (bool): Whether to create a fresh numbered attempt beneath the
+            fingerprint directory instead of reusing the deterministic output
+            directory.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
         debug_reporting (bool): Whether to keep verbose diagnostics.
         console (bool): Whether to emit console progress through Prefect.
@@ -86,6 +99,7 @@ class RegisteredExperimentRunRequest:
     registry_path: Path = Path("experiments/configs/registry.toml")
     repo_root: Path | None = None
     force: bool = False
+    rerun: bool = False
     write_predictions: bool = False
     debug_reporting: bool = False
     console: bool = True
@@ -132,6 +146,7 @@ def run_experiment(
     config_path: Path,
     *,
     force: bool = False,
+    rerun: bool = False,
     write_predictions: bool = False,
     debug_reporting: bool = False,
 ) -> list[Path]:
@@ -141,6 +156,9 @@ def run_experiment(
         config_path (Path): Dataset manifest TOML path to execute.
         force (bool): Whether to replace an existing deterministic result
             directory and clear the dataset build cache before rebuilding.
+        rerun (bool): Whether to create a fresh numbered attempt beneath the
+            fingerprint directory instead of reusing the deterministic output
+            directory.
         write_predictions (bool): Whether to persist `predictions.jsonl` for
             each concrete run.
         debug_reporting (bool): Whether to keep the verbose diagnostic payloads
@@ -159,6 +177,12 @@ def run_experiment(
     if not bundles:
         msg = f"Manifest {config_path} did not expand to any concrete runs."
         raise ConfigError(msg)
+    run_options = _BundleRunOptions(
+        force=force,
+        rerun=rerun,
+        write_predictions=write_predictions,
+        debug_reporting=debug_reporting,
+    )
     results: list[Path] = []
     for bundle_indexes in _group_bundle_indexes_by_run_group(bundles):
         results.extend(
@@ -167,9 +191,10 @@ def run_experiment(
                     config_path=config_path,
                     bundles=bundles,
                     bundle_indexes=bundle_indexes,
-                    force=force,
-                    write_predictions=write_predictions,
-                    debug_reporting=debug_reporting,
+                    force=run_options.force,
+                    rerun=run_options.rerun,
+                    write_predictions=run_options.write_predictions,
+                    debug_reporting=run_options.debug_reporting,
                 ),
             ),
         )
@@ -191,13 +216,17 @@ def run_registered_experiment(request: RegisteredExperimentRunRequest) -> list[P
         registry_path=request.registry_path,
         repo_root=resolved_repo_root,
     )
+    run_options = _BundleRunOptions(
+        force=request.force,
+        rerun=request.rerun,
+        write_predictions=request.write_predictions,
+        debug_reporting=request.debug_reporting,
+        console=request.console,
+    )
     return [
         _run_bundle(
             bundle,
-            force=request.force,
-            write_predictions=request.write_predictions,
-            debug_reporting=request.debug_reporting,
-            console=request.console,
+            options=run_options,
         )
         for bundle in resolved.bundles
     ]
@@ -217,15 +246,19 @@ def _resolve_max_workers(
 
 
 def _run_bundle_from_manifest_payload(
-    payload: tuple[Path, int, bool, bool, bool],
+    payload: tuple[Path, int, bool, bool, bool, bool],
 ) -> Path:
-    config_path, index, force, write_predictions, debug_reporting = payload
+    config_path, index, force, rerun, write_predictions, debug_reporting = payload
     bundle = load_experiment_bundles(config_path)[index]
-    return _run_bundle(
-        bundle,
+    options = _BundleRunOptions(
         force=force,
+        rerun=rerun,
         write_predictions=write_predictions,
         debug_reporting=debug_reporting,
+    )
+    return _run_bundle(
+        bundle,
+        options=options,
     )
 
 
@@ -257,9 +290,12 @@ def _run_bundle_group(
     if max_workers == 1 or len(grouped_bundles) == 1:
         results_by_index, failures_by_index = _run_bundle_group_serial(
             grouped_bundles,
-            force=request.force,
-            write_predictions=request.write_predictions,
-            debug_reporting=request.debug_reporting,
+            options=_BundleRunOptions(
+                force=request.force,
+                rerun=request.rerun,
+                write_predictions=request.write_predictions,
+                debug_reporting=request.debug_reporting,
+            ),
         )
     else:
         results_by_index, failures_by_index = _run_bundle_group_parallel(
@@ -278,18 +314,14 @@ def _run_bundle_group(
 def _run_bundle_group_serial(
     grouped_bundles: list[ExperimentBundle],
     *,
-    force: bool,
-    write_predictions: bool,
-    debug_reporting: bool,
+    options: _BundleRunOptions,
 ) -> tuple[dict[int, Path], dict[int, str]]:
     results_by_index: dict[int, Path] = {}
     failures_by_index: dict[int, str] = {}
     for index, bundle in enumerate(grouped_bundles):
         result, failure = _run_bundle_with_failure_capture(
             bundle,
-            force=force,
-            write_predictions=write_predictions,
-            debug_reporting=debug_reporting,
+            options=options,
         )
         if result is not None:
             results_by_index[index] = result
@@ -316,6 +348,7 @@ def _run_bundle_group_parallel(
                         request.config_path,
                         index,
                         request.force,
+                        request.rerun,
                         request.write_predictions,
                         request.debug_reporting,
                     )
@@ -331,6 +364,7 @@ def _run_bundle_group_parallel(
                         request.config_path,
                         index,
                         request.force,
+                        request.rerun,
                         request.write_predictions,
                         request.debug_reporting,
                     ),
@@ -351,22 +385,13 @@ def _run_bundle_group_parallel(
 def _run_bundle(
     bundle: ExperimentBundle,
     *,
-    force: bool = False,
-    write_predictions: bool = False,
-    debug_reporting: bool = False,
-    console: bool = True,
+    options: _BundleRunOptions,
 ) -> Path:
     """Execute one concrete run derived from a dataset manifest.
 
     Args:
         bundle (ExperimentBundle): Concrete run bundle to execute.
-        force (bool): Whether to replace an existing deterministic result
-            directory and clear the dataset build cache before rebuilding.
-        write_predictions (bool): Whether to persist `predictions.jsonl` for
-            the concrete run.
-        debug_reporting (bool): Whether to keep verbose diagnostic payloads in
-            the run artefacts and logs.
-        console (bool): Whether to mirror log output to the shared console.
+        options (_BundleRunOptions): Execution flags for the concrete run.
 
     Returns:
         Path: Deterministic run directory containing the written artefacts.
@@ -374,20 +399,25 @@ def _run_bundle(
     Raises:
         FileExistsError: If the result path exists but is not a directory.
     """
-    result_paths = prepare_result_paths(bundle)
-    if result_paths.run_dir.exists():
-        if not result_paths.run_dir.is_dir():
-            msg = f"Result path exists but is not a directory: {result_paths.run_dir}"
-            raise FileExistsError(msg)
-        if result_paths.metrics_path.is_file() and not force:
-            return result_paths.run_dir
-        shutil.rmtree(result_paths.run_dir)
-    result_paths.run_dir.mkdir(parents=True, exist_ok=True)
+    if options.rerun:
+        result_paths = _reserve_rerun_result_paths(bundle)
+    else:
+        result_paths = prepare_result_paths(bundle)
+        if result_paths.run_dir.exists():
+            if not result_paths.run_dir.is_dir():
+                msg = (
+                    f"Result path exists but is not a directory: {result_paths.run_dir}"
+                )
+                raise FileExistsError(msg)
+            if result_paths.metrics_path.is_file() and not options.force:
+                return result_paths.run_dir
+            shutil.rmtree(result_paths.run_dir)
+        result_paths.run_dir.mkdir(parents=True, exist_ok=True)
 
     with _experiment_logger(
         result_paths.run_log_path,
         run_name=bundle.concrete_name,
-        console=console,
+        console=options.console,
     ) as logger:
         logger.info("Loaded experiment config from %s", bundle.sweep_path)
         logger.info("Using dataset config %s", bundle.dataset_path)
@@ -396,7 +426,7 @@ def _run_bundle(
         if bundle.applied_overrides:
             logger.info("Applied overrides: %s", bundle.applied_overrides)
         dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
-        if force:
+        if options.force:
             logger.info(
                 "Force run requested; clearing dataset cache for %s",
                 bundle.dataset.dataset_name,
@@ -421,7 +451,7 @@ def _run_bundle(
             config=bundle.model,
             prediction_output=PredictionOutputConfig(
                 predictions_path=result_paths.predictions_path,
-                write_predictions=write_predictions,
+                write_predictions=options.write_predictions,
             ),
             logger=logger,
             progress_plan=RunProgressPlan(
@@ -454,7 +484,7 @@ def _run_bundle(
                 model_summary=model_summary,
                 result_paths=result_paths,
                 logger=logger,
-                debug_reporting=debug_reporting,
+                debug_reporting=options.debug_reporting,
             ),
         )
     return result_paths.run_dir
@@ -711,6 +741,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Replace an existing deterministic result directory.",
     )
     parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help=(
+            "Write a new numbered attempt beneath the fingerprint directory "
+            "instead of reusing the deterministic output directory."
+        ),
+    )
+    parser.add_argument(
         "--write-predictions",
         action="store_true",
         help="Write predictions.jsonl for each run.",
@@ -743,6 +781,7 @@ def main() -> int:
                     ),
                     repo_root=getattr(args, "repo_root", None),
                     force=getattr(args, "force", False),
+                    rerun=getattr(args, "rerun", False),
                     write_predictions=getattr(args, "write_predictions", False),
                     debug_reporting=getattr(args, "debug_reporting", False),
                 ),
@@ -751,6 +790,7 @@ def main() -> int:
             run_experiment(
                 args.config,
                 force=getattr(args, "force", False),
+                rerun=getattr(args, "rerun", False),
                 write_predictions=getattr(args, "write_predictions", False),
                 debug_reporting=getattr(args, "debug_reporting", False),
             )
@@ -808,17 +848,13 @@ def _write_line(message: str) -> None:
 def _run_bundle_with_failure_capture(
     bundle: ExperimentBundle,
     *,
-    force: bool,
-    write_predictions: bool,
-    debug_reporting: bool,
+    options: _BundleRunOptions,
 ) -> tuple[Path | None, str | None]:
     try:
         return (
             _run_bundle(
                 bundle,
-                force=force,
-                write_predictions=write_predictions,
-                debug_reporting=debug_reporting,
+                options=options,
             ),
             None,
         )
@@ -840,6 +876,42 @@ def _capture_future_result(
 def _format_bundle_failure(bundle: ExperimentBundle, exc: Exception) -> str:
     detail = str(exc).strip() or exc.__class__.__name__
     return f"{bundle.concrete_name}: {detail}"
+
+
+def _prepare_result_paths(
+    bundle: ExperimentBundle,
+    *,
+    rerun: bool,
+) -> ResultPaths:
+    base_paths = prepare_result_paths(bundle)
+    if not rerun:
+        return base_paths
+    attempt = _next_run_attempt(base_paths.run_root)
+    return prepare_result_paths(bundle, run_attempt=attempt)
+
+
+def _reserve_rerun_result_paths(bundle: ExperimentBundle) -> ResultPaths:
+    while True:
+        result_paths = _prepare_result_paths(bundle, rerun=True)
+        try:
+            result_paths.run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return result_paths
+
+
+def _next_run_attempt(run_root: Path) -> int:
+    highest_attempt = 0
+    if run_root.is_dir():
+        for child in run_root.iterdir():
+            if not child.is_dir() or not child.name.startswith("attempt-"):
+                continue
+            try:
+                attempt = int(child.name.removeprefix("attempt-"))
+            except ValueError:
+                continue
+            highest_attempt = max(highest_attempt, attempt)
+    return highest_attempt + 1
 
 
 if __name__ == "__main__":

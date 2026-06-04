@@ -40,6 +40,9 @@ class SuiteRunRequest:
             not yet have a completed `metrics.json`.
         max_parallel (int): Maximum number of experiments to run concurrently.
         force (bool): Whether to replace existing deterministic run outputs.
+        rerun (bool): Whether to write each run into a fresh attempt beneath
+            the fingerprint directory instead of reusing the deterministic
+            output directory.
         write_predictions (bool): Whether to persist `predictions.jsonl`.
         debug_reporting (bool): Whether to keep verbose diagnostics.
     """
@@ -53,6 +56,7 @@ class SuiteRunRequest:
     check_missing: bool = False
     max_parallel: int = 1
     force: bool = False
+    rerun: bool = False
     write_predictions: bool = False
     debug_reporting: bool = False
 
@@ -143,6 +147,7 @@ def _run_sequential_suite(
                 registry_path=request.registry_path,
                 repo_root=request.repo_root,
                 force=request.force,
+                rerun=request.rerun,
                 write_predictions=request.write_predictions,
                 debug_reporting=request.debug_reporting,
                 console=False,
@@ -164,6 +169,7 @@ def _run_parallel_suite(
             registry_path=request.registry_path,
             repo_root=request.repo_root,
             force=request.force,
+            rerun=request.rerun,
             write_predictions=request.write_predictions,
             debug_reporting=request.debug_reporting,
             console=False,
@@ -223,6 +229,8 @@ def _build_experiment_command(
     ]
     if request.force:
         command.append("--force")
+    if request.rerun:
+        command.append("--rerun")
     if request.write_predictions:
         command.append("--write-predictions")
     if request.debug_reporting:
@@ -472,6 +480,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Replace any existing deterministic result directories.",
     )
     parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help=(
+            "Write each selected run into a fresh numbered attempt beneath "
+            "the fingerprint directory instead of reusing the deterministic "
+            "output directory."
+        ),
+    )
+    parser.add_argument(
         "--write-predictions",
         action="store_true",
         help="Write predictions.jsonl for each run.",
@@ -506,6 +523,7 @@ def main() -> int:
                 check_missing=args.check_missing,
                 max_parallel=args.max_parallel,
                 force=args.force,
+                rerun=args.rerun,
                 write_predictions=args.write_predictions,
                 debug_reporting=args.debug_reporting,
             ),

@@ -54,10 +54,11 @@ def _write_slurm_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Pat
     return registry_path, defaults_path
 
 
-def _make_submission(
+def _make_submission(  # noqa: PLR0913
     *,
     repo_root: pathlib.Path,
     force: bool = False,
+    rerun: bool = False,
     write_predictions: bool = False,
     debug_reporting: bool = False,
     cluster_roots: tuple[pathlib.Path | None, pathlib.Path | None] | None = None,
@@ -101,11 +102,28 @@ def _make_submission(
         / "slurm-logs"
         / slurm._build_submission_label(experiments),  # noqa: SLF001
         force=force,
+        rerun=rerun,
         write_predictions=write_predictions,
         debug_reporting=debug_reporting,
         data_root=data_root,
         cache_root=cache_root,
     )
+
+
+def test_build_arg_parser_exposes_rerun_option(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The Slurm CLI should publish the rerun flag.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Captured standard output for the
+            help text emitted by argparse.
+    """
+    parser = slurm.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["submit", "--help"])
+
+    assert "--rerun" in capsys.readouterr().out
 
 
 def test_build_sbatch_command_uses_job_array_without_throttle() -> None:
@@ -217,6 +235,7 @@ def test_build_wrap_script_propagates_run_flags() -> None:
     submission = _make_submission(
         repo_root=pathlib.Path("/repo"),
         force=True,
+        rerun=True,
         write_predictions=True,
         debug_reporting=True,
     )
@@ -224,6 +243,7 @@ def test_build_wrap_script_propagates_run_flags() -> None:
     wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
 
     assert "--force" in wrap_script
+    assert "--rerun" in wrap_script
     assert "--write-predictions" in wrap_script
     assert "--debug-reporting" in wrap_script
 
@@ -301,6 +321,7 @@ def test_submit_experiments_submits_one_array_job(
             repo_root=tmp_path,
             defaults_path=defaults_path,
             groups=("baselines",),
+            rerun=True,
         ),
     )
 
@@ -310,6 +331,7 @@ def test_submit_experiments_submits_one_array_job(
     assert "--array=0-1" in command
     assert "--job-name=anomalog" in command
     wrap_script = command[command.index("--wrap") + 1]
+    assert "--rerun" in wrap_script
     assert "for EXPERIMENT in" in wrap_script
     assert "  demo" in wrap_script
     assert "  demo_two" in wrap_script

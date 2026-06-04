@@ -60,12 +60,14 @@ class ResultPaths:
     """Concrete artifact paths inside a single run directory.
 
     The run fingerprint is derived from the fully resolved config so repeated
-    executions of the same experiment land in a deterministic directory. Keeping
-    all artifact paths together avoids ad-hoc filename drift across result
-    writers.
+    executions of the same experiment land under one deterministic fingerprint
+    root. Keeping all artifact paths together avoids ad-hoc filename drift
+    across result writers.
 
     Attributes:
         run_fingerprint (str): Stable fingerprint for the resolved run config.
+        run_root (Path): Deterministic fingerprint directory for the concrete
+            run family.
         run_dir (Path): Root directory containing all artifacts for the run.
         config_path (Path): Serialised normalised concrete experiment config
             path.
@@ -77,6 +79,7 @@ class ResultPaths:
     """
 
     run_fingerprint: str
+    run_root: Path
     run_dir: Path
     config_path: Path
     dataset_manifest_path: Path
@@ -86,11 +89,19 @@ class ResultPaths:
     run_log_path: Path
 
     @classmethod
-    def for_bundle(cls, bundle: ExperimentBundle) -> ResultPaths:
+    def for_bundle(
+        cls,
+        bundle: ExperimentBundle,
+        *,
+        run_attempt: int | None = None,
+    ) -> ResultPaths:
         """Create deterministic result paths for the experiment bundle.
 
         Args:
             bundle (ExperimentBundle): Resolved experiment bundle.
+            run_attempt (int | None): Optional 1-based attempt number written
+                beneath the fingerprint root. When omitted, the concrete run
+                writes directly to the fingerprint directory.
 
         Returns:
             ResultPaths: Deterministic run artifact paths for the bundle.
@@ -102,9 +113,13 @@ class ResultPaths:
             if not bundle.sweep.results_root.is_absolute()
             else bundle.sweep.results_root
         )
-        run_dir = results_root / bundle.concrete_name / run_fingerprint[:12]
+        run_root = results_root / bundle.concrete_name / run_fingerprint[:12]
+        run_dir = (
+            run_root if run_attempt is None else run_root / f"attempt-{run_attempt:04d}"
+        )
         return cls(
             run_fingerprint=run_fingerprint,
+            run_root=run_root,
             run_dir=run_dir,
             config_path=run_dir / "experiment_config.json",
             dataset_manifest_path=run_dir / "dataset_manifest.json",
@@ -137,16 +152,23 @@ class ResultWriteContext:
     debug_reporting: bool = False
 
 
-def prepare_result_paths(bundle: ExperimentBundle) -> ResultPaths:
+def prepare_result_paths(
+    bundle: ExperimentBundle,
+    *,
+    run_attempt: int | None = None,
+) -> ResultPaths:
     """Create deterministic result paths for the experiment bundle.
 
     Args:
         bundle (ExperimentBundle): Resolved experiment bundle.
+        run_attempt (int | None): Optional 1-based attempt number written
+            beneath the fingerprint root. When omitted, the concrete run
+            writes directly to the fingerprint directory.
 
     Returns:
         ResultPaths: Deterministic run artifact paths for the bundle.
     """
-    return ResultPaths.for_bundle(bundle)
+    return ResultPaths.for_bundle(bundle, run_attempt=run_attempt)
 
 
 def write_run_outputs(
