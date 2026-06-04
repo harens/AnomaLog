@@ -4,6 +4,7 @@
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/harens/anomalog/ci.yml?style=flat-square&logo=github&label=tests)](https://github.com/harens/AnomaLog/actions/workflows/ci.yml)
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/harens/anomalog/deploy-docs.yml?style=flat-square&logo=googledocs&logoColor=white&label=docs)](https://harens.github.io/AnomaLog/)
 ![GitHub License](https://img.shields.io/github/license/harens/AnomaLog?style=flat-square&color=blue)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20529496-blue.svg?style=flat-square)](https://doi.org/10.5281/zenodo.20529496)
 
 **AnomaLog turns raw logs into reproducible, model-ready datasets for anomaly detection.**
 
