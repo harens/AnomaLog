@@ -224,14 +224,14 @@ datasets = ["bgl/how_far_are_we_2022"]
 model_sets = ["baselines_no_nb", "deeplog_short_session_padding_fidelity"]
 models = ["deeplog_default", "deepcase"]
 datasets = [
-  # Sessions are assigned to train/test according to the first event crossing
-  # the raw-entry cutoff boundary.
-  "hdfs/v1_deeplog_paper_entry100k_split_partial",
   # Sessions crossing the split boundary are partitioned rather than assigned
   # wholesale.
   # Included as a protocol-sensitivity audit because the DeepLog paper does not
   # fully specify straddling-session behaviour.
   # Retained for reproducibility analysis rather than as the preferred paper view.
+  "hdfs/v1_deeplog_paper_entry100k_split_partial",
+  # Whole sessions are assigned according to whether their first event falls
+  # before or after the raw-entry cutoff boundary.
   "hdfs/v1_deeplog_paper_entry100k_assign_first",
   # Reproduction target for the widely reused wuyifan18 preprocessed DeepLog
   # HDFS benchmark archive.
