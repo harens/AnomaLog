@@ -311,7 +311,7 @@ class DeepCaseEventIdMap:
             DeepCaseEventIdMap: Contiguous event-id mappings plus NO_EVENT id.
         """
         templates = sorted(
-            {template for sequence in sequences for template in sequence.templates},
+            {template for sequence in sequences for template, _, _ in sequence.events},
         )
         template_to_event_id = {
             template: event_id for event_id, template in enumerate(templates)
@@ -844,10 +844,11 @@ def _append_training_sequences_to_batch_columns(
 ) -> None:
     for sequence in sequences:
         require_entity_local_sequences((sequence,), detector_name="DeepCase")
-        templates = sequence.templates
-        sequence_event_ids = [
-            event_id_map.template_to_event_id[template] for template in templates
-        ]
+        templates: list[str] = []
+        sequence_event_ids: list[int] = []
+        for template, _, _ in sequence.events:
+            templates.append(template)
+            sequence_event_ids.append(event_id_map.template_to_event_id[template])
         sample_indexes = _deepcase_training_sample_indexes(sequence)
         sequence_batch = _SequenceBatchData(
             sequence=sequence,

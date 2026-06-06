@@ -478,10 +478,15 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
         )
         if logger is not None:
             logger.info("Training DeepCase context builder")
-        _fit_context_builder_in_chunks(
-            model=model,
+        cached_batches = _materialise_context_builder_training_batches(
             train_sequences=train_sequences_list,
             event_id_map=event_id_map,
+            context_length=self.config.context_length,
+            timeout_seconds=self.config.timeout_seconds,
+        )
+        _fit_context_builder_in_chunks(
+            model=model,
+            cached_batches=cached_batches,
             config=self.config,
         )
         for _ in range(self.config.epochs):
@@ -491,8 +496,7 @@ class DeepCaseDetector(SingleFitMixin, ExperimentDetector):
             logger.info("Clustering DeepCase interpreter")
         clustered_samples = _cluster_training_samples(
             model=model,
-            train_sequences=train_sequences_list,
-            event_id_map=event_id_map,
+            cached_batches=cached_batches,
             config=self.config,
             device=device,
         )
@@ -1016,12 +1020,11 @@ class _CachedContextBuilderTrainingBatch:
     """Cached inputs for one DeepCASE context-builder training chunk.
 
     Attributes:
-        contexts (np.ndarray): Cached context window matrix for one chunk.
-        events (np.ndarray): Cached target-event ids aligned with contexts.
+        batch (DeepCaseSampleBatch): Cached DeepCASE training batch for one
+            chunk, reused by both the context builder and clustering phases.
     """
 
-    contexts: np.ndarray
-    events: np.ndarray
+    batch: DeepCaseSampleBatch
 
 
 @dataclass(slots=True)
@@ -1030,7 +1033,7 @@ class _ContextBuilderTrainingState:
 
     Attributes:
         cached_batches (Sequence[_CachedContextBuilderTrainingBatch]): Cached
-            context-builder batches replayed across epochs.
+            DeepCASE training batches replayed across epochs.
         context_builder (ContextBuilder): Upstream DeepCASE context builder
             being trained.
         criterion (torch.nn.Module): Label-smoothing loss used by the
@@ -1175,16 +1178,9 @@ def _chunk_prediction_sequences_by_sample_count(
 def _fit_context_builder_in_chunks(
     *,
     model: DeepCASE,
-    train_sequences: Sequence[TemplateSequence],
-    event_id_map: DeepCaseEventIdMap,
+    cached_batches: Sequence[_CachedContextBuilderTrainingBatch],
     config: DeepCaseModelConfig,
 ) -> None:
-    cached_batches = _materialise_context_builder_training_batches(
-        train_sequences=train_sequences,
-        event_id_map=event_id_map,
-        context_length=config.context_length,
-        timeout_seconds=config.timeout_seconds,
-    )
     context_builder = model.context_builder
     mode = context_builder.training
     device = next(context_builder.parameters()).device
@@ -1227,7 +1223,8 @@ def _train_context_builder_batches(
             cached batches, optimiser, and batch-loop parameters.
     """
     for _ in range(state.epochs):
-        for batch in state.cached_batches:
+        for cached_batch in state.cached_batches:
+            batch = cached_batch.batch
             data = torch.utils.data.DataLoader(
                 torch.utils.data.TensorDataset(
                     torch.as_tensor(batch.contexts, dtype=torch.int64),
@@ -1275,8 +1272,8 @@ def _materialise_context_builder_training_batches(
             the target event.
 
     Returns:
-        list[_CachedContextBuilderTrainingBatch]: Cached context-builder input
-        chunks ready for replay across epochs.
+        list[_CachedContextBuilderTrainingBatch]: Cached training batches ready
+            for replay across epochs.
     """
     cached_batches: list[_CachedContextBuilderTrainingBatch] = []
     for chunk in _chunk_training_sequences_by_sample_count(
@@ -1291,24 +1288,18 @@ def _materialise_context_builder_training_batches(
         )
         if batch.sample_count == 0:
             continue
-        cached_batches.append(
-            _CachedContextBuilderTrainingBatch(
-                contexts=batch.contexts,
-                events=batch.events,
-            ),
-        )
+        cached_batches.append(_CachedContextBuilderTrainingBatch(batch=batch))
     return cached_batches
 
 
 def _cluster_training_samples(
     *,
     model: DeepCASE,
-    train_sequences: Sequence[TemplateSequence],
-    event_id_map: DeepCaseEventIdMap,
+    cached_batches: Sequence[_CachedContextBuilderTrainingBatch],
     config: DeepCaseModelConfig,
     device: torch.device,
 ) -> _ClusteredTrainingSamples:
-    total_sample_count = _training_sample_count_total(train_sequences)
+    total_sample_count = sum(batch.batch.sample_count for batch in cached_batches)
     clusters = np.full(total_sample_count, -1, dtype=int)
     labels = np.empty(total_sample_count, dtype=float)
     cluster_scores = np.full(total_sample_count, float(config.no_score), dtype=float)
@@ -1322,16 +1313,8 @@ def _cluster_training_samples(
     event_vectors: dict[int, list[sp.csc_matrix]] = defaultdict(list)
     event_sample_indexes: dict[int, list[np.ndarray]] = defaultdict(list)
     sample_offset = 0
-    for chunk in _chunk_training_sequences_by_sample_count(
-        train_sequences,
-        max_sample_count=DEEPCASE_TRAINING_SAMPLE_CHUNK_SIZE,
-    ):
-        batch = build_training_batch_from_map(
-            chunk,
-            event_id_map=event_id_map,
-            context_length=config.context_length,
-            timeout_seconds=config.timeout_seconds,
-        )
+    for cached_batch in cached_batches:
+        batch = cached_batch.batch
         if batch.sample_count == 0:
             continue
         labels[sample_offset : sample_offset + batch.sample_count] = batch.scores

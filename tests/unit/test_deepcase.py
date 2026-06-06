@@ -687,7 +687,7 @@ def test_deepcase_fit_chunks_training_and_clustering_batches(
 
     assert len(batch_trainer_calls) == 1
     cached_batches = batch_trainer_calls[0].cached_batches
-    assert [batch.contexts.shape[0] for batch in cached_batches] == [2, 2, 1]
+    assert [batch.batch.contexts.shape[0] for batch in cached_batches] == [2, 2, 1]
     assert all(
         str(state.device) == str(detector.device) for state in batch_trainer_calls
     )
@@ -1075,7 +1075,7 @@ def test_build_training_batch_materialises_sequence_templates_once(
         timeout_seconds=2.5,
     )
 
-    expected_template_access_count = 2
+    expected_template_access_count = 0
     assert templates_access_count == expected_template_access_count
     assert label_resolution_count == len(sequence.events) + 1
     assert batch.sample_count == len(sequence.events)
@@ -1261,10 +1261,16 @@ def test_fit_context_builder_reuses_cached_training_batches(
     fit_context_builder_in_chunks = (
         deepcase_detector._fit_context_builder_in_chunks  # noqa: SLF001
     )
-    fit_context_builder_in_chunks(
-        model=model,
+    cached_batches = deepcase_detector._materialise_context_builder_training_batches(  # noqa: SLF001
         train_sequences=(sequence,),
         event_id_map=event_id_map,
+        context_length=config.context_length,
+        timeout_seconds=config.timeout_seconds,
+    )
+    assert len(cached_batches) == 1
+    fit_context_builder_in_chunks(
+        model=model,
+        cached_batches=cached_batches,
         config=config,
     )
 
