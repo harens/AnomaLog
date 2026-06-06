@@ -483,8 +483,13 @@ def test_sink_load_inline_label_cache_falls_back_when_sidecar_is_invalid(
 def test_sink_load_entity_count_returns_none_for_invalid_sidecar(
     tmp_path: Path,
 ) -> None:
-    """Entity-count loading should fall back cleanly on malformed sidecars."""
+    """Entity-count loading should fall back cleanly on malformed sidecars.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
     sink = _make_sink(tmp_path)
+    sink.entity_count_path().parent.mkdir(parents=True, exist_ok=True)
     sink.entity_count_path().write_text("not-json\n", encoding="utf-8")
 
     assert sink.load_entity_count() is None

@@ -709,7 +709,11 @@ class ParquetStructuredSink(StructuredSink):
         )
 
     def entity_count_path(self) -> Path:
-        """Return the sidecar path storing the total distinct entity count."""
+        """Return the sidecar path storing the total distinct entity count.
+
+        Returns:
+            Path: JSON sidecar path for the total distinct entity count.
+        """
         return self.structured_data_cache(self.dataset_name) / ENTITY_COUNT_FILENAME
 
     def load_entity_count(self) -> int | None:

@@ -408,24 +408,39 @@ def materialise_openstack_deeplog_parameter_ci_subset(
         ValueError: If the archive does not expose enough normal VM instances
             for the configured train, validation, and anomaly offsets.
     """
+    if raw_logs_path.is_file():
+        return
+    instances = _load_openstack_parameter_instances(source_root=source_root)
     if _OPENSTACK_PARAMETER_TRAIN_INSTANCES < 1:
         msg = "train_instances must be positive."
         raise ValueError(msg)
-    instances = _load_openstack_parameter_instances(source_root=source_root)
-    required_instance_count = (
+    min_instances = max(
         _OPENSTACK_PARAMETER_TRAIN_INSTANCES
         + _OPENSTACK_PARAMETER_VALIDATION_INSTANCES
         + max(_OPENSTACK_PARAMETER_ANOMALY_INSTANCE_OFFSETS)
-        + 1
-    )
-    min_instances = max(
-        required_instance_count,
+        + 1,
         _OPENSTACK_PARAMETER_SUBSET_INSTANCES,
     )
     if len(instances) < min_instances:
         msg = f"Expected at least {min_instances} normal OpenStack instances."
         raise ValueError(msg)
+    _materialise_openstack_parameter_subset(raw_logs_path, instances)
 
+
+def _materialise_openstack_parameter_subset(
+    raw_logs_path: Path,
+    instances: list[_OpenStackParameterInstance],
+) -> None:
+    """Write the canonical OpenStack parameter slice to disk.
+
+    Args:
+        raw_logs_path (Path): Output path for the canonical labelled stream.
+        instances (list[_OpenStackParameterInstance]): Ordered OpenStack
+            instances loaded from the archive.
+
+    Raises:
+        ValueError: If the expected anomaly-bearing instances cannot be found.
+    """
     selected_instances = instances[:_OPENSTACK_PARAMETER_SUBSET_INSTANCES]
     test_start = (
         _OPENSTACK_PARAMETER_TRAIN_INSTANCES + _OPENSTACK_PARAMETER_VALIDATION_INSTANCES

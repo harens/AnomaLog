@@ -1244,7 +1244,18 @@ class EntitySequenceBuilder(SequenceBuilder):
         chronology_index: dict[str, EntityChronologyKey],
         label_for_group: Callable[[str], int | None],
     ) -> tuple[SequenceSplitCounts, int]:
-        """Return entity split counts from a materialised chronology sidecar."""
+        """Return entity split counts from a materialised chronology sidecar.
+
+        Args:
+            chronology_index (dict[str, EntityChronologyKey]): Materialised
+                chronology metadata keyed by entity id.
+            label_for_group (Callable[[str], int | None]): Entity label lookup
+                used to determine whether a group is anomalous.
+
+        Returns:
+            tuple[SequenceSplitCounts, int]: Exact split counts and eligible
+                normal count within the train pool.
+        """
         total_entities = len(chronology_index)
         counts = self._split_counts(total_entities)
         train_pool_count = total_entities - counts.test_count
@@ -1268,7 +1279,16 @@ class EntitySequenceBuilder(SequenceBuilder):
         *,
         label_for_group: Callable[[str], int | None],
     ) -> tuple[SequenceSplitCounts, int]:
-        """Return entity split counts by scanning the grouped structured data."""
+        """Return entity split counts by scanning the grouped structured data.
+
+        Args:
+            label_for_group (Callable[[str], int | None]): Entity label lookup
+                used to determine whether a group is anomalous.
+
+        Returns:
+            tuple[SequenceSplitCounts, int]: Exact split counts and eligible
+                normal count within the train pool.
+        """
         entity_counts = self.sink.count_entities_by_label(label_for_group)
         total_entities = entity_counts.total_entities
         counts = self._split_counts(total_entities)

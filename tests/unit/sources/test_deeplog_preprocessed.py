@@ -96,7 +96,11 @@ def test_post_processed_source_invokes_keyword_only_post_processor(
 def test_post_processed_source_reuses_existing_derived_raw_log(
     tmp_path: Path,
 ) -> None:
-    """Derived raw logs should not be regenerated when the file already exists."""
+    """Derived raw logs should not be regenerated when the file already exists.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic source.
+    """
     source_root = tmp_path / "source"
     source_root.mkdir()
     existing_raw_log = source_root / "preprocessed" / "hdfs_events.log"
@@ -561,6 +565,36 @@ def test_materialise_openstack_deeplog_parameter_ci_subset_injects_two_shared_po
         sum("Took 2 seconds to build instance." in row for row in labelled_rows)
         == expected_shared_throttle_points
     )
+
+
+def test_materialise_openstack_deeplog_parameter_ci_subset_reuses_existing_slice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenStack parameter slices should not be rebuilt when already present.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic source.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to block the
+            instance-loading path.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    raw_logs_path = tmp_path / "preprocessed" / "openstack_parameter_subset.log"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_logs_path.write_text("already-built\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        openstack_source,
+        "_load_openstack_parameter_instances",
+        lambda *_args, **_kwargs: pytest.fail(
+            "existing OpenStack slice should have been reused",
+        ),
+    )
+
+    materialise_openstack_deeplog_parameter_ci_subset(source_root, raw_logs_path)
+
+    assert raw_logs_path.read_text(encoding="utf-8") == "already-built\n"
 
 
 def test_openstack_helpers_preserve_numeric_values_when_requested() -> None:

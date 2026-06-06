@@ -186,6 +186,8 @@ class AITADSScenarioSource(DatasetSource):
             dataset_name=dst_dir.name,
             dataset_root=dataset_root,
         )
+        if raw_logs_path.is_file():
+            return dataset_root
         raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
         materialise_ait_ads_alert_stream(
             source_root=dataset_root,

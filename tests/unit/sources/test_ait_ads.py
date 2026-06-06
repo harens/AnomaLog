@@ -135,6 +135,42 @@ def _write_fixture_source_tree(tmp_path: Path) -> Path:
     return source_root
 
 
+def test_ait_ads_scenario_source_reuses_existing_canonical_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AIT-ADS should not rebuild its canonical stream when it already exists.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic source.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to block the slow
+            canonical-stream rebuild path.
+    """
+    source_root = _write_fixture_source_tree(tmp_path)
+    raw_logs_path = source_root / "preprocessed" / "ait_ads_alerts.jsonl"
+    raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_logs_path.write_text("already-built\n", encoding="utf-8")
+
+    monkeypatch.setattr(ait_ads_source, "verify_md5", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        ait_ads_source,
+        "materialise_ait_ads_alert_stream",
+        lambda *_args, **_kwargs: pytest.fail(
+            "canonical stream should have been reused",
+        ),
+    )
+
+    source = AITADSScenarioSource(
+        scenario_names=("fox",),
+        base_source=LocalDirSource(path=source_root),
+    )
+
+    materialised_root = source.materialise(dst_dir=tmp_path / "dataset")
+
+    assert materialised_root == source_root
+    assert raw_logs_path.read_text(encoding="utf-8") == "already-built\n"
+
+
 def _write_multi_scenario_fixture_source_tree(tmp_path: Path) -> Path:
     source_root = _write_fixture_source_tree(tmp_path)
     (source_root / "harrison_aminer.json").write_text(
