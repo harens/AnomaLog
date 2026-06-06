@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeGuard
 
 from typing_extensions import Self, override
 
@@ -783,7 +783,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """
         ...
 
-    def _build_sequence(  # noqa: PLR0913
+    def _build_sequence(  # noqa: C901, PLR0913
         self,
         window_id: int,
         rows: Collection[StructuredLine],
@@ -792,6 +792,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         split_label: SplitLabel,
         *,
         allow_group_label_fallback: bool = True,
+        group_label_is_anomalous: bool | None = None,
         training_event_mask: tuple[bool, ...] | None = None,
         evaluation_event_mask: tuple[bool, ...] | None = None,
         continuous_context: bool = False,
@@ -810,6 +811,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             split_label (SplitLabel): Assigned dataset split for the sequence.
             allow_group_label_fallback (bool): Whether entity-level anomaly
                 labels may promote an otherwise normal window to anomalous.
+            group_label_is_anomalous (bool | None): Optional precomputed entity
+                label verdict to reuse when the caller has already resolved it.
             training_event_mask (tuple[bool, ...] | None): Optional per-event
                 training-target eligibility mask for preserved chronological
                 chunks.
@@ -829,19 +832,27 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             return None
 
         events: list[tuple[str, list[str], int | None]] = []
+        event_labels: list[int | None] | None = None
         seq_label = 0
         prev_ts: int | None = None
 
         unique_ids = self._entity_ids_for_rows(rows)
-        event_labels = tuple(r.anomalous for r in rows)
 
         for r in rows:
             template, params = infer_template(r.untemplated_message_text)
             if r.raw_parameters is not None:
-                params = list(r.raw_parameters)
+                event_parameters = list(r.raw_parameters)
+            else:
+                event_parameters = _parameters_as_list(params)
             dt, prev_ts = self._compute_dt(prev_ts, r.timestamp_unix_ms)
 
-            events.append((template, list(params), dt))
+            events.append((template, event_parameters, dt))
+            if r.anomalous is not None:
+                if event_labels is None:
+                    event_labels = [None] * (len(events) - 1)
+                event_labels.append(r.anomalous)
+            elif event_labels is not None:
+                event_labels.append(None)
 
             if seq_label == 1:
                 continue
@@ -853,8 +864,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             if not allow_group_label_fallback:
                 continue
 
-            ent = r.entity_id
-            if ent is not None and is_anomalous_label(label_for_group(ent)):
+            if _should_promote_from_group_label(
+                group_label_is_anomalous=group_label_is_anomalous,
+                label_for_group=label_for_group,
+                entity_id=r.entity_id,
+            ):
                 seq_label = 1
 
         return TemplateSequence(
@@ -863,11 +877,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             entity_ids=unique_ids,
             window_id=window_id,
             split_label=split_label,
-            event_labels=(
-                event_labels
-                if any(label is not None for label in event_labels)
-                else None
-            ),
+            event_labels=(tuple(event_labels) if event_labels is not None else None),
             training_event_mask=training_event_mask,
             evaluation_event_mask=evaluation_event_mask,
             continuous_context=continuous_context,
@@ -1265,6 +1275,8 @@ class EntitySequenceBuilder(SequenceBuilder):
         inline_label_loader = getattr(self.sink, "load_inline_label_cache", None)
         if callable(inline_label_loader):
             _, group_labels = inline_label_loader()
+            if not group_labels:
+                return counts, train_pool_count
             normal_pool_count = sum(
                 1
                 for chronology in sorted(chronology_index.values())[:train_pool_count]
@@ -1479,6 +1491,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                 infer_template,
                 label_for_group,
                 split_label,
+                group_label_is_anomalous=entity_is_anomalous,
                 continuous_context=self.continuous_context,
             )
             if seq is not None:
@@ -1515,6 +1528,61 @@ def _split_label_from_prefixed_entity_id(entity_id: str | None) -> SplitLabel | 
     if "test" in prefix:
         return SplitLabel.TEST
     return None
+
+
+def _should_promote_from_group_label(
+    *,
+    group_label_is_anomalous: bool | None,
+    label_for_group: Callable[[str], int | None],
+    entity_id: str | None,
+) -> bool:
+    """Return whether a sequence should be promoted by group-level labels.
+
+    Args:
+        group_label_is_anomalous (bool | None): Optional precomputed entity
+            label verdict.
+        label_for_group (Callable[[str], int | None]): Group-level anomaly
+            lookup.
+        entity_id (str | None): Entity identifier from the current row.
+
+    Returns:
+        bool: `True` when the sequence should be marked anomalous from the
+            shared group label contract.
+    """
+    if group_label_is_anomalous is True:
+        return True
+    if group_label_is_anomalous is False:
+        return False
+    if entity_id is None:
+        return False
+    return is_anomalous_label(label_for_group(entity_id))
+
+
+def _parameters_as_list(params: ExtractedParameters) -> list[str]:
+    """Return template parameters as a concrete list.
+
+    Args:
+        params (ExtractedParameters): Parameters returned by template inference.
+
+    Returns:
+        list[str]: Concrete parameter list for sequence materialisation.
+    """
+    if _is_str_list(params):
+        return params
+    return list(params)
+
+
+def _is_str_list(params: ExtractedParameters) -> TypeGuard[list[str]]:
+    """Return whether the parameter collection is already a concrete list.
+
+    Args:
+        params (ExtractedParameters): Parameters returned by template inference.
+
+    Returns:
+        TypeGuard[list[str]]: `True` when `params` is already a concrete
+            `list[str]`.
+    """
+    return type(params) is list
 
 
 def _split_label_from_row_split_labels(

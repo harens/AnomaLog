@@ -1,5 +1,6 @@
 """Tests for public `SequenceBuilder` behavior."""
 
+import builtins
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -7,7 +8,9 @@ from typing import ClassVar
 
 import pytest
 from prefect.assets import Asset
+from typing_extensions import override
 
+import anomalog.sequences as sequences_module
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredLine
 from anomalog.parsers.structured.parquet.writer_worker import EntityChronologyKey
@@ -81,6 +84,10 @@ class _SidecarOnlyEntitySink(InMemoryStructuredSink):
 
     def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
         return self.chronology_index
+
+    @override
+    def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
+        return {}, {}
 
 
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
@@ -229,6 +236,54 @@ def test_entity_sequences_use_fixed_test_suffix_and_nested_train_prefixes() -> N
     ] == [
         "a",
     ]
+
+
+def test_entity_sequences_preserve_raw_parameters_and_event_labels() -> None:
+    """Entity grouping should keep raw parameters and event labels aligned."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="entity-a",
+            untemplated_message_text="first",
+            anomalous=0,
+            raw_parameters=["raw-first"],
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="entity-a",
+            untemplated_message_text="second",
+            anomalous=1,
+            raw_parameters=["raw-second"],
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="entity-a",
+            untemplated_message_text="third",
+            anomalous=None,
+            raw_parameters=["raw-third"],
+        ),
+    )
+
+    sequences = list(
+        EntitySequenceBuilder(
+            sink=sink,
+            infer_template=_upper_template,
+            label_for_group=lambda _: 0,
+            train_frac=1.0,
+            test_frac=0.0,
+        ),
+    )
+
+    assert len(sequences) == 1
+    assert sequences[0].events == [
+        ("FIRST", ["raw-first"], None),
+        ("SECOND", ["raw-second"], 100),
+        ("THIRD", ["raw-third"], 100),
+    ]
+    assert sequences[0].event_labels == (0, 1, None)
 
 
 @pytest.mark.allow_no_new_coverage
@@ -2402,6 +2457,123 @@ def test_entity_sequence_builder_split_count_hint_uses_entity_count_sidecar(
         train_count=1,
         ignored_count=0,
         test_count=3,
+    )
+
+
+def test_entity_sequence_builder_empty_inline_labels_short_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Normal-only entity hints should short-circuit when inline labels are absent.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to make the
+            chronology path fail if the inline-label fast path stops working.
+    """
+    sink = _SidecarOnlyEntitySink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+        chronology_index={
+            "a": EntityChronologyKey(0, 100, 0, "a"),
+            "b": EntityChronologyKey(0, 200, 1, "b"),
+            "c": EntityChronologyKey(0, 300, 2, "c"),
+            "d": EntityChronologyKey(0, 400, 3, "d"),
+        },
+        entity_count=4,
+    )
+
+    def _fail_sorted(*_: object, **__: object) -> object:
+        msg = "split_count_hint should not sort chronology when labels are absent"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(builtins, "sorted", _fail_sorted)
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
+        train_frac=0.25,
+        test_frac=0.75,
+        train_on_normal_entities_only=True,
+    )
+
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=4,
+        train_count=1,
+        ignored_count=0,
+        test_count=3,
+    )
+
+
+def test_entity_sequence_builder_reuses_group_label_per_entity() -> None:
+    """Entity grouping should not re-query the same group label for every row."""
+    sink = _SidecarOnlyEntitySink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="a",
+                untemplated_message_text="first-a",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=150,
+                entity_id="a",
+                untemplated_message_text="second-a",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=200,
+                entity_id="b",
+                untemplated_message_text="first-b",
+                anomalous=None,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=250,
+                entity_id="b",
+                untemplated_message_text="second-b",
+                anomalous=None,
+            ),
+        ],
+        chronology_index={
+            "a": EntityChronologyKey(0, 100, 0, "a"),
+            "b": EntityChronologyKey(0, 200, 2, "b"),
+        },
+        entity_count=2,
+    )
+    calls: list[str] = []
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: (
+            calls.append(entity_id) or (1 if entity_id == "b" else 0)
+        ),
+        train_frac=1.0,
+        test_frac=0.0,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.label for sequence in sequences] == [0, 1]
+    assert calls == ["a", "b"]
+
+
+def test_should_promote_from_group_label_handles_missing_entity_id() -> None:
+    """Missing entity ids should never promote a sequence from group labels."""
+    promote_from_group_label = vars(sequences_module)[
+        "_should_promote_from_group_label"
+    ]
+    assert not promote_from_group_label(
+        group_label_is_anomalous=None,
+        label_for_group=lambda _: 1,
+        entity_id=None,
     )
 
 

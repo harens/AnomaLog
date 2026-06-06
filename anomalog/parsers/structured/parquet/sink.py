@@ -5,6 +5,7 @@ import json
 import shutil
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -248,7 +249,7 @@ class ParquetStructuredSink(StructuredSink):
 
         Returns:
             tuple[dict[int, int], dict[str, int]]: Sparse per-line and per-group
-                anomaly labels.
+            anomaly labels.
         """
         cache_path = self.inline_label_cache_path()
         if cache_path.is_file():
@@ -256,6 +257,12 @@ class ParquetStructuredSink(StructuredSink):
                 return self._load_inline_label_cache_from_sidecar(cache_path)
             except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
                 pass
+
+        # A missing sidecar means the structured writer did not observe any
+        # inline anomaly labels, so the empty lookup can be returned without
+        # rescanning the full parquet cache.
+        if not cache_path.exists():
+            return {}, {}
 
         line_labels: dict[int, int] = {}
         group_labels: dict[str, int] = {}
@@ -601,12 +608,15 @@ class ParquetStructuredSink(StructuredSink):
             heap: list[
                 tuple[EntityChronologyKey, int, _EntityGroup, Iterator[_EntityGroup]]
             ] = []
-            for bucket_index, bucket_iter in enumerate(bucket_iters):
-                try:
-                    first_group = next(bucket_iter)
-                except StopIteration:
-                    continue
-                heap.append((first_group.order, bucket_index, first_group, bucket_iter))
+            for bucket_index, first_group in self._prefetch_bucket_heads(bucket_iters):
+                heap.append(
+                    (
+                        first_group.order,
+                        bucket_index,
+                        first_group,
+                        bucket_iters[bucket_index],
+                    ),
+                )
 
             heapq.heapify(heap)
 
@@ -625,6 +635,49 @@ class ParquetStructuredSink(StructuredSink):
 
         return _iter
 
+    @staticmethod
+    def _prefetch_bucket_heads(
+        bucket_iters: list[Iterator[_EntityGroup]],
+    ) -> list[tuple[int, _EntityGroup]]:
+        """Fetch the first group from each bucket iterator in parallel.
+
+        Args:
+            bucket_iters (list[Iterator[_EntityGroup]]): Bucket-local entity
+                iterators to prime before global heap merging begins.
+
+        Returns:
+            list[tuple[int, _EntityGroup]]: Non-empty bucket heads paired with
+                their bucket index.
+        """
+        if not bucket_iters:
+            return []
+        if len(bucket_iters) == 1:
+            first_group = next(bucket_iters[0], None)
+            return [] if first_group is None else [(0, first_group)]
+
+        def _next_group(
+            bucket_iter: Iterator[_EntityGroup],
+        ) -> _EntityGroup | None:
+            try:
+                return next(bucket_iter)
+            except StopIteration:
+                return None
+
+        heads: list[tuple[int, _EntityGroup]] = []
+        max_workers = min(len(bucket_iters), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_next_group, bucket_iter): bucket_index
+                for bucket_index, bucket_iter in enumerate(bucket_iters)
+            }
+            for future in as_completed(futures):
+                bucket_index = futures[future]
+                first_group = future.result()
+                if first_group is None:
+                    continue
+                heads.append((bucket_index, first_group))
+        return heads
+
     def _iter_entity_groups_in_bucket(
         self,
         bucket_id: int,
@@ -642,18 +695,24 @@ class ParquetStructuredSink(StructuredSink):
             _EntityGroup: One entity group from the requested bucket.
         """
         by_entity: dict[str, list[StructuredLine]] = {}
+        entity_sorted: dict[str, bool] = {}
         for row in self.iter_structured_lines(
             filter_expr=(ds.field(ENTITY_BUCKET_FIELD) == bucket_id),
         )():
             if row.entity_id is None:
                 continue
-            by_entity.setdefault(row.entity_id, []).append(row)
+            rows = by_entity.setdefault(row.entity_id, [])
+            if rows and row.line_order < rows[-1].line_order:
+                entity_sorted[row.entity_id] = False
+            rows.append(row)
 
         yield from sorted(
             (
                 self._entity_group_for_rows(
                     entity_id,
-                    sorted(rows, key=lambda row: row.line_order),
+                    rows
+                    if entity_sorted.get(entity_id, True)
+                    else sorted(rows, key=lambda row: row.line_order),
                     chronology_index=chronology_index,
                 )
                 for entity_id, rows in by_entity.items()

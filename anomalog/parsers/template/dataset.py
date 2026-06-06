@@ -1,6 +1,6 @@
 """Abstractions for templated datasets and template parser contracts."""
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, runtime_checkable
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 UntemplatedText: TypeAlias = str
 LogTemplate: TypeAlias = str
-ExtractedParameters: TypeAlias = Iterable[str]
+ExtractedParameters: TypeAlias = Sequence[str]
 
 
 # TODO: Add visualisation methods
