@@ -15,6 +15,7 @@ from anomalog.sequences import SplitLabel, TemplateSequence
 from experiments import ConfigError
 from experiments.config import load_experiment_bundles
 from experiments.models.base import SequenceSummary, decode_experiment_model_config
+from experiments.models.deeplog import detector as deeplog_detector
 from experiments.models.deeplog import key as deeplog_key
 from experiments.models.deeplog.detector import (
     DeepLogDetector,
@@ -1543,6 +1544,34 @@ def test_deeplog_sequence_trigger_breakdown_is_disabled_for_stream_batches() -> 
     metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
 
     assert metrics.sequence_trigger_breakdown is None
+
+
+def test_deeplog_stream_context_skips_parameter_tails_when_disabled() -> None:
+    """Key-only DeepLog should retain only the history needed for scoring."""
+    detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=2,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            parameter_detection_enabled=False,
+        ),
+    )
+    stream_context = deeplog_detector.DeepLogStreamContext()
+    sequence = _sequence(
+        templates=["A", "B", "C"],
+        continuous_context=True,
+    )
+
+    detector._update_stream_context(  # noqa: SLF001
+        sequence=sequence,
+        stream_context=stream_context,
+    )
+
+    assert stream_context.key_templates == ["B", "C"]
+    assert stream_context.parameter_events_by_template == {}
 
 
 def test_deeplog_next_event_predictions_accumulate_across_test_sequences() -> None:

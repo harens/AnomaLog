@@ -1558,6 +1558,8 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
             stream_context.key_templates = stream_context.key_templates[
                 -self.config.history_size :
             ]
+        if not self.config.parameter_detection_enabled:
+            return
         for template, parameters, dt_prev_ms in sequence.events:
             history = stream_context.parameter_events_by_template.setdefault(
                 template,
