@@ -640,6 +640,9 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
     materialise_key_training_examples = (
         deeplog_key._materialise_key_training_examples  # noqa: SLF001
     )
+    materialisation_config_type = vars(deeplog_key)[
+        "_KeyTrainingExampleMaterialisationConfig"
+    ]
     sequence_examples = materialise_key_training_examples(
         sequences=[
             _sequence(
@@ -651,15 +654,20 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
                 split_label=SplitLabel.TRAIN,
             ),
         ],
-        template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
-        history_size=2,
+        materialisation_config=materialisation_config_type(
+            template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
+            history_size=2,
+            device=torch.device("cpu"),
+        ),
         progress=None,
         prepare_task=None,
     )
 
     assert sequence_examples[0].history_windows.tolist() == [[0, 1], [1, 2]]
+    assert sequence_examples[0].history_one_hot_windows.shape == (2, 2, 4)
     assert sequence_examples[0].target_indexes.tolist() == [2, 3]
     assert sequence_examples[1].history_windows.shape == (0, 2)
+    assert sequence_examples[1].history_one_hot_windows.shape == (0, 2, 4)
     assert sequence_examples[1].target_indexes.shape == (0,)
 
 
@@ -849,37 +857,11 @@ def test_fit_key_model_retries_with_smaller_microbatches_on_cuda_oom(
     """Key-model training should back off instead of failing on CUDA OOM.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Installs a controlled OOM failure
-            in the key-model one-hot encoder.
+        monkeypatch (pytest.MonkeyPatch): Installs a controlled OOM failure in
+            the key-model forward path.
     """
     batch_sizes: list[int] = []
 
-    def _flaky_one_hot_history_indexes(
-        *,
-        history_indexes: torch.Tensor,
-        vocab_size: int,
-    ) -> torch.Tensor:
-        batch_sizes.append(int(history_indexes.shape[0]))
-        if history_indexes.shape[0] > 2:
-            msg = "CUDA out of memory. Tried to allocate 1.00 GiB."
-            raise RuntimeError(msg)
-        history_tensor = torch.zeros(
-            (
-                int(history_indexes.shape[0]),
-                int(history_indexes.shape[1]),
-                vocab_size,
-            ),
-            dtype=torch.float32,
-            device=history_indexes.device,
-        )
-        history_tensor.scatter_(2, history_indexes.unsqueeze(-1), 1.0)
-        return history_tensor
-
-    monkeypatch.setattr(
-        deeplog_key,
-        "_one_hot_history_indexes",
-        _flaky_one_hot_history_indexes,
-    )
     monkeypatch.setattr(deeplog_key, "_KEY_TRAINING_MICROBATCH_SIZE", 4)
 
     corpus = NormalTrainingCorpus(
@@ -900,6 +882,20 @@ def test_fit_key_model_retries_with_smaller_microbatches_on_cuda_oom(
         hidden_size=4,
         num_layers=1,
     )
+
+    original_forward = KeyLSTM.forward
+
+    def _flaky_forward(
+        self: KeyLSTM,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_sizes.append(int(inputs.shape[0]))
+        if inputs.shape[0] > 2:
+            msg = "CUDA out of memory. Tried to allocate 1.00 GiB."
+            raise RuntimeError(msg)
+        return original_forward(self, inputs)
+
+    monkeypatch.setattr(KeyLSTM, "forward", _flaky_forward)
 
     with Progress(disable=True) as progress:
         fit_key_model(

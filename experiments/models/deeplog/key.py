@@ -66,11 +66,13 @@ class _KeyTrainingSequenceExamples:
 
     Attributes:
         template_indexes (torch.Tensor): Encoded templates for the full
-            sequence on CPU.
+            sequence.
         eligible_target_indexes (torch.Tensor): Zero-based indexes of the
-            eligible next-key targets for the sequence on CPU.
+            eligible next-key targets for the sequence.
         history_windows (torch.Tensor): Cached history windows aligned with the
             eligible targets.
+        history_one_hot_windows (torch.Tensor): Cached one-hot histories
+            aligned with the eligible targets on the training device.
         target_indexes (torch.Tensor): Cached next-key targets aligned with the
             history windows.
     """
@@ -78,7 +80,23 @@ class _KeyTrainingSequenceExamples:
     template_indexes: torch.Tensor
     eligible_target_indexes: torch.Tensor
     history_windows: torch.Tensor
+    history_one_hot_windows: torch.Tensor
     target_indexes: torch.Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyTrainingExampleMaterialisationConfig:
+    """Settings needed to cache replayable DeepLog key examples.
+
+    Attributes:
+        template_to_index (dict[str, int]): Template vocabulary mapping.
+        history_size (int): Number of prior keys required for each example.
+        device (torch.device): Device used for cached one-hot histories.
+    """
+
+    template_to_index: dict[str, int]
+    history_size: int
+    device: torch.device
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +111,6 @@ class _KeyTrainingRun:
         epochs (int): Number of training epochs.
         batch_size (int): Training batch size.
         device (torch.device): Torch device used for the run.
-        vocab_size (int): Number of known key indexes.
     """
 
     criterion: nn.CrossEntropyLoss
@@ -102,7 +119,6 @@ class _KeyTrainingRun:
     epochs: int
     batch_size: int
     device: torch.device
-    vocab_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,8 +181,11 @@ def fit_key_model(
     try:
         sequence_examples = _materialise_key_training_examples(
             sequences=training_corpus.sequences,
-            template_to_index=template_to_index,
-            history_size=config.history_size,
+            materialisation_config=_KeyTrainingExampleMaterialisationConfig(
+                template_to_index=template_to_index,
+                history_size=config.history_size,
+                device=device,
+            ),
             progress=progress,
             prepare_task=prepare_task,
         )
@@ -191,7 +210,6 @@ def fit_key_model(
             epochs=config.epochs,
             batch_size=config.batch_size,
             device=device,
-            vocab_size=len(template_to_index),
         ),
         progress=progress,
     )
@@ -201,8 +219,7 @@ def fit_key_model(
 def _materialise_key_training_examples(
     *,
     sequences: Iterable[TemplateSequence],
-    template_to_index: dict[str, int],
-    history_size: int,
+    materialisation_config: _KeyTrainingExampleMaterialisationConfig,
     progress: Progress | None,
     prepare_task: TaskID | None,
 ) -> tuple[_KeyTrainingSequenceExamples, ...]:
@@ -210,8 +227,8 @@ def _materialise_key_training_examples(
 
     Args:
         sequences (Iterable[TemplateSequence]): Normal training sequences.
-        template_to_index (dict[str, int]): Template vocabulary mapping.
-        history_size (int): Number of prior keys required for each example.
+        materialisation_config (_KeyTrainingExampleMaterialisationConfig):
+            Template vocabulary mapping and cache-device settings.
         progress (Progress | None): Optional progress reporter.
         prepare_task (TaskID | None): Progress task used while scanning.
 
@@ -221,6 +238,9 @@ def _materialise_key_training_examples(
     Raises:
         ValueError: If the corpus contains no history/next-key examples.
     """
+    template_to_index = materialisation_config.template_to_index
+    history_size = materialisation_config.history_size
+    device = materialisation_config.device
     sequence_examples: list[_KeyTrainingSequenceExamples] = []
     has_examples = False
     for sequence in sequences:
@@ -246,6 +266,10 @@ def _materialise_key_training_examples(
                 0,
                 eligible_target_indexes - history_size,
             )
+            history_one_hot_windows = _one_hot_history_indexes(
+                history_indexes=history_windows.to(device=device),
+                vocab_size=len(template_to_index),
+            )
             target_indexes = template_indexes.index_select(
                 0,
                 eligible_target_indexes,
@@ -255,12 +279,18 @@ def _materialise_key_training_examples(
                 (0, history_size),
                 dtype=torch.long,
             )
+            history_one_hot_windows = torch.empty(
+                (0, history_size, len(template_to_index)),
+                dtype=torch.float32,
+                device=device,
+            )
             target_indexes = torch.empty((0,), dtype=torch.long)
         sequence_examples.append(
             _KeyTrainingSequenceExamples(
                 template_indexes=template_indexes,
                 eligible_target_indexes=eligible_target_indexes,
                 history_windows=history_windows,
+                history_one_hot_windows=history_one_hot_windows,
                 target_indexes=target_indexes,
             ),
         )
@@ -377,7 +407,7 @@ def _iter_key_training_batches(
     for sequence_examples in training_sequences:
         if sequence_examples.target_indexes.numel() == 0:
             continue
-        history_windows = sequence_examples.history_windows
+        history_windows = sequence_examples.history_one_hot_windows
         target_indexes = sequence_examples.target_indexes
         example_count = int(target_indexes.shape[0])
         start_index = 0
@@ -420,7 +450,7 @@ def _optimise_key_training_batch(
             smallest supported microbatch size.
     """
     batch_size = int(batch_histories.shape[0])
-    batch_history_indexes = batch_histories.to(device=training_run.device)
+    batch_histories = batch_histories.to(device=training_run.device)
     batch_target_indexes = batch_targets.to(device=training_run.device)
     microbatch_size = min(batch_size, _KEY_TRAINING_MICROBATCH_SIZE)
     while True:
@@ -428,12 +458,7 @@ def _optimise_key_training_batch(
         try:
             for start in range(0, batch_size, microbatch_size):
                 end = start + microbatch_size
-                logits = model(
-                    _one_hot_history_indexes(
-                        history_indexes=batch_history_indexes[start:end],
-                        vocab_size=training_run.vocab_size,
-                    ),
-                )
+                logits = model(batch_histories[start:end])
                 loss = training_run.criterion(
                     logits,
                     batch_target_indexes[start:end],
