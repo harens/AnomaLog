@@ -48,9 +48,7 @@ from experiments.models.evaluate import (
 )
 from experiments.models.markov import MarkovManifest, MarkovModelConfig
 from experiments.models.naive_bayes import NaiveBayesModelConfig
-from experiments.models.template_frequency import (
-    TemplateFrequencyModelConfig,
-)
+from experiments.models.template_frequency import TemplateFrequencyModelConfig
 from tests.unit.helpers import (
     InMemoryStructuredSink,
     NullStructuredParser,
@@ -809,6 +807,30 @@ def test_template_frequency_detector_treats_missing_labels_as_normal() -> None:
     assert detector.event_score_threshold == pytest.approx(detector.score_threshold)
     assert detector.event_threshold_source == detector.threshold_source
     assert detector.predict(train_sequences[0]).predicted_label == 0
+
+
+def test_template_frequency_detector_skips_event_metrics_for_train_sequences() -> None:
+    """Train-split predictions should not record event-level metrics."""
+    detector = _template_frequency_config(
+        name="template_frequency",
+    ).build_detector()
+    train_sequence = _sequence(
+        43,
+        templates=["normal login", "normal read"],
+        label=0,
+        split_label=SplitLabel.TRAIN,
+        event_labels=(0, 0),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit(
+            [_sequence(44, templates=["normal read"], label=0)],
+            progress=progress,
+        )
+
+    detector.predict(train_sequence)
+
+    assert detector.run_metrics(run_metrics={}) is None
 
 
 def test_template_frequency_detector_uses_event_masks_for_fit_and_scoring() -> None:

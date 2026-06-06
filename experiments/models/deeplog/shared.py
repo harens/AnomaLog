@@ -23,8 +23,8 @@ import msgspec
 import torch
 from torch import nn
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
 from experiments.models.base import ModelManifest
-from experiments.models.sequence_masks import training_event_index_mask
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -515,12 +515,15 @@ def _collect_normal_training_corpus(
     for sequence in train_sequences:
         if observe_sequence is not None:
             observe_sequence(sequence)
-        eligible_indexes = training_event_index_mask(sequence)
-        if not eligible_indexes:
+        explicit_mask = sequence.training_event_mask
+        if explicit_mask is None and is_anomalous_label(sequence.label):
             progress.advance(prepare_task)
             continue
         normal_sequences.append(sequence)
-        event_count += len(eligible_indexes)
-        template_set.update(sequence.templates)
+        if explicit_mask is None:
+            event_count += len(sequence.events)
+        else:
+            event_count += sum(1 for is_eligible in explicit_mask if is_eligible)
+        template_set.update(template for template, _, _ in sequence.events)
         progress.advance(prepare_task)
     return normal_sequences, template_set, event_count

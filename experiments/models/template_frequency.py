@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
+from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.sequences import SplitLabel
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -25,10 +27,6 @@ from experiments.models.event_level_detection import (
     EventLevelDetectionState,
 )
 from experiments.models.progress import fit_stage_description
-from experiments.models.sequence_masks import (
-    evaluation_event_mask_for_sequence,
-    training_event_mask_for_sequence,
-)
 
 if TYPE_CHECKING:
     import logging
@@ -167,10 +165,7 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             train_sequences,
             description=fit_stage_description(self.detector_name),
         ):
-            eligible_training_templates = _masked_templates(
-                sequence=sequence,
-                event_mask=training_event_mask_for_sequence(sequence),
-            )
+            eligible_training_templates = _eligible_training_templates(sequence)
             if not eligible_training_templates:
                 continue
             counts.update(eligible_training_templates)
@@ -270,10 +265,7 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             float: Mean negative log-probability under the learned template model.
         """
-        templates = _masked_templates(
-            sequence=sequence,
-            event_mask=evaluation_event_mask_for_sequence(sequence),
-        )
+        templates = _eligible_evaluation_templates(sequence)
         return self._score_templates(templates)
 
     def _score_template(self, template: str) -> float:
@@ -370,11 +362,11 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         """
         if sequence.event_labels is None:
             return
-        eligible_event_mask = evaluation_event_mask_for_sequence(sequence)
-        if not any(eligible_event_mask):
+        eligible_event_mask = _evaluation_event_mask(sequence)
+        if not eligible_event_mask:
             return
         for template, actual_label, is_eligible in zip(
-            sequence.templates,
+            (template for template, _, _ in sequence.events),
             sequence.event_labels,
             eligible_event_mask,
             strict=True,
@@ -443,26 +435,68 @@ class TemplateFrequencyManifest(ModelManifest, frozen=True):
     train_template_vocabulary: int
 
 
-def _masked_templates(
-    *,
-    sequence: TemplateSequence,
-    event_mask: tuple[bool, ...],
-) -> list[str]:
-    """Return the templates whose positions are eligible under one mask.
+def _eligible_training_templates(sequence: TemplateSequence) -> list[str]:
+    """Return the templates eligible for template-frequency fitting.
 
     Args:
-        sequence (TemplateSequence): Sequence whose templates should be masked.
-        event_mask (tuple[bool, ...]): Eligibility mask aligned to the
-            sequence's templates.
+        sequence (TemplateSequence): Training sequence to inspect.
 
     Returns:
-        list[str]: Templates retained by the mask.
+        list[str]: Templates eligible for counting and calibration.
     """
+    if sequence.training_event_mask is None:
+        if is_anomalous_label(sequence.label):
+            return []
+        return [template for template, _, _ in sequence.events]
     return [
         template
-        for template, is_eligible in zip(sequence.templates, event_mask, strict=True)
+        for (template, _, _), is_eligible in zip(
+            sequence.events,
+            sequence.training_event_mask,
+            strict=True,
+        )
         if is_eligible
     ]
+
+
+def _eligible_evaluation_templates(sequence: TemplateSequence) -> list[str]:
+    """Return the templates eligible for template-frequency scoring.
+
+    Args:
+        sequence (TemplateSequence): Sequence to score.
+
+    Returns:
+        list[str]: Templates eligible for anomaly scoring.
+    """
+    if sequence.evaluation_event_mask is None:
+        if sequence.split_label is not SplitLabel.TEST:
+            return []
+        return [template for template, _, _ in sequence.events]
+    return [
+        template
+        for (template, _, _), is_eligible in zip(
+            sequence.events,
+            sequence.evaluation_event_mask,
+            strict=True,
+        )
+        if is_eligible
+    ]
+
+
+def _evaluation_event_mask(sequence: TemplateSequence) -> tuple[bool, ...]:
+    """Return the evaluation mask, preserving the no-mask fast path.
+
+    Args:
+        sequence (TemplateSequence): Sequence whose scoring mask is needed.
+
+    Returns:
+        tuple[bool, ...]: Explicit or derived per-event evaluation mask.
+    """
+    if sequence.evaluation_event_mask is not None:
+        return sequence.evaluation_event_mask
+    if sequence.split_label is not SplitLabel.TEST:
+        return ()
+    return tuple(True for _ in sequence.events)
 
 
 def _quantile(sorted_values: list[float], q: float) -> float:
