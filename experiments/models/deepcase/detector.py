@@ -1561,10 +1561,10 @@ def _predict_next_event_batch_in_chunks(
             ),
             steps=1,
         )
-        confidence_chunks.append(confidence)
+        confidence_chunks.append(confidence.detach().cpu())
     if not confidence_chunks:
         output_size = model.context_builder.decoder_event.out.out_features
-        return torch.empty((0, 1, output_size), device=device)
+        return torch.empty((0, 1, output_size))
     return torch.cat(confidence_chunks, dim=0)
 
 

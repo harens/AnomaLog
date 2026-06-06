@@ -658,7 +658,6 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
         materialisation_config=materialisation_config_type(
             template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
             history_size=2,
-            device=torch.device("cpu"),
         ),
         progress=None,
         prepare_task=None,
@@ -670,6 +669,116 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
     assert sequence_examples[1].history_windows.shape == (0, 2)
     assert sequence_examples[1].history_one_hot_windows.shape == (0, 2, 4)
     assert sequence_examples[1].target_indexes.shape == (0,)
+    assert sequence_examples[0].history_windows.device.type == "cpu"
+    assert sequence_examples[1].history_windows.device.type == "cpu"
+    assert sequence_examples[0].history_one_hot_windows.device.type == "cpu"
+    assert sequence_examples[1].history_one_hot_windows.device.type == "cpu"
+
+
+def test_fit_key_model_caches_one_hot_histories_across_epochs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepLog should materialise one-hot histories once and reuse them.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records one-hot history construction
+            during key-model fitting.
+    """
+    one_hot_shapes: list[tuple[int, int]] = []
+    original_one_hot_history_indexes = deeplog_key._one_hot_history_indexes  # noqa: SLF001
+
+    def _recording_one_hot_history_indexes(
+        *,
+        history_indexes: torch.Tensor,
+        vocab_size: int,
+    ) -> torch.Tensor:
+        one_hot_shapes.append(
+            (
+                int(history_indexes.shape[0]),
+                int(history_indexes.shape[1]),
+            ),
+        )
+        return original_one_hot_history_indexes(
+            history_indexes=history_indexes,
+            vocab_size=vocab_size,
+        )
+
+    monkeypatch.setattr(
+        deeplog_key,
+        "_one_hot_history_indexes",
+        _recording_one_hot_history_indexes,
+    )
+
+    corpus = NormalTrainingCorpus(
+        sequences=(
+            _sequence(
+                templates=["A", "B", "C", "D", "E"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ),
+        templates=("A", "B", "C", "D", "E"),
+        event_count=5,
+    )
+    config = _deep_log_config(
+        name="deeplog",
+        history_size=1,
+        epochs=2,
+        batch_size=2,
+        hidden_size=4,
+        num_layers=1,
+    )
+
+    with Progress(disable=True) as progress:
+        fit_key_model(
+            training_corpus=corpus,
+            config=config,
+            device=torch.device("cpu"),
+            progress=progress,
+        )
+
+    assert one_hot_shapes == [(4, 1)]
+
+
+def test_move_key_training_batch_to_device_pins_cuda_transfers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepLog should pin cached batches before CUDA transfers.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Records pinning and transfer calls.
+    """
+    pin_calls: list[tuple[int, ...]] = []
+    to_calls: list[tuple[str | None, bool | None]] = []
+
+    def _pin_memory(self: torch.Tensor) -> torch.Tensor:
+        pin_calls.append(tuple(int(size) for size in self.shape))
+        return self
+
+    def _to(
+        self: torch.Tensor,
+        *,
+        device: torch.device,
+        non_blocking: bool = False,
+    ) -> torch.Tensor:
+        to_calls.append((device.type, non_blocking))
+        return self
+
+    monkeypatch.setattr(torch.Tensor, "pin_memory", _pin_memory, raising=False)
+    monkeypatch.setattr(torch.Tensor, "to", _to, raising=False)
+
+    histories = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]], dtype=torch.float32)
+    targets = torch.tensor([1], dtype=torch.long)
+
+    moved_histories, moved_targets = deeplog_key._move_key_training_batch_to_device(  # noqa: SLF001
+        batch_histories=histories,
+        batch_targets=targets,
+        device=torch.device("cuda"),
+    )
+
+    assert moved_histories is histories
+    assert moved_targets is targets
+    assert pin_calls == [(1, 2, 2), (1,)]
+    assert to_calls == [("cuda", True), ("cuda", True)]
 
 
 def test_fit_key_model_reports_example_preparation_progress(

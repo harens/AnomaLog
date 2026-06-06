@@ -72,7 +72,7 @@ class _KeyTrainingSequenceExamples:
         history_windows (torch.Tensor): Cached history windows aligned with the
             eligible targets.
         history_one_hot_windows (torch.Tensor): Cached one-hot histories
-            aligned with the eligible targets on the training device.
+            aligned with the eligible targets on the CPU.
         target_indexes (torch.Tensor): Cached next-key targets aligned with the
             history windows.
     """
@@ -91,12 +91,10 @@ class _KeyTrainingExampleMaterialisationConfig:
     Attributes:
         template_to_index (dict[str, int]): Template vocabulary mapping.
         history_size (int): Number of prior keys required for each example.
-        device (torch.device): Device used for cached one-hot histories.
     """
 
     template_to_index: dict[str, int]
     history_size: int
-    device: torch.device
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,7 +182,6 @@ def fit_key_model(
             materialisation_config=_KeyTrainingExampleMaterialisationConfig(
                 template_to_index=template_to_index,
                 history_size=config.history_size,
-                device=device,
             ),
             progress=progress,
             prepare_task=prepare_task,
@@ -228,7 +225,7 @@ def _materialise_key_training_examples(
     Args:
         sequences (Iterable[TemplateSequence]): Normal training sequences.
         materialisation_config (_KeyTrainingExampleMaterialisationConfig):
-            Template vocabulary mapping and cache-device settings.
+            Template vocabulary mapping and history window length.
         progress (Progress | None): Optional progress reporter.
         prepare_task (TaskID | None): Progress task used while scanning.
 
@@ -240,7 +237,6 @@ def _materialise_key_training_examples(
     """
     template_to_index = materialisation_config.template_to_index
     history_size = materialisation_config.history_size
-    device = materialisation_config.device
     sequence_examples: list[_KeyTrainingSequenceExamples] = []
     has_examples = False
     for sequence in sequences:
@@ -267,7 +263,7 @@ def _materialise_key_training_examples(
                 eligible_target_indexes - history_size,
             )
             history_one_hot_windows = _one_hot_history_indexes(
-                history_indexes=history_windows.to(device=device),
+                history_indexes=history_windows,
                 vocab_size=len(template_to_index),
             )
             target_indexes = template_indexes.index_select(
@@ -282,7 +278,6 @@ def _materialise_key_training_examples(
             history_one_hot_windows = torch.empty(
                 (0, history_size, len(template_to_index)),
                 dtype=torch.float32,
-                device=device,
             )
             target_indexes = torch.empty((0,), dtype=torch.long)
         sequence_examples.append(
@@ -450,8 +445,11 @@ def _optimise_key_training_batch(
             smallest supported microbatch size.
     """
     batch_size = int(batch_histories.shape[0])
-    batch_histories = batch_histories.to(device=training_run.device)
-    batch_target_indexes = batch_targets.to(device=training_run.device)
+    batch_histories, batch_target_indexes = _move_key_training_batch_to_device(
+        batch_histories=batch_histories,
+        batch_targets=batch_targets,
+        device=training_run.device,
+    )
     microbatch_size = min(batch_size, _KEY_TRAINING_MICROBATCH_SIZE)
     while True:
         optimizer.zero_grad()
@@ -474,6 +472,40 @@ def _optimise_key_training_batch(
             continue
         optimizer.step()
         return
+
+
+def _move_key_training_batch_to_device(
+    *,
+    batch_histories: torch.Tensor,
+    batch_targets: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Move one cached DeepLog key batch onto the training device.
+
+    The CPU-cached one-hot histories stay out of GPU memory until a minibatch
+    is about to be optimised. When the target device is CUDA, pinning the host
+    tensors first keeps the transfer path asynchronous without changing the
+    training semantics.
+
+    Args:
+        batch_histories (torch.Tensor): Batched one-hot history windows.
+        batch_targets (torch.Tensor): Matching target indexes.
+        device (torch.device): Training device.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: Device-ready histories and targets.
+    """
+    if device.type == "cuda":
+        batch_histories = batch_histories.pin_memory()
+        batch_targets = batch_targets.pin_memory()
+        return (
+            batch_histories.to(device=device, non_blocking=True),
+            batch_targets.to(device=device, non_blocking=True),
+        )
+    return (
+        batch_histories.to(device=device),
+        batch_targets.to(device=device),
+    )
 
 
 def _is_cuda_oom_error(exc: RuntimeError) -> bool:

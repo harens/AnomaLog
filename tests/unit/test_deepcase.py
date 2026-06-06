@@ -2185,3 +2185,63 @@ def test_deepcase_predict_batch_uses_attention_query_iterations(
 
     assert captured_iterations == [7]
     assert outcome.score == pytest.approx(0.0)
+
+
+def test_predict_next_event_batch_in_chunks_moves_confidence_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepCase should release chunk confidences as soon as they are produced.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the upstream predict method
+            so the test can observe chunk-level confidence handling.
+    """
+
+    class _ConfidenceChunk:
+        def __init__(self, tensor: torch.Tensor) -> None:
+            self.tensor = tensor
+
+        def detach(self) -> _ConfidenceChunk:
+            return self
+
+        def cpu(self) -> torch.Tensor:
+            cpu_calls.append(1)
+            return self.tensor
+
+    def _fake_predict(**kwargs: torch.Tensor | int) -> tuple[_ConfidenceChunk, None]:
+        x = kwargs["X"]
+        steps = kwargs["steps"]
+        del steps
+        assert isinstance(x, torch.Tensor)
+        predict_shapes.append(tuple(int(size) for size in x.shape))
+        chunk = torch.full((x.shape[0], 1, 4), float(len(predict_shapes)))
+        return _ConfidenceChunk(chunk), None
+
+    cpu_calls: list[int] = []
+    predict_shapes: list[tuple[int, ...]] = []
+    model = DeepCASE(features=4)
+    monkeypatch.setattr(model.context_builder, "predict", _fake_predict)
+    batch = deepcase_shared.DeepCaseSampleBatch(
+        contexts=np.array([[1, 2], [2, 3], [3, 4]], dtype=np.int64),
+        context_original_event_ids=[[1, 2], [2, 3], [3, 4]],
+        events=np.array([2, 3, 4], dtype=np.int64),
+        scores=np.array([0.0, 0.0, 0.0], dtype=float),
+        event_indexes=[0, 1, 2],
+        templates=["A", "B", "C"],
+        original_event_ids=[1, 2, 3],
+        parent_sequence_fallback_count=0,
+    )
+
+    confidence = deepcase_detector._predict_next_event_batch_in_chunks(  # noqa: SLF001
+        model=model,
+        batch=batch,
+        device=torch.device("cpu"),
+        chunk_size=2,
+    )
+
+    assert cpu_calls == [1, 1]
+    assert predict_shapes == [(2, 2), (1, 2)]
+    assert confidence.device.type == "cpu"
+    assert confidence.shape == (3, 1, 4)
+    assert confidence[0, 0, 0].item() == pytest.approx(1.0)
+    assert confidence[2, 0, 0].item() == pytest.approx(2.0)
