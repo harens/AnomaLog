@@ -69,10 +69,16 @@ class _KeyTrainingSequenceExamples:
             sequence on CPU.
         eligible_target_indexes (torch.Tensor): Zero-based indexes of the
             eligible next-key targets for the sequence on CPU.
+        history_windows (torch.Tensor): Cached history windows aligned with the
+            eligible targets.
+        target_indexes (torch.Tensor): Cached next-key targets aligned with the
+            history windows.
     """
 
     template_indexes: torch.Tensor
     eligible_target_indexes: torch.Tensor
+    history_windows: torch.Tensor
+    target_indexes: torch.Tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,10 +238,30 @@ def _materialise_key_training_examples(
         )
         if template_indexes.numel() > history_size and eligible_target_indexes.numel():
             has_examples = True
+            history_windows = template_indexes.unfold(
+                0,
+                history_size,
+                1,
+            ).index_select(
+                0,
+                eligible_target_indexes - history_size,
+            )
+            target_indexes = template_indexes.index_select(
+                0,
+                eligible_target_indexes,
+            )
+        else:
+            history_windows = torch.empty(
+                (0, history_size),
+                dtype=torch.long,
+            )
+            target_indexes = torch.empty((0,), dtype=torch.long)
         sequence_examples.append(
             _KeyTrainingSequenceExamples(
                 template_indexes=template_indexes,
                 eligible_target_indexes=eligible_target_indexes,
+                history_windows=history_windows,
+                target_indexes=target_indexes,
             ),
         )
         if progress is not None and prepare_task is not None:
@@ -349,23 +375,10 @@ def _iter_key_training_batches(
     batch_targets: list[torch.Tensor] = []
     batch_count = 0
     for sequence_examples in training_sequences:
-        if sequence_examples.eligible_target_indexes.numel() == 0:
+        if sequence_examples.target_indexes.numel() == 0:
             continue
-        template_indexes = sequence_examples.template_indexes
-        if template_indexes.numel() <= training_run.history_size:
-            continue
-        history_windows = template_indexes.unfold(
-            0,
-            training_run.history_size,
-            1,
-        ).index_select(
-            0,
-            sequence_examples.eligible_target_indexes - training_run.history_size,
-        )
-        target_indexes = template_indexes.index_select(
-            0,
-            sequence_examples.eligible_target_indexes,
-        )
+        history_windows = sequence_examples.history_windows
+        target_indexes = sequence_examples.target_indexes
         example_count = int(target_indexes.shape[0])
         start_index = 0
         while start_index < example_count:

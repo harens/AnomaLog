@@ -635,6 +635,34 @@ def test_iter_key_examples_respects_eligible_target_indexes() -> None:
     ]
 
 
+def test_materialise_key_training_examples_caches_history_windows() -> None:
+    """Key training should cache per-sequence histories and targets once."""
+    materialise_key_training_examples = (
+        deeplog_key._materialise_key_training_examples  # noqa: SLF001
+    )
+    sequence_examples = materialise_key_training_examples(
+        sequences=[
+            _sequence(
+                templates=["A", "B", "C", "D"],
+                split_label=SplitLabel.TRAIN,
+            ),
+            _sequence(
+                templates=["D", "C"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ],
+        template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
+        history_size=2,
+        progress=None,
+        prepare_task=None,
+    )
+
+    assert sequence_examples[0].history_windows.tolist() == [[0, 1], [1, 2]]
+    assert sequence_examples[0].target_indexes.tolist() == [2, 3]
+    assert sequence_examples[1].history_windows.shape == (0, 2)
+    assert sequence_examples[1].target_indexes.shape == (0,)
+
+
 def test_fit_key_model_reports_example_preparation_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

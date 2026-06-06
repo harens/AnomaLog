@@ -89,6 +89,7 @@ EXPECTED_MANUAL_ALERT_COUNT = 40
 EXPECTED_SEMI_AUTOMATIC_TOTAL_CONTEXTUAL_SEQUENCE_COUNT = 40
 EXPECTED_SEMI_AUTOMATIC_COVERED_CONTEXTUAL_SEQUENCE_COUNT = 30
 EXPECTED_SEMI_AUTOMATIC_UNCOVERED_CONTEXTUAL_SEQUENCE_COUNT = 10
+EXPECTED_CONTEXT_BATCH_TENSOR_CONVERSION_CALLS = 2
 EXPECTED_MASKED_BATCH_SAMPLE_COUNT = 2
 EXPECTED_DEEPCASE_EPOCHS = 100
 EXPECTED_DEEPCASE_ATTENTION_QUERY_ITERATIONS = 100
@@ -1186,6 +1187,9 @@ def test_fit_context_builder_reuses_cached_training_batches(
     optimiser_calls = 0
     optimiser_zero_grad_calls = 0
     optimiser_step_calls = 0
+    as_tensor_calls = 0
+
+    original_as_tensor = deepcase_detector.torch.as_tensor
 
     def fake_build_training_batch_from_map(
         sequences: object,
@@ -1202,6 +1206,15 @@ def test_fit_context_builder_reuses_cached_training_batches(
             events=np.asarray([0], dtype=int),
             sample_count=1,
         )
+
+    def fake_as_tensor(
+        data: object,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | int | None = None,
+    ) -> torch.Tensor:
+        nonlocal as_tensor_calls
+        as_tensor_calls += 1
+        return original_as_tensor(data, dtype=dtype, device=device)
 
     class FakeOptimiser:
         def __init__(self, params: object, lr: float) -> None:
@@ -1234,6 +1247,7 @@ def test_fit_context_builder_reuses_cached_training_batches(
         "build_training_batch_from_map",
         fake_build_training_batch_from_map,
     )
+    monkeypatch.setattr(deepcase_detector.torch, "as_tensor", fake_as_tensor)
 
     model = DeepCASE(features=len(event_id_map.event_id_to_template))
 
@@ -1268,6 +1282,8 @@ def test_fit_context_builder_reuses_cached_training_batches(
         timeout_seconds=config.timeout_seconds,
     )
     assert len(cached_batches) == 1
+    assert cached_batches[0].contexts_tensor.shape == (1, 2)
+    assert cached_batches[0].events_tensor.shape == (1, 1)
     fit_context_builder_in_chunks(
         model=model,
         cached_batches=cached_batches,
@@ -1275,6 +1291,7 @@ def test_fit_context_builder_reuses_cached_training_batches(
     )
 
     assert build_calls == 1
+    assert as_tensor_calls == EXPECTED_CONTEXT_BATCH_TENSOR_CONVERSION_CALLS
     assert optimiser_calls == 1
     assert optimiser_zero_grad_calls == expected_epoch_count
     assert optimiser_step_calls == expected_epoch_count

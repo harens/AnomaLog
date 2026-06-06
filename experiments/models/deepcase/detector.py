@@ -1022,9 +1022,15 @@ class _CachedContextBuilderTrainingBatch:
     Attributes:
         batch (DeepCaseSampleBatch): Cached DeepCASE training batch for one
             chunk, reused by both the context builder and clustering phases.
+        contexts_tensor (torch.Tensor): Cached context tensor reused across
+            all training epochs.
+        events_tensor (torch.Tensor): Cached target-event tensor reused across
+            all training epochs.
     """
 
     batch: DeepCaseSampleBatch
+    contexts_tensor: torch.Tensor
+    events_tensor: torch.Tensor
 
 
 @dataclass(slots=True)
@@ -1224,11 +1230,10 @@ def _train_context_builder_batches(
     """
     for _ in range(state.epochs):
         for cached_batch in state.cached_batches:
-            batch = cached_batch.batch
             data = torch.utils.data.DataLoader(
                 torch.utils.data.TensorDataset(
-                    torch.as_tensor(batch.contexts, dtype=torch.int64),
-                    torch.as_tensor(batch.events, dtype=torch.int64).reshape(-1, 1),
+                    cached_batch.contexts_tensor,
+                    cached_batch.events_tensor,
                 ),
                 batch_size=state.batch_size,
                 shuffle=True,
@@ -1288,7 +1293,19 @@ def _materialise_context_builder_training_batches(
         )
         if batch.sample_count == 0:
             continue
-        cached_batches.append(_CachedContextBuilderTrainingBatch(batch=batch))
+        cached_batches.append(
+            _CachedContextBuilderTrainingBatch(
+                batch=batch,
+                contexts_tensor=torch.as_tensor(
+                    batch.contexts,
+                    dtype=torch.int64,
+                ),
+                events_tensor=torch.as_tensor(
+                    batch.events,
+                    dtype=torch.int64,
+                ).reshape(-1, 1),
+            ),
+        )
     return cached_batches
 
 
