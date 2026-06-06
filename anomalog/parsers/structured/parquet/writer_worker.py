@@ -57,6 +57,8 @@ class WriterConfig:
 
 ENTITY_BUCKET_FIELD = "entity_bucket"
 ENTITY_CHRONOLOGY_INDEX_FILENAME = "entity_chronology_index.jsonl"
+ENTITY_COUNT_FILENAME = "entity_count.json"
+INLINE_LABEL_CACHE_FILENAME = "inline_label_cache.jsonl"
 _STRUCTURED_PROGRESS_SILENCE_SECONDS = 60
 
 
@@ -77,6 +79,33 @@ class EntityChronologyKey:
     first_timestamp_unix_ms: int
     first_line_order: int
     entity_id: str
+
+
+@dataclass(slots=True)
+class _StructuredComponentsWriteState:
+    """Mutable bookkeeping for the final structured-write summary.
+
+    Attributes:
+        parquet_out_dir (Path): Output directory for the structured parquet
+            dataset.
+        entity_chronology (dict[str, EntityChronologyKey]): First-seen
+            chronology metadata keyed by entity id.
+        has_inline_labels (bool): Whether the structured rows exposed any
+            inline anomaly labels.
+        inline_label_entries (list[dict[str, object]]): Sparse anomaly labels
+            keyed by line order and entity id.
+        raw_input_path (Path): Raw log file that was parsed into the dataset.
+        batches_emitted (int): Number of record batches written to parquet.
+        started_at (float): Timestamp at which the structured extraction began.
+    """
+
+    parquet_out_dir: Path
+    entity_chronology: dict[str, EntityChronologyKey]
+    has_inline_labels: bool
+    inline_label_entries: list[dict[str, object]]
+    raw_input_path: Path
+    batches_emitted: int
+    started_at: float
 
 
 STRUCTURED_BATCH_SCHEMA = pa.schema(
@@ -278,14 +307,16 @@ def extract_structured_components(
 
     has_inline_labels = False
     batches_emitted = 0
+    inline_label_entries: list[dict[str, object]] = []
 
     def _tracking_batches() -> Generator[pa.RecordBatch, None, None]:
         nonlocal has_inline_labels, batches_emitted
         for batch in itertools.chain((first_batch,), batch_iter):
-            if ANOMALOUS_FIELD in batch.schema.names:
-                col = batch.column(ANOMALOUS_FIELD)
-                if col.null_count < len(col):
-                    has_inline_labels = True
+            has_inline_labels = _track_inline_label_entries(
+                batch=batch,
+                has_inline_labels=has_inline_labels,
+                inline_label_entries=inline_label_entries,
+            )
 
             batches_emitted += 1
             yield batch
@@ -325,29 +356,144 @@ def extract_structured_components(
         perf_counter() - stage_started_at,
     )
 
-    stage_started_at = perf_counter()
-    _write_entity_chronology_index(
-        parquet_out_dir=parquet_out_dir,
-        chronology=entity_chronology,
-    )
-    logger.info(
-        "Wrote entity chronology sidecar for %s in %.3fs",
-        parquet_out_dir,
-        perf_counter() - stage_started_at,
+    _finalise_structured_components_write(
+        state=_StructuredComponentsWriteState(
+            parquet_out_dir=parquet_out_dir,
+            entity_chronology=entity_chronology,
+            has_inline_labels=has_inline_labels,
+            inline_label_entries=inline_label_entries,
+            raw_input_path=raw_input_path,
+            batches_emitted=batches_emitted,
+            started_at=started_at,
+        ),
     )
 
+    return has_inline_labels
+
+
+def _track_inline_label_entries(
+    *,
+    batch: pa.RecordBatch,
+    has_inline_labels: bool,
+    inline_label_entries: list[dict[str, object]],
+) -> bool:
+    """Record sparse inline labels from one parsed record batch.
+
+    Args:
+        batch (pa.RecordBatch): Batch currently being written to parquet.
+        has_inline_labels (bool): Whether any earlier batch exposed inline
+            anomaly labels.
+        inline_label_entries (list[dict[str, object]]): Sparse anomaly label
+            records accumulated so far.
+
+    Returns:
+        bool: `True` when the batch exposed inline anomaly labels.
+    """
+    if ANOMALOUS_FIELD not in batch.schema.names:
+        return has_inline_labels
+
+    col = batch.column(ANOMALOUS_FIELD)
+    if col.null_count >= len(col):
+        return has_inline_labels
+
+    line_values = batch.column(
+        batch.schema.get_field_index(LINE_FIELD),
+    ).to_pylist()
+    entity_values = batch.column(
+        batch.schema.get_field_index(ENTITY_FIELD),
+    ).to_pylist()
+    label_values = col.to_pylist()
+    for line_order, entity_id, raw_label in zip(
+        line_values,
+        entity_values,
+        label_values,
+        strict=True,
+    ):
+        if raw_label not in {None, 0}:
+            inline_label_entries.append(
+                {
+                    "line_order": int(line_order),
+                    "entity_id": entity_id,
+                    "anomalous": int(raw_label),
+                },
+            )
+    return True
+
+
+def _finalise_structured_components_write(
+    *,
+    state: _StructuredComponentsWriteState,
+) -> None:
+    """Write sidecars and log the final structured extraction summary.
+
+    Args:
+        state (_StructuredComponentsWriteState): Structured-write bookkeeping
+            captured during parquet emission.
+    """
+    stage_started_at = perf_counter()
+    if state.has_inline_labels:
+        _write_inline_label_cache(
+            parquet_out_dir=state.parquet_out_dir,
+            inline_label_entries=state.inline_label_entries,
+        )
+        logger = get_run_logger()
+        logger.info(
+            "Wrote inline label sidecar for %s in %.3fs",
+            state.parquet_out_dir,
+            perf_counter() - stage_started_at,
+        )
+        stage_started_at = perf_counter()
+
+    _write_entity_chronology_index(
+        parquet_out_dir=state.parquet_out_dir,
+        chronology=state.entity_chronology,
+    )
+    logger = get_run_logger()
+    logger.info(
+        "Wrote entity chronology sidecar for %s in %.3fs",
+        state.parquet_out_dir,
+        perf_counter() - stage_started_at,
+    )
+    stage_started_at = perf_counter()
+    _write_entity_count(
+        parquet_out_dir=state.parquet_out_dir,
+        total_entities=len(state.entity_chronology),
+    )
+    logger.info(
+        "Wrote entity count sidecar for %s in %.3fs",
+        state.parquet_out_dir,
+        perf_counter() - stage_started_at,
+    )
     logger.info(
         (
             "Structured extraction complete: file=%s out=%s "
             "batches_written=%d elapsed=%.3fs"
         ),
-        raw_input_path,
-        parquet_out_dir,
-        batches_emitted,
-        perf_counter() - started_at,
+        state.raw_input_path,
+        state.parquet_out_dir,
+        state.batches_emitted,
+        perf_counter() - state.started_at,
     )
 
-    return has_inline_labels
+
+def _write_inline_label_cache(
+    *,
+    parquet_out_dir: Path,
+    inline_label_entries: list[dict[str, object]],
+) -> None:
+    """Persist sparse inline labels alongside the structured parquet dataset.
+
+    Args:
+        parquet_out_dir (Path): Output directory for the structured parquet
+            dataset.
+        inline_label_entries (list[dict[str, object]]): Sparse anomaly labels
+            keyed by line order and entity id.
+    """
+    cache_path = parquet_out_dir / INLINE_LABEL_CACHE_FILENAME
+    with cache_path.open("w", encoding="utf-8") as handle:
+        for entry in inline_label_entries:
+            handle.write(json.dumps(entry, separators=(",", ":")))
+            handle.write("\n")
 
 
 def _write_entity_chronology_index(
@@ -369,3 +515,24 @@ def _write_entity_chronology_index(
         for entry in ordered_entries:
             handle.write(json.dumps(asdict(entry), separators=(",", ":")))
             handle.write("\n")
+
+
+def _write_entity_count(
+    *,
+    parquet_out_dir: Path,
+    total_entities: int,
+) -> None:
+    """Persist the total distinct entity count alongside the parquet cache.
+
+    Args:
+        parquet_out_dir (Path): Output directory for the structured parquet
+            dataset.
+        total_entities (int): Total number of distinct entities seen during
+            structured extraction.
+    """
+    cache_path = parquet_out_dir / ENTITY_COUNT_FILENAME
+    with cache_path.open("w", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps({"total_entities": total_entities}, separators=(",", ":")),
+        )
+        handle.write("\n")

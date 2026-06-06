@@ -32,6 +32,8 @@ from anomalog.parsers.structured.contracts import (
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
     ENTITY_CHRONOLOGY_INDEX_FILENAME,
+    ENTITY_COUNT_FILENAME,
+    INLINE_LABEL_CACHE_FILENAME,
     STRUCTURED_BATCH_SCHEMA,
     EntityChronologyKey,
     WriterConfig,
@@ -248,6 +250,13 @@ class ParquetStructuredSink(StructuredSink):
             tuple[dict[int, int], dict[str, int]]: Sparse per-line and per-group
                 anomaly labels.
         """
+        cache_path = self.inline_label_cache_path()
+        if cache_path.is_file():
+            try:
+                return self._load_inline_label_cache_from_sidecar(cache_path)
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                pass
+
         line_labels: dict[int, int] = {}
         group_labels: dict[str, int] = {}
 
@@ -289,6 +298,48 @@ class ParquetStructuredSink(StructuredSink):
                 if entity_id is not None:
                     group_labels.setdefault(str(entity_id), label)
 
+        return line_labels, group_labels
+
+    def inline_label_cache_path(self) -> Path:
+        """Return the sidecar path storing sparse inline labels.
+
+        Returns:
+            Path: JSONL sidecar path used for sparse inline anomaly labels.
+        """
+        return (
+            self.structured_data_cache(self.dataset_name) / INLINE_LABEL_CACHE_FILENAME
+        )
+
+    @staticmethod
+    def _load_inline_label_cache_from_sidecar(
+        cache_path: Path,
+    ) -> tuple[dict[int, int], dict[str, int]]:
+        """Load sparse inline labels from the materialised sidecar.
+
+        Args:
+            cache_path (Path): JSONL sidecar path containing sparse labels.
+
+        Returns:
+            tuple[dict[int, int], dict[str, int]]: Sparse line and group label
+            maps reconstructed from the sidecar.
+        """
+        line_labels: dict[int, int] = {}
+        group_labels: dict[str, int] = {}
+        with cache_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                payload = json.loads(raw)
+                label = int(payload["anomalous"])
+                if label == 0:
+                    continue
+                line_order = payload.get("line_order")
+                if line_order is not None:
+                    line_labels[int(line_order)] = label
+                entity_id = payload.get("entity_id")
+                if entity_id is not None:
+                    group_labels.setdefault(str(entity_id), label)
         return line_labels, group_labels
 
     @staticmethod
@@ -656,6 +707,27 @@ class ParquetStructuredSink(StructuredSink):
             self.structured_data_cache(self.dataset_name)
             / ENTITY_CHRONOLOGY_INDEX_FILENAME
         )
+
+    def entity_count_path(self) -> Path:
+        """Return the sidecar path storing the total distinct entity count."""
+        return self.structured_data_cache(self.dataset_name) / ENTITY_COUNT_FILENAME
+
+    def load_entity_count(self) -> int | None:
+        """Load the total distinct entity count sidecar, if present.
+
+        Returns:
+            int | None: Total entity count when the sidecar exists, otherwise
+                `None`.
+        """
+        count_path = self.entity_count_path()
+        if not count_path.is_file():
+            return None
+        try:
+            with count_path.open("r", encoding="utf-8") as handle:
+                payload = json.loads(handle.read())
+            return int(payload["total_entities"])
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
 
     def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
         """Load the materialised chronology sidecar, if it exists.

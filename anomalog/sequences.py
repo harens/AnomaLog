@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator
 
     from anomalog.parsers.structured.contracts import StructuredLine, StructuredSink
+    from anomalog.parsers.structured.parquet.writer_worker import (
+        EntityChronologyKey,
+    )
     from anomalog.parsers.template.dataset import (
         ExtractedParameters,
         LogTemplate,
@@ -1216,6 +1219,56 @@ class EntitySequenceBuilder(SequenceBuilder):
             tuple[SequenceSplitCounts, int]: Exact split counts and eligible
                 normal count within the train pool.
         """
+        entity_count_loader = getattr(self.sink, "load_entity_count", None)
+        if callable(entity_count_loader):
+            total_entities = entity_count_loader()
+            if total_entities is not None:
+                counts = self._split_counts(total_entities)
+                train_pool_count = total_entities - counts.test_count
+                if not self.train_on_normal_entities_only:
+                    return counts, train_pool_count
+
+        chronology_loader = getattr(self.sink, "load_entity_chronology_index", None)
+        chronology_index = chronology_loader() if callable(chronology_loader) else {}
+        if chronology_index:
+            return self._entity_split_counts_from_chronology(
+                chronology_index=chronology_index,
+                label_for_group=label_for_group,
+            )
+
+        return self._entity_split_counts_by_scan(label_for_group=label_for_group)
+
+    def _entity_split_counts_from_chronology(
+        self,
+        *,
+        chronology_index: dict[str, EntityChronologyKey],
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[SequenceSplitCounts, int]:
+        """Return entity split counts from a materialised chronology sidecar."""
+        total_entities = len(chronology_index)
+        counts = self._split_counts(total_entities)
+        train_pool_count = total_entities - counts.test_count
+        if not self.train_on_normal_entities_only:
+            return counts, train_pool_count
+
+        inline_label_loader = getattr(self.sink, "load_inline_label_cache", None)
+        if callable(inline_label_loader):
+            _, group_labels = inline_label_loader()
+            normal_pool_count = sum(
+                1
+                for chronology in sorted(chronology_index.values())[:train_pool_count]
+                if not is_anomalous_label(group_labels.get(chronology.entity_id))
+            )
+            return counts, normal_pool_count
+
+        return self._entity_split_counts_by_scan(label_for_group=label_for_group)
+
+    def _entity_split_counts_by_scan(
+        self,
+        *,
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[SequenceSplitCounts, int]:
+        """Return entity split counts by scanning the grouped structured data."""
         entity_counts = self.sink.count_entities_by_label(label_for_group)
         total_entities = entity_counts.total_entities
         counts = self._split_counts(total_entities)

@@ -1,7 +1,7 @@
 """Tests for public `SequenceBuilder` behavior."""
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
@@ -10,6 +10,7 @@ from prefect.assets import Asset
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import StructuredLine
+from anomalog.parsers.structured.parquet.writer_worker import EntityChronologyKey
 from anomalog.parsers.template.dataset import (
     ExtractedParameters,
     LogTemplate,
@@ -58,6 +59,28 @@ def _upper_template_with_source_param(
     text: UntemplatedText,
 ) -> tuple[LogTemplate, ExtractedParameters]:
     return text.upper(), [text]
+
+
+@dataclass(frozen=True)
+class _SidecarOnlyEntitySink(InMemoryStructuredSink):
+    """In-memory sink variant that exposes the chronology sidecar API.
+
+    Attributes:
+        chronology_index (dict[str, EntityChronologyKey]): Materialised entity
+            chronology entries used to answer split-count hints without
+            rescanning.
+        entity_count (int | None): Total distinct entity count sidecar used for
+            the fast split-count path.
+    """
+
+    chronology_index: dict[str, EntityChronologyKey] = field(default_factory=dict)
+    entity_count: int | None = None
+
+    def load_entity_count(self) -> int | None:
+        return self.entity_count
+
+    def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
+        return self.chronology_index
 
 
 def test_entity_sequences_fractional_split_counts_all_entities_when_not_filtered() -> (
@@ -2321,6 +2344,64 @@ def test_entity_sequence_builder_entity_specific_helpers_cover_public_contract()
         train_count=2,
         ignored_count=expected_ignored_sequence_count,
         test_count=1,
+    )
+
+
+def test_entity_sequence_builder_split_count_hint_uses_entity_count_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entity split hints should reuse the total entity sidecar instead of rescanning.
+
+    The HDFS DeepCASE compat run spends a long time before model execution if the
+    runner has to parse the chronology sidecar just to estimate the total entity
+    count. This regression proves the builder can derive the same hint from the
+    dedicated count sidecar alone.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to make the old scan
+            path fail if the sidecar fast path stops being used.
+    """
+    sink = _SidecarOnlyEntitySink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+        entity_count=4,
+    )
+
+    def _fail(*_: object, **__: object) -> object:
+        msg = "split_count_hint should not rescan entities when sidecars exist"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        _SidecarOnlyEntitySink,
+        "load_entity_chronology_index",
+        _fail,
+    )
+    monkeypatch.setattr(
+        _SidecarOnlyEntitySink,
+        "count_entities_by_label",
+        _fail,
+    )
+    monkeypatch.setattr(
+        _SidecarOnlyEntitySink,
+        "iter_entity_sequences",
+        _fail,
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda entity_id: 1 if entity_id == "b" else 0,
+        train_frac=0.25,
+        test_frac=0.75,
+    )
+
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=4,
+        train_count=1,
+        ignored_count=0,
+        test_count=3,
     )
 
 

@@ -355,6 +355,14 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Structured parquet materialisation now writes a tiny entity chronology
   sidecar alongside the parquet partitions, so entity-grouped readers can
   reuse first-seen ordering without rescanning all rows.
+  Entity-grouped split-count hints now reuse that chronology sidecar too, so
+  the runner can log progress and start model execution without a full entity
+  scan.
+  It also writes a tiny entity-count sidecar, which lets the runner skip the
+  last pre-model entity-count pass entirely when the cache is already warm.
+  It also writes a sparse inline-label sidecar, so datasets with inline
+  anomaly labels can reload their sparse label maps without rescanning the
+  whole parquet cache.
   If the structured parquet cache is missing or a cached parquet fragment is
   unreadable, the sink rebuilds that dataset namespace under the same
   dataset-build lock before any model sees it, rather than letting one model
@@ -363,6 +371,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   log when it is present, so repeated runs do not re-expand the same split
   files and do not invalidate the downstream structured-parquet cache just by
   rebuilding the compatibility slice.
+- AIT-ADS and the OpenStack parameter slice follow the same reuse rule for
+  their derived canonical streams, so repeat builds avoid rewriting those
+  deterministic outputs when the expected file is already in place.
 - Concrete runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved manifest, dataset, and model config.

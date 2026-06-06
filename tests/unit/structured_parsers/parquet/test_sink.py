@@ -15,6 +15,8 @@ from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import (
+    ANOMALOUS_FIELD,
+    ENTITY_FIELD,
     LINE_FIELD,
     TIMESTAMP_FIELD,
     UNTEMPLATED_FIELD,
@@ -27,12 +29,15 @@ from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import ParquetStructuredSink
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
+    INLINE_LABEL_CACHE_FILENAME,
     EntityChronologyKey,
     WriterConfig,
     extract_structured_components,
 )
 from anomalog.sequences import EntitySequenceBuilder
 from tests.unit.helpers import structured_line
+
+_track_inline_label_entries = writer_worker._track_inline_label_entries  # noqa: SLF001
 
 
 class _Parser(StructuredParser):
@@ -419,6 +424,129 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
         "node-b": EntityChronologyKey(0, 100, 0, "node-b"),
         "node-a": EntityChronologyKey(0, 120, 1, "node-a"),
     }
+
+
+def test_sink_load_inline_label_cache_uses_sidecar_without_scanning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline label loading should prefer the materialised sidecar.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Patch helper used to ensure the
+            parquet scan path is not touched.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+
+    def _fail() -> object:
+        msg = "load_inline_label_cache fell back to parquet scanning"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(ParquetStructuredSink, "_dataset", lambda _self: _fail())
+
+    line_labels, group_labels = sink.load_inline_label_cache()
+
+    expected_entity_count = 2
+    assert sink.entity_count_path().exists()
+    assert sink.load_entity_count() == expected_entity_count
+    assert sink.inline_label_cache_path().exists()
+    assert line_labels == {2: 1}
+    assert group_labels == {"node-a": 1}
+
+
+def test_sink_load_inline_label_cache_falls_back_when_sidecar_is_invalid(
+    tmp_path: Path,
+) -> None:
+    """Inline label loading should recover from a malformed sidecar.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+    """
+    sink = _make_sink(tmp_path)
+    _write_rows(
+        sink,
+        ENTITY_GROUP_ROWS,
+    )
+    sink.inline_label_cache_path().write_text("not-json\n", encoding="utf-8")
+
+    line_labels, group_labels = sink.load_inline_label_cache()
+
+    assert line_labels == {2: 1}
+    assert group_labels == {"node-a": 1}
+
+
+def test_sink_load_entity_count_returns_none_for_invalid_sidecar(
+    tmp_path: Path,
+) -> None:
+    """Entity-count loading should fall back cleanly on malformed sidecars."""
+    sink = _make_sink(tmp_path)
+    sink.entity_count_path().write_text("not-json\n", encoding="utf-8")
+
+    assert sink.load_entity_count() is None
+
+
+def test_track_inline_label_entries_skips_missing_and_zero_labels() -> None:
+    """Inline label tracking should only retain positive anomaly labels."""
+    no_anomalous_batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([0]),
+            pa.array(["node-a"]),
+        ],
+        names=[LINE_FIELD, ENTITY_FIELD],
+    )
+    inline_label_entries: list[dict[str, object]] = []
+
+    has_inline_labels = _track_inline_label_entries(
+        batch=no_anomalous_batch,
+        has_inline_labels=False,
+        inline_label_entries=inline_label_entries,
+    )
+
+    assert has_inline_labels is False
+    assert inline_label_entries == []
+
+    null_only_batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([0, 1]),
+            pa.array(["node-a", "node-b"]),
+            pa.array([None, None]),
+        ],
+        names=[LINE_FIELD, ENTITY_FIELD, ANOMALOUS_FIELD],
+    )
+
+    has_inline_labels = _track_inline_label_entries(
+        batch=null_only_batch,
+        has_inline_labels=has_inline_labels,
+        inline_label_entries=inline_label_entries,
+    )
+
+    assert has_inline_labels is False
+    assert inline_label_entries == []
+
+    labelled_batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([2, 3]),
+            pa.array(["node-c", "node-d"]),
+            pa.array([0, 2]),
+        ],
+        names=[LINE_FIELD, ENTITY_FIELD, ANOMALOUS_FIELD],
+    )
+
+    has_inline_labels = _track_inline_label_entries(
+        batch=labelled_batch,
+        has_inline_labels=has_inline_labels,
+        inline_label_entries=inline_label_entries,
+    )
+
+    assert has_inline_labels is True
+    assert inline_label_entries == [
+        {"line_order": 3, "entity_id": "node-d", "anomalous": 2},
+    ]
 
 
 def test_count_entities_by_label_skips_rows_without_entity_id(
@@ -1280,6 +1408,7 @@ def test_extract_structured_components_reports_inline_labels_when_present(
         )
 
     assert has_inline_labels is True
+    assert (tmp_path / "out" / INLINE_LABEL_CACHE_FILENAME).exists()
 
 
 @pytest.mark.allow_no_new_coverage
