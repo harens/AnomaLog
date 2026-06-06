@@ -50,7 +50,10 @@ class TemplateFrequencyModelConfig(
     rare sequences into high anomaly scores. When the threshold is not fixed by
     config, calibration uses the same eligible training targets as the DeepLog
     event masks, rather than whole-sequence labels. When event labels are
-    available, the detector can also report event-level anomaly metrics.
+    available, the detector can also report event-level anomaly metrics. If the
+    training split does not carry any per-event training signal, the event-level
+    threshold reuses the calibrated sequence threshold instead of paying for a
+    redundant event-wise calibration pass.
     """  # noqa: DOC601, DOC603
 
     score_threshold: Annotated[
@@ -121,6 +124,12 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
     threshold_source: str = "configured"
     event_score_threshold: float = 0.0
     event_threshold_source: str = "configured"
+    _template_losses: dict[str, float] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+    _unknown_template_loss: float = field(default=0.0, init=False, repr=False)
     _event_level_state: EventLevelDetectionState = field(
         default_factory=EventLevelDetectionState,
         init=False,
@@ -152,6 +161,7 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         total_events = 0
         del logger
         calibration_templates: list[list[str]] = []
+        has_event_level_training_signal = False
         self._event_level_state.reset()
         for sequence in progress.track(
             train_sequences,
@@ -167,6 +177,11 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             total_events += len(eligible_training_templates)
             if self.configured_score_threshold is None:
                 calibration_templates.append(eligible_training_templates)
+                if not has_event_level_training_signal and (
+                    sequence.training_event_mask is not None
+                    or sequence.event_labels is not None
+                ):
+                    has_event_level_training_signal = True
         if total_events == 0:
             msg = (
                 "Cannot fit template_frequency detector with zero eligible "
@@ -175,6 +190,13 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             raise ValueError(msg)
         self.template_counts = counts
         self.total_events = total_events
+        vocab_size = max(len(self.template_counts), 1)
+        denominator = self.total_events + (self.smoothing * vocab_size)
+        self._template_losses = {
+            template: -math.log((count + self.smoothing) / denominator)
+            for template, count in self.template_counts.items()
+        }
+        self._unknown_template_loss = -math.log(self.smoothing / denominator)
         if self.configured_score_threshold is not None:
             self.score_threshold = self.configured_score_threshold
             self.threshold_source = "configured"
@@ -189,25 +211,10 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
                 "training sequence."
             )
             raise ValueError(msg)
-        calibration_scores = sorted(
-            self._score_templates(templates) for templates in calibration_templates
+        self._calibrate_thresholds(
+            calibration_templates=calibration_templates,
+            has_event_level_training_signal=has_event_level_training_signal,
         )
-        calibration_event_scores = sorted(
-            self._score_template(template)
-            for templates in calibration_templates
-            for template in templates
-        )
-        self.score_threshold = _quantile(
-            calibration_scores,
-            self.calibration_quantile,
-        )
-        self.threshold_source = "train_score_quantile"
-        self.event_score_threshold = _quantile(
-            sorted(calibration_event_scores),
-            self.calibration_quantile,
-        )
-        self.event_threshold_source = "train_event_score_quantile"
-        self._mark_fit_complete()
 
     def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
         """Return a prediction record for a sequence.
@@ -278,11 +285,7 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             float: Negative log-probability under the learned template model.
         """
-        vocab_size = max(len(self.template_counts), 1)
-        denominator = self.total_events + (self.smoothing * vocab_size)
-        numerator = self.template_counts.get(template, 0) + self.smoothing
-        probability = numerator / denominator
-        return -math.log(probability)
+        return self._template_losses.get(template, self._unknown_template_loss)
 
     def _score_templates(self, templates: list[str]) -> float:
         """Return the mean negative log-probability for a template list.
@@ -299,6 +302,64 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         for template in templates:
             loss_sum += self._score_template(template)
         return loss_sum / len(templates)
+
+    def _calibrate_thresholds(
+        self,
+        *,
+        calibration_templates: list[list[str]],
+        has_event_level_training_signal: bool,
+    ) -> None:
+        """Calibrate sequence and event thresholds from cached train scores.
+
+        Args:
+            calibration_templates (list[list[str]]): Eligible training
+                templates grouped by sequence.
+            has_event_level_training_signal (bool): Whether the training split
+                carries explicit per-event supervision or masks.
+        """
+        self.score_threshold = _quantile(
+            sorted(
+                self._score_templates(templates) for templates in calibration_templates
+            ),
+            self.calibration_quantile,
+        )
+        self.threshold_source = "train_score_quantile"
+        if not has_event_level_training_signal:
+            self.event_score_threshold = self.score_threshold
+            self.event_threshold_source = self.threshold_source
+            self._mark_fit_complete()
+            return
+
+        calibration_event_scores = self._calibration_event_scores(
+            calibration_templates,
+        )
+        self.event_score_threshold = _quantile(
+            calibration_event_scores,
+            self.calibration_quantile,
+        )
+        self.event_threshold_source = "train_event_score_quantile"
+        self._mark_fit_complete()
+
+    def _calibration_event_scores(
+        self,
+        calibration_templates: list[list[str]],
+    ) -> list[float]:
+        """Return sorted per-event losses for calibrated event thresholds.
+
+        Args:
+            calibration_templates (list[list[str]]): Eligible training
+                templates grouped by sequence.
+
+        Returns:
+            list[float]: Sorted per-event losses used for event calibration.
+        """
+        calibration_event_scores: list[float] = []
+        for templates in calibration_templates:
+            calibration_event_scores.extend(
+                self._score_template(template) for template in templates
+            )
+        calibration_event_scores.sort()
+        return calibration_event_scores
 
     def _record_event_level_predictions(self, sequence: TemplateSequence) -> None:
         """Accumulate event-level confusion counts for one scored sequence.

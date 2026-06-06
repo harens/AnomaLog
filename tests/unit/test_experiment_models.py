@@ -784,7 +784,8 @@ def test_template_frequency_detector_learns_threshold_from_normal_train_scores()
     )
 
     assert detector.threshold_source == "train_score_quantile"
-    assert detector.event_threshold_source == "train_event_score_quantile"
+    assert detector.event_score_threshold == pytest.approx(detector.score_threshold)
+    assert detector.event_threshold_source == detector.threshold_source
     assert detector.score_threshold <= max(normal_scores)
     assert detector.predict(train_sequences[0]).predicted_label == 0
     assert detector.predict(anomalous_sequence).predicted_label == 1
@@ -805,6 +806,8 @@ def test_template_frequency_detector_treats_missing_labels_as_normal() -> None:
         detector.fit(train_sequences, progress=progress)
 
     assert detector.threshold_source == "train_score_quantile"
+    assert detector.event_score_threshold == pytest.approx(detector.score_threshold)
+    assert detector.event_threshold_source == detector.threshold_source
     assert detector.predict(train_sequences[0]).predicted_label == 0
 
 
