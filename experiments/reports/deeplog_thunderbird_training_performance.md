@@ -8,7 +8,9 @@ top-`g` evaluation.
 
 The DeepLog key trainer was spending most of its time repeatedly rebuilding
 the same per-sequence training windows and then processing them in many tiny
-microbatches. On the bounded synthetic Thunderbird-like profile:
+microbatches. The one-hot expansion cache introduced in the refactor also
+risked materialising a corpus-sized dense tensor on the real Thunderbird run.
+On the bounded synthetic Thunderbird-like profile:
 
 - the key-fit path was dominated by `torch.lstm` and the backward pass;
 - rebuilding template indexes and eligible target masks every epoch added a
@@ -23,11 +25,12 @@ incorrect model or a pathological evaluation rule.
 ## What Changed
 
 - The key-model microbatch cap increased from `64` to `256`.
-- The training loop now caches per-sequence template indexes and eligible
-  target indexes once, then reuses that compact CPU state across epochs.
-- Each optimiser batch now arrives as tensors, so the update step slices and
-  moves them directly instead of rebuilding Python lists and tensors for every
-  microbatch.
+- The training loop now caches per-sequence template indexes, history windows,
+  and eligible target indexes once, then reuses that compact CPU state across
+  epochs.
+- Each optimiser batch now arrives as indexed tensors, and the one-hot
+  expansion happens per minibatch on the target device instead of being cached
+  per sequence.
 - If a CUDA microbatch still exceeds available memory, the trainer halves the
   microbatch and retries the same optimiser batch rather than failing the run.
 - The training order, loss, optimiser, top-`g` rule, and scoring semantics are
@@ -59,8 +62,9 @@ precision on CPU for the reference case used in the regression test.
 ## Memory Bound
 
 The cached sequence tensors stay on CPU, and only one microbatch is moved to
-the target device at a time. The microbatch retry path further reduces the
-chunk size on CUDA OOM, so the trainer degrades to smaller updates instead of
+the target device at a time. The one-hot expansion is transient and bounded to
+the current microbatch. The microbatch retry path further reduces the chunk
+size on CUDA OOM, so the trainer degrades to smaller updates instead of
 crashing on a constrained card.
 
 ## Recommended Cluster Settings

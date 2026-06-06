@@ -71,8 +71,6 @@ class _KeyTrainingSequenceExamples:
             eligible next-key targets for the sequence.
         history_windows (torch.Tensor): Cached history windows aligned with the
             eligible targets.
-        history_one_hot_windows (torch.Tensor): Cached one-hot histories
-            aligned with the eligible targets on the CPU.
         target_indexes (torch.Tensor): Cached next-key targets aligned with the
             history windows.
     """
@@ -80,7 +78,6 @@ class _KeyTrainingSequenceExamples:
     template_indexes: torch.Tensor
     eligible_target_indexes: torch.Tensor
     history_windows: torch.Tensor
-    history_one_hot_windows: torch.Tensor
     target_indexes: torch.Tensor
 
 
@@ -109,6 +106,7 @@ class _KeyTrainingRun:
         epochs (int): Number of training epochs.
         batch_size (int): Training batch size.
         device (torch.device): Torch device used for the run.
+        vocab_size (int): Number of known key indexes.
     """
 
     criterion: nn.CrossEntropyLoss
@@ -117,6 +115,7 @@ class _KeyTrainingRun:
     epochs: int
     batch_size: int
     device: torch.device
+    vocab_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +206,7 @@ def fit_key_model(
             epochs=config.epochs,
             batch_size=config.batch_size,
             device=device,
+            vocab_size=len(template_to_index),
         ),
         progress=progress,
     )
@@ -262,10 +262,6 @@ def _materialise_key_training_examples(
                 0,
                 eligible_target_indexes - history_size,
             )
-            history_one_hot_windows = _one_hot_history_indexes(
-                history_indexes=history_windows,
-                vocab_size=len(template_to_index),
-            )
             target_indexes = template_indexes.index_select(
                 0,
                 eligible_target_indexes,
@@ -275,17 +271,12 @@ def _materialise_key_training_examples(
                 (0, history_size),
                 dtype=torch.long,
             )
-            history_one_hot_windows = torch.empty(
-                (0, history_size, len(template_to_index)),
-                dtype=torch.float32,
-            )
             target_indexes = torch.empty((0,), dtype=torch.long)
         sequence_examples.append(
             _KeyTrainingSequenceExamples(
                 template_indexes=template_indexes,
                 eligible_target_indexes=eligible_target_indexes,
                 history_windows=history_windows,
-                history_one_hot_windows=history_one_hot_windows,
                 target_indexes=target_indexes,
             ),
         )
@@ -342,7 +333,7 @@ def _train_key_model(
     training_run: _KeyTrainingRun,
     progress: Progress | None,
 ) -> None:
-    """Train the DeepLog key model over in-memory one-hot windows.
+    """Train the DeepLog key model over in-memory indexed history windows.
 
     Args:
         model (KeyLSTM): Fitted key model being trained.
@@ -402,7 +393,7 @@ def _iter_key_training_batches(
     for sequence_examples in training_sequences:
         if sequence_examples.target_indexes.numel() == 0:
             continue
-        history_windows = sequence_examples.history_one_hot_windows
+        history_windows = sequence_examples.history_windows
         target_indexes = sequence_examples.target_indexes
         example_count = int(target_indexes.shape[0])
         start_index = 0
@@ -437,7 +428,7 @@ def _optimise_key_training_batch(
         model (KeyLSTM): Key model being trained.
         optimizer (torch.optim.Optimizer): Optimiser used for the update.
         training_run (_KeyTrainingRun): Replayable sequences and settings.
-        batch_histories (torch.Tensor): Encoded history windows.
+        batch_histories (torch.Tensor): Indexed history windows.
         batch_targets (torch.Tensor): Matching next-key indexes.
 
     Raises:
@@ -456,7 +447,12 @@ def _optimise_key_training_batch(
         try:
             for start in range(0, batch_size, microbatch_size):
                 end = start + microbatch_size
-                logits = model(batch_histories[start:end])
+                logits = model(
+                    _one_hot_history_indexes(
+                        history_indexes=batch_histories[start:end],
+                        vocab_size=training_run.vocab_size,
+                    ),
+                )
                 loss = training_run.criterion(
                     logits,
                     batch_target_indexes[start:end],
@@ -482,13 +478,13 @@ def _move_key_training_batch_to_device(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Move one cached DeepLog key batch onto the training device.
 
-    The CPU-cached one-hot histories stay out of GPU memory until a minibatch
-    is about to be optimised. When the target device is CUDA, pinning the host
-    tensors first keeps the transfer path asynchronous without changing the
-    training semantics.
+    The CPU-cached integer history windows stay out of GPU memory until a
+    minibatch is about to be optimised. When the target device is CUDA,
+    pinning the host tensors first keeps the transfer path asynchronous without
+    changing the training semantics.
 
     Args:
-        batch_histories (torch.Tensor): Batched one-hot history windows.
+        batch_histories (torch.Tensor): Batched indexed history windows.
         batch_targets (torch.Tensor): Matching target indexes.
         device (torch.device): Training device.
 

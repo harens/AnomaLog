@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import sys
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -419,74 +420,101 @@ def _run_bundle(
         run_name=bundle.concrete_name,
         console=options.console,
     ) as logger:
-        logger.info("Loaded experiment config from %s", bundle.sweep_path)
-        logger.info("Using dataset config %s", bundle.dataset_path)
-        logger.info("Using model config %s", bundle.model_path)
-        logger.info("Running concrete experiment variant %s", bundle.concrete_name)
-        if bundle.applied_overrides:
-            logger.info("Applied overrides: %s", bundle.applied_overrides)
-        dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
-        if options.force:
-            logger.info(
-                "Force run requested; clearing dataset cache for %s",
-                bundle.dataset.dataset_name,
-            )
-            dataset_spec.clear_cache()
-        logger.info("Building dataset %s", bundle.dataset.dataset_name)
-        templated = dataset_spec.build()
-        sequence_started_at = perf_counter()
-        sequence_view_for_summary = bundle.dataset.sequence.apply(templated)
-        logger.info(
-            "Stage complete: sequence construction for %s in %.3fs",
-            bundle.dataset.dataset_name,
-            perf_counter() - sequence_started_at,
-        )
-        logger.info("Dataset ready; starting model run for %s", bundle.model.detector)
-        split_counts_hint = sequence_view_for_summary.split_count_hint()
-        model_started_at = perf_counter()
-        model_summary = run_model(
-            sequence_factory=lambda: iter(
-                bundle.dataset.sequence.apply(templated),
-            ),
-            config=bundle.model,
-            prediction_output=PredictionOutputConfig(
-                predictions_path=result_paths.predictions_path,
-                write_predictions=options.write_predictions,
-            ),
-            logger=logger,
-            progress_plan=RunProgressPlan(
-                train=(
-                    None
-                    if split_counts_hint is None
-                    else ProgressHint(
-                        total=split_counts_hint.train_count,
-                        unit=sequence_view_for_summary.train_sequence_count_unit_hint(),
-                    )
-                ),
-                score=(
-                    None
-                    if split_counts_hint is None
-                    else ProgressHint(
-                        total=split_counts_hint.test_count,
-                    )
-                ),
-            ),
-        )
-        logger.info(
-            "Stage complete: model execution for %s in %.3fs",
-            bundle.model.detector,
-            perf_counter() - model_started_at,
-        )
-        _finalise_bundle_run(
-            context=_BundleFinaliseContext(
+        try:
+            return _execute_bundle_run(
                 bundle=bundle,
-                templated=templated,
-                model_summary=model_summary,
+                options=options,
                 result_paths=result_paths,
                 logger=logger,
-                debug_reporting=options.debug_reporting,
-            ),
+            )
+        except Exception:
+            logger.exception("Concrete experiment %s failed", bundle.concrete_name)
+            raise
+
+
+def _execute_bundle_run(
+    *,
+    bundle: ExperimentBundle,
+    options: _BundleRunOptions,
+    result_paths: ResultPaths,
+    logger: logging.Logger,
+) -> Path:
+    """Execute one concrete run after logging and result paths are ready.
+
+    Returns:
+        Path: Deterministic run directory containing the written artefacts.
+    """
+    logger.info("Loaded experiment config from %s", bundle.sweep_path)
+    logger.info("Using dataset config %s", bundle.dataset_path)
+    logger.info("Using model config %s", bundle.model_path)
+    logger.info("Running concrete experiment variant %s", bundle.concrete_name)
+    if bundle.applied_overrides:
+        logger.info("Applied overrides: %s", bundle.applied_overrides)
+    dataset_spec = build_dataset_spec(bundle.dataset, repo_root=bundle.repo_root)
+    if options.force:
+        logger.info(
+            "Force run requested; clearing dataset cache for %s",
+            bundle.dataset.dataset_name,
         )
+        dataset_spec.clear_cache()
+    logger.info("Building dataset %s", bundle.dataset.dataset_name)
+    templated = dataset_spec.build()
+    sequence_started_at = perf_counter()
+    sequence_view_for_summary = bundle.dataset.sequence.apply(templated)
+    logger.info(
+        "Stage complete: sequence construction for %s in %.3fs",
+        bundle.dataset.dataset_name,
+        perf_counter() - sequence_started_at,
+    )
+    logger.info(
+        "Dataset ready; starting model run for %s",
+        bundle.model.detector,
+    )
+    split_counts_hint = sequence_view_for_summary.split_count_hint()
+    model_started_at = perf_counter()
+    model_summary = run_model(
+        sequence_factory=lambda: iter(
+            bundle.dataset.sequence.apply(templated),
+        ),
+        config=bundle.model,
+        prediction_output=PredictionOutputConfig(
+            predictions_path=result_paths.predictions_path,
+            write_predictions=options.write_predictions,
+        ),
+        logger=logger,
+        progress_plan=RunProgressPlan(
+            train=(
+                None
+                if split_counts_hint is None
+                else ProgressHint(
+                    total=split_counts_hint.train_count,
+                    unit=sequence_view_for_summary.train_sequence_count_unit_hint(),
+                )
+            ),
+            score=(
+                None
+                if split_counts_hint is None
+                else ProgressHint(
+                    total=split_counts_hint.test_count,
+                )
+            ),
+        ),
+    )
+    logger.info(
+        "Stage complete: model execution for %s in %.3fs",
+        bundle.model.detector,
+        perf_counter() - model_started_at,
+    )
+    _finalise_bundle_run(
+        context=_BundleFinaliseContext(
+            bundle=bundle,
+            templated=templated,
+            model_summary=model_summary,
+            result_paths=result_paths,
+            logger=logger,
+            debug_reporting=options.debug_reporting,
+        ),
+    )
     return result_paths.run_dir
 
 
@@ -875,7 +903,12 @@ def _capture_future_result(
 
 def _format_bundle_failure(bundle: ExperimentBundle, exc: Exception) -> str:
     detail = str(exc).strip() or exc.__class__.__name__
-    return f"{bundle.concrete_name}: {detail}"
+    if exc.__traceback__ is None:
+        return f"{bundle.concrete_name}: {detail}"
+    traceback_text = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__),
+    ).rstrip()
+    return f"{bundle.concrete_name}: {detail}\n{traceback_text}"
 
 
 def _prepare_result_paths(

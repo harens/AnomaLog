@@ -390,13 +390,114 @@ def test_failure_helpers_format_bundle_exceptions(
         options=runner._BundleRunOptions(),  # noqa: SLF001
     )
     assert failure[1] is not None
+    assert "Traceback (most recent call last):" in failure[1]
 
     future: Future[Path] = Future()
     future.set_exception(RuntimeError("boom"))
     captured = runner._capture_future_result(future, bundle)  # noqa: SLF001
     assert captured[0] is None
-    assert captured[1] == "demo: boom"
+    assert captured[1] is not None
+    assert captured[1].startswith("demo: boom")
+    assert "Traceback (most recent call last):" in captured[1]
     assert runner._format_bundle_failure(bundle, RuntimeError()) == "demo: RuntimeError"  # noqa: SLF001
+
+
+def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Concrete run failures should be logged with a traceback before escaping.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces the run logger and model
+            execution so the test can force a controlled failure.
+        tmp_path (Path): Temporary path used to fabricate the run bundle.
+    """
+    bundle = _make_bundle(tmp_path, concrete_name="demo")
+    run_paths = SimpleNamespace(
+        run_dir=tmp_path / "run",
+        run_root=tmp_path / "run",
+        run_log_path=tmp_path / "run.log",
+        predictions_path=tmp_path / "predictions.jsonl",
+        metrics_path=tmp_path / "run" / "metrics.json",
+        dataset_manifest_path=tmp_path / "run" / "dataset_manifest.json",
+        config_path=tmp_path / "run" / "experiment_config.json",
+        environment_path=tmp_path / "run" / "environment.json",
+    )
+    logger_messages: list[tuple[str, str]] = []
+
+    class _SequenceView:
+        def with_split_fractions(self, *_args: object) -> _SequenceView:
+            return self
+
+        @staticmethod
+        def split_count_hint() -> SimpleNamespace:
+            return SimpleNamespace(train_count=1, test_count=1)
+
+        @staticmethod
+        def train_sequence_count_unit_hint() -> str:
+            return "sequences"
+
+    class _Logger:
+        @staticmethod
+        def info(message: str, *args: object) -> None:
+            logger_messages.append(("info", message % args if args else message))
+
+        @staticmethod
+        def exception(message: str, *args: object) -> None:
+            logger_messages.append(("exception", message % args if args else message))
+
+    class _Templated:
+        @staticmethod
+        def group_by_entity() -> _SequenceView:
+            return _SequenceView()
+
+    class _DatasetSpec:
+        @staticmethod
+        def build() -> _Templated:
+            return _Templated()
+
+        @staticmethod
+        def clear_cache() -> None:
+            return None
+
+    def _build_dataset_spec(*_args: object, **_kwargs: object) -> _DatasetSpec:
+        return _DatasetSpec()
+
+    @contextmanager
+    def _logger_context(
+        *_args: object,
+        **_kwargs: object,
+    ) -> Iterator[object]:
+        yield _Logger()
+
+    monkeypatch.setattr(runner, "_experiment_logger", _logger_context)
+    monkeypatch.setattr(
+        runner,
+        "_prepare_result_paths",
+        lambda _bundle, **_kwargs: run_paths,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_dataset_spec",
+        _build_dataset_spec,
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_model",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runner._run_bundle(  # noqa: SLF001
+            bundle,
+            options=runner._BundleRunOptions(),  # noqa: SLF001
+        )
+
+    assert any(kind == "exception" for kind, _ in logger_messages)
+    assert any(
+        "Concrete experiment demo failed" in message for _, message in logger_messages
+    )
 
 
 def test_run_experiment_submits_plain_worker_payloads(

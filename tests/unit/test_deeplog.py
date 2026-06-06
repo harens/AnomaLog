@@ -637,7 +637,7 @@ def test_iter_key_examples_respects_eligible_target_indexes() -> None:
 
 
 def test_materialise_key_training_examples_caches_history_windows() -> None:
-    """Key training should cache per-sequence histories and targets once."""
+    """Key training should cache per-sequence indexed histories and targets once."""
     materialise_key_training_examples = (
         deeplog_key._materialise_key_training_examples  # noqa: SLF001
     )
@@ -664,21 +664,17 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
     )
 
     assert sequence_examples[0].history_windows.tolist() == [[0, 1], [1, 2]]
-    assert sequence_examples[0].history_one_hot_windows.shape == (2, 2, 4)
     assert sequence_examples[0].target_indexes.tolist() == [2, 3]
     assert sequence_examples[1].history_windows.shape == (0, 2)
-    assert sequence_examples[1].history_one_hot_windows.shape == (0, 2, 4)
     assert sequence_examples[1].target_indexes.shape == (0,)
     assert sequence_examples[0].history_windows.device.type == "cpu"
     assert sequence_examples[1].history_windows.device.type == "cpu"
-    assert sequence_examples[0].history_one_hot_windows.device.type == "cpu"
-    assert sequence_examples[1].history_one_hot_windows.device.type == "cpu"
 
 
-def test_fit_key_model_caches_one_hot_histories_across_epochs(
+def test_fit_key_model_materialises_one_hot_histories_per_minibatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DeepLog should materialise one-hot histories once and reuse them.
+    """DeepLog should materialise one-hot histories when minibatches run.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Records one-hot history construction
@@ -736,7 +732,7 @@ def test_fit_key_model_caches_one_hot_histories_across_epochs(
             progress=progress,
         )
 
-    assert one_hot_shapes == [(4, 1)]
+    assert one_hot_shapes == [(2, 1), (2, 1), (2, 1), (2, 1)]
 
 
 def test_move_key_training_batch_to_device_pins_cuda_transfers(
@@ -766,7 +762,7 @@ def test_move_key_training_batch_to_device_pins_cuda_transfers(
     monkeypatch.setattr(torch.Tensor, "pin_memory", _pin_memory, raising=False)
     monkeypatch.setattr(torch.Tensor, "to", _to, raising=False)
 
-    histories = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]], dtype=torch.float32)
+    histories = torch.tensor([[1, 0]], dtype=torch.long)
     targets = torch.tensor([1], dtype=torch.long)
 
     moved_histories, moved_targets = deeplog_key._move_key_training_batch_to_device(  # noqa: SLF001
@@ -777,7 +773,7 @@ def test_move_key_training_batch_to_device_pins_cuda_transfers(
 
     assert moved_histories is histories
     assert moved_targets is targets
-    assert pin_calls == [(1, 2, 2), (1,)]
+    assert pin_calls == [(1, 2), (1,)]
     assert to_calls == [("cuda", True), ("cuda", True)]
 
 
