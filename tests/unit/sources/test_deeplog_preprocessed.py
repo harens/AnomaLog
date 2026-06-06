@@ -93,6 +93,35 @@ def test_post_processed_source_invokes_keyword_only_post_processor(
     )
 
 
+def test_post_processed_source_reuses_existing_derived_raw_log(
+    tmp_path: Path,
+) -> None:
+    """Derived raw logs should not be regenerated when the file already exists."""
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    existing_raw_log = source_root / "preprocessed" / "hdfs_events.log"
+    existing_raw_log.parent.mkdir(parents=True, exist_ok=True)
+    existing_raw_log.write_text("already-built\n", encoding="utf-8")
+
+    called: list[Path] = []
+
+    def _post_process(_source_root: Path, raw_logs_path: Path) -> None:
+        called.append(raw_logs_path)
+        raw_logs_path.write_text("should-not-run\n", encoding="utf-8")
+
+    source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=_post_process,
+        raw_logs_relpath=Path("preprocessed/hdfs_events.log"),
+    )
+
+    materialised_root = source.materialise(dst_dir=tmp_path / "dataset")
+
+    assert materialised_root == source_root
+    assert called == []
+    assert existing_raw_log.read_text(encoding="utf-8") == "already-built\n"
+
+
 class _StubSource(DatasetSource):
     """Minimal dataset source stub for post-processing tests.
 

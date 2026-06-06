@@ -299,6 +299,14 @@ class PostProcessedSource(DatasetSource):
             dataset_name=dst_dir.name,
             dataset_root=dataset_root,
         )
+        if raw_logs_path.is_file():
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Reusing derived raw log for %s at %s",
+                dst_dir.name,
+                raw_logs_path,
+            )
+            return dataset_root
         raw_logs_path.parent.mkdir(parents=True, exist_ok=True)
         self.post_process(dataset_root, raw_logs_path)
         if not raw_logs_path.exists():

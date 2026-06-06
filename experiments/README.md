@@ -359,6 +359,10 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
   unreadable, the sink rebuilds that dataset namespace under the same
   dataset-build lock before any model sees it, rather than letting one model
   observe an empty train prefix while another repairs the cache.
+- Post-processed HDFS-style sources reuse an already materialised derived raw
+  log when it is present, so repeated runs do not re-expand the same split
+  files and do not invalidate the downstream structured-parquet cache just by
+  rebuilding the compatibility slice.
 - Concrete runs write to deterministic directories under
   `experiments/results/<concrete-run-name>/<fingerprint>/`, where the
   fingerprint comes from the fully resolved manifest, dataset, and model config.
