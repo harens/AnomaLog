@@ -28,7 +28,7 @@ from experiments import ConfigError
 from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
-from experiments.models.evaluate import PredictionOutputConfig
+from experiments.models.evaluate import PredictionOutputConfig, SequenceFactory
 from experiments.registry import resolve_registry_experiment
 from experiments.results import (
     ResultWriteContext,
@@ -492,8 +492,13 @@ def _execute_bundle_run(
     )
     model_started_at = perf_counter()
     model_summary = run_model(
-        sequence_factory=lambda: iter(
-            bundle.dataset.sequence.apply(templated),
+        sequence_factory=SequenceFactory(
+            factory=lambda: iter(
+                bundle.dataset.sequence.apply(templated),
+            ),
+            train_factory=(
+                sequence_view_for_summary.sequences.iter_training_sequences
+            ),
         ),
         config=bundle.model,
         prediction_output=PredictionOutputConfig(

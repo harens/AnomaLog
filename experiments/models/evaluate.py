@@ -40,6 +40,29 @@ TrainProgressHint = ProgressHint
 
 
 @dataclass(frozen=True, slots=True)
+class SequenceFactory:
+    """Callable sequence stream plus an optional train-only replay."""
+
+    factory: Callable[[], Iterator[TemplateSequence]]
+    train_factory: Callable[[], Iterator[TemplateSequence]] | None = None
+
+    def __call__(self) -> Iterator[TemplateSequence]:
+        """Return the underlying lazy sequence stream."""
+        return self.factory()
+
+    def train_sequences(self) -> Iterator[TemplateSequence]:
+        """Return the bounded train replay when one is available.
+
+        Returns:
+            Iterator[TemplateSequence]: Train-only stream for fitting when the
+                caller can provide one, otherwise the shared filtered replay.
+        """
+        if self.train_factory is not None:
+            return self.train_factory()
+        return iter_train_sequences(self.factory)
+
+
+@dataclass(frozen=True, slots=True)
 class PredictionOutputConfig:
     """Settings for writing streamed test predictions.
 
@@ -205,7 +228,7 @@ class RunMetrics:
 
 def run_model(
     *,
-    sequence_factory: Callable[[], Iterator[TemplateSequence]],
+    sequence_factory: SequenceFactory,
     config: ExperimentModelConfig,
     prediction_output: PredictionOutputConfig,
     logger: logging.Logger,
@@ -214,8 +237,8 @@ def run_model(
     """Fit the configured detector and stream predictions to disk.
 
     Args:
-        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
-            producing the full sequence stream.
+        sequence_factory (SequenceFactory): Callable producing the full
+            sequence stream and exposing whether the stream is split-ordered.
         config (ExperimentModelConfig): Model config used to build the detector.
         prediction_output (PredictionOutputConfig): Prediction stream settings.
         logger (logging.Logger): Logger for progress messages.
@@ -228,7 +251,7 @@ def run_model(
     detector = config.build_detector()
     fit_detector(
         detector=detector,
-        train_sequences=iter_train_sequences(sequence_factory),
+        train_sequences=sequence_factory.train_sequences(),
         logger=logger,
         train_progress_hint=None if progress_plan is None else progress_plan.train,
     )
@@ -254,7 +277,7 @@ def run_model(
 def iter_train_sequences(
     sequence_factory: Callable[[], Iterator[TemplateSequence]],
 ) -> Iterator[TemplateSequence]:
-    """Yield only training sequences from a sequence factory.
+    """Yield training sequences from a sequence factory.
 
     Args:
         sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory

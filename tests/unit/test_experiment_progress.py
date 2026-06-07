@@ -16,7 +16,13 @@ from experiments.models.base import (
     PredictionOutcome,
     SequenceSummary,
 )
-from experiments.models.evaluate import PredictionOutputConfig, stream_predictions
+from experiments.models.evaluate import (
+    PredictionOutputConfig,
+    SequenceFactory,
+    iter_train_sequences,
+    run_model,
+    stream_predictions,
+)
 from experiments.models.progress import ProgressHint
 
 if TYPE_CHECKING:
@@ -42,6 +48,20 @@ def _sequence(
         window_id=window_id,
         split_label=split_label,
     )
+
+
+def _interleaved_sequence_stream() -> list[TemplateSequence]:
+    """Return a non-prefix-ordered stream representative of interleaved splits.
+
+    Returns:
+        list[TemplateSequence]: Stream with a later train sequence after the
+            first test sequence, matching the unsafe before-grouping case.
+    """
+    return [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(3, templates=["train-b"], label=1, split_label=SplitLabel.TRAIN),
+    ]
 
 
 def test_stream_predictions_uses_known_test_total_when_supplied(
@@ -126,3 +146,82 @@ def test_stream_predictions_uses_known_test_total_when_supplied(
     assert task.total == EXPECTED_TEST_SEQUENCE_COUNT
     assert task.completed == EXPECTED_TEST_SEQUENCE_COUNT
     assert task.description == "Scoring recording test sequences"
+
+
+def test_iter_train_sequences_keeps_late_train_sequences_by_default() -> None:
+    """The shared iterator should remain non-destructive without the flag."""
+    sequences = list(
+        iter_train_sequences(
+            lambda: iter(_interleaved_sequence_stream()),
+        ),
+    )
+
+    assert [sequence.window_id for sequence in sequences] == [1, 3]
+
+
+def test_run_model_uses_bounded_train_factory(tmp_path: Path) -> None:
+    """Model fitting should use the bounded train replay when provided."""
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: ClassVar[str] = "recording"
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del progress, logger
+            sequences = list(train_sequences)
+            assert [sequence.split_label for sequence in sequences] == [
+                SplitLabel.TRAIN,
+            ]
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            del sequence
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    @dataclass(frozen=True, slots=True)
+    class _RunConfig:
+        @override
+        def build_detector(self) -> _RecordingDetector:
+            return _RecordingDetector()
+
+    sequences = [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(3, templates=["test-b"], label=1, split_label=SplitLabel.TEST),
+    ]
+    train_sequences = [sequences[0]]
+
+    summary = run_model(
+        sequence_factory=SequenceFactory(
+            factory=lambda: iter(sequences),
+            train_factory=lambda: iter(train_sequences),
+        ),
+        config=_RunConfig(),
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "predictions.jsonl",
+            write_predictions=False,
+        ),
+        logger=logging.getLogger("tests.run_model.train_factory"),
+    )
+
+    assert summary.sequence_summary.train_sequence_count == 1
+    expected_test_sequence_count = 2
+    assert summary.sequence_summary.test_sequence_count == expected_test_sequence_count

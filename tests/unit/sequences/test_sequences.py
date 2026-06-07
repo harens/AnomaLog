@@ -1,7 +1,7 @@
 """Tests for public `SequenceBuilder` behavior."""
 
 import builtins
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -331,6 +331,119 @@ def test_entity_sequences_fractional_split_counts_only_normals() -> None:
         SplitLabel.TEST,
     ]
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
+
+
+def test_entity_sequence_builder_iter_training_sequences_stops_at_raw_cutoff() -> (
+    None
+):
+    """Before-grouping training replay should stop once the raw cutoff is reached."""
+
+    @dataclass(frozen=True)
+    class _SentinelSink(InMemoryStructuredSink):
+        @override
+        def iter_entity_sequences(
+            self,
+        ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
+            groups = {
+                "a": [
+                    structured_line(
+                        line_order=0,
+                        timestamp_unix_ms=100,
+                        entity_id="a",
+                        untemplated_message_text="first-a",
+                        anomalous=0,
+                    ),
+                    structured_line(
+                        line_order=2,
+                        timestamp_unix_ms=300,
+                        entity_id="a",
+                        untemplated_message_text="second-a",
+                        anomalous=0,
+                    ),
+                ],
+                "b": [
+                    structured_line(
+                        line_order=1,
+                        timestamp_unix_ms=200,
+                        entity_id="b",
+                        untemplated_message_text="b-only",
+                        anomalous=0,
+                    ),
+                ],
+                "c": [
+                    structured_line(
+                        line_order=3,
+                        timestamp_unix_ms=400,
+                        entity_id="c",
+                        untemplated_message_text="sentinel",
+                        anomalous=0,
+                    ),
+                ],
+            }
+
+            def _iter() -> Iterator[Sequence[StructuredLine]]:
+                yield groups["a"]
+                yield groups["b"]
+                msg = "training replay consumed the test suffix"
+                raise AssertionError(msg)
+
+            return _iter
+
+    sink = _SentinelSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="a",
+                untemplated_message_text="first-a",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=200,
+                entity_id="b",
+                untemplated_message_text="b-only",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=300,
+                entity_id="a",
+                untemplated_message_text="second-a",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=400,
+                entity_id="c",
+                untemplated_message_text="sentinel",
+                anomalous=0,
+            ),
+        ],
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder.iter_training_sequences())
+
+    assert [sequence.entity_ids for sequence in sequences] == [["a"], ["b"]]
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TRAIN,
+    ]
 
 
 def test_entity_sequences_normal_only_training_uses_available_prefix_normals() -> None:
@@ -2788,6 +2901,60 @@ def test_entity_sequences_before_grouping_respect_prefixed_split_labels() -> Non
     assert train_sequences[0].split_label is SplitLabel.TRAIN
     assert test_sequences[0].split_label is SplitLabel.TRAIN
     assert ignored_sequences[0].split_label is SplitLabel.IGNORED
+
+
+def test_entity_sequence_builder_split_count_hint_accounts_for_partial_straddlers() -> (
+    None
+):
+    """Before-grouping split hints should count the emitted partial sequences."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="entity-a",
+            untemplated_message_text="first",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="entity-a",
+            untemplated_message_text="second",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="entity-a",
+            untemplated_message_text="third",
+            anomalous=0,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_FRACTION,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_fraction=0.5,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    sequences = list(builder)
+
+    assert [sequence.split_label for sequence in sequences] == [
+        SplitLabel.TRAIN,
+        SplitLabel.TEST,
+    ]
+    assert builder.split_count_hint() == SequenceSplitCounts(
+        total_count=2,
+        train_count=1,
+        ignored_count=0,
+        test_count=1,
+    )
 
 
 def test_chronological_stream_builder_reports_raw_entry_masks() -> None:

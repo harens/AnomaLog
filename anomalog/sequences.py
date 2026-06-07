@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, TypeGuard
 
+import pyarrow.dataset as ds
 from typing_extensions import Self, override
 
 from anomalog._sequence_split_policy import (
@@ -23,7 +24,11 @@ from anomalog._sequence_split_policy import (
     resolve_straddling_group_label,
     split_rows_by_label,
 )
-from anomalog.parsers.structured.contracts import StructuredLine, is_anomalous_label
+from anomalog.parsers.structured.contracts import (
+    ENTITY_FIELD,
+    StructuredLine,
+    is_anomalous_label,
+)
 from anomalog.parsers.structured.parsers import ThunderbirdParser
 from anomalog.representations import (
     SequenceRepresentation,
@@ -675,10 +680,16 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
 
         Returns:
             bool | None: Whether train was restricted to normal entities only,
-                or `None` when that concept does not apply to this builder.
+            or `None` when that concept does not apply to this builder.
         """
         del self
         return None
+
+    def iter_training_sequences(self) -> Iterator[TemplateSequence]:
+        """Yield the training slice used by model fitting."""
+        for sequence in self:
+            if sequence.split_label is SplitLabel.TRAIN:
+                yield sequence
 
     @abstractmethod
     def __iter__(self) -> Iterator[TemplateSequence]:
@@ -1569,6 +1580,62 @@ class EntitySequenceBuilder(SequenceBuilder):
         """
         return self.train_on_normal_entities_only
 
+    def iter_training_sequences(self) -> Iterator[TemplateSequence]:
+        """Yield only the train split used for detector fitting.
+
+        For HDFS-style raw-entry prefix protocols, fitting only needs the
+        train population implied by the selected policy. We therefore avoid
+        replaying the full suffix and instead materialise just the selected
+        train entities or raw-prefix rows, depending on the straddler policy.
+        """
+        if (
+            self.split_mode is None
+            or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            yield from super().iter_training_sequences()
+            return
+
+        if self.split_mode not in {
+            RawEntrySplitMode.PREFIX_COUNT,
+            RawEntrySplitMode.PREFIX_FRACTION,
+            RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
+        }:
+            yield from super().iter_training_sequences()
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+
+        cutoff_entry_index = self.train_entry_count
+        if self.split_mode is not RawEntrySplitMode.PREFIX_COUNT:
+            row_count = self.sink.count_rows()
+            if self.split_mode is RawEntrySplitMode.PREFIX_FRACTION:
+                cutoff_entry_index = math.ceil(self.train_entry_fraction * row_count)
+            else:
+                yield from super().iter_training_sequences()
+                return
+
+        if (
+            self.straddling_group_policy
+            is StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+        ):
+            yield from self._iter_training_sequences_from_raw_prefix(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+
+        if self.straddling_group_policy is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT:
+            yield from self._iter_training_sequences_from_prefix_entities(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+
+        yield from super().iter_training_sequences()
+
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
         """Return rows grouped by entity.
@@ -1593,6 +1660,125 @@ class EntitySequenceBuilder(SequenceBuilder):
             if row.entity_id is not None:
                 return [row.entity_id]
         return []
+
+    def _iter_training_sequences_from_raw_prefix(
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield train sequences built only from the raw prefix rows.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained prefix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Train-split sequences from the raw prefix only.
+        """
+        entity_rows: dict[str, list[StructuredLine]] = {}
+        entity_order: list[str] = []
+        for row in self._iter_source_order_rows():
+            if row.line_order is not None and row.line_order >= cutoff_entry_index:
+                break
+            if row.entity_id is None:
+                continue
+            rows = entity_rows.setdefault(row.entity_id, [])
+            if not rows:
+                entity_order.append(row.entity_id)
+            rows.append(row)
+
+        window_id = 0
+        for entity_id in entity_order:
+            rows = entity_rows[entity_id]
+            if self.train_on_normal_entities_only and is_anomalous_label(
+                label_for_group(entity_id),
+            ):
+                continue
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                SplitLabel.TRAIN,
+            )
+            if seq is not None and seq.split_label is SplitLabel.TRAIN:
+                yield seq
+                window_id += 1
+
+    def _iter_training_sequences_from_prefix_entities(
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield train sequences for assign-first policies without suffix replay.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the selected train entities.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Train-split sequences for entities that first
+                appeared in the train prefix.
+        """
+        entity_order: list[str] = []
+        seen_entities: set[str] = set()
+        for row in self._iter_source_order_rows():
+            if row.line_order is not None and row.line_order >= cutoff_entry_index:
+                break
+            if row.entity_id is None or row.entity_id in seen_entities:
+                continue
+            seen_entities.add(row.entity_id)
+            entity_order.append(row.entity_id)
+
+        if not entity_order:
+            return
+
+        entity_rows: dict[str, list[StructuredLine]] = {
+            entity_id: [] for entity_id in entity_order
+        }
+        selected_entities = set(entity_order)
+        entity_filter = ds.field(ENTITY_FIELD).isin(entity_order)
+        for row in self.sink.iter_structured_lines(filter_expr=entity_filter)():
+            if row.entity_id is None or row.entity_id not in selected_entities:
+                continue
+            entity_rows[row.entity_id].append(row)
+
+        window_id = 0
+        for entity_id in entity_order:
+            rows = entity_rows[entity_id]
+            if not rows:
+                continue
+            rows.sort(key=lambda row: row.line_order)
+            split_label = (
+                SplitLabel.IGNORED
+                if (
+                    self.train_on_normal_entities_only
+                    and is_anomalous_label(label_for_group(entity_id))
+                )
+                else SplitLabel.TRAIN
+            )
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                split_label,
+            )
+            if seq is not None and seq.split_label is SplitLabel.TRAIN:
+                yield seq
+                window_id += 1
 
     def __iter__(self) -> Iterator[TemplateSequence]:  # noqa: C901, PLR0912
         """Iterate over template sequences yielded by the configured grouping.
