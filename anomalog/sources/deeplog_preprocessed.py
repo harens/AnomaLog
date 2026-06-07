@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar, Literal, TextIO
 
 from anomalog.sources.contracts import DatasetSource
+from anomalog.sources.raw_prefix import materialise_raw_log_segment
 
 SplitFileSpec = tuple[str, int]
 SplitFileSpecs = tuple[SplitFileSpec, ...]
@@ -126,6 +127,43 @@ class NormalOnlySessionPrefixProvenance:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class RawLogSegmentProvenance:
+    """Describe a contiguous raw-line slice derived from one archive member.
+
+    Attributes:
+        split_source (Literal["raw_log_segment"]): Literal provenance tag for
+            a contiguous raw-line slice.
+        source_log_relpath (str): Archive member or source file relative path
+            used to derive the slice.
+        start_line (int): Inclusive 1-based raw line at which the slice starts.
+        line_limit (int): Maximum number of raw lines retained from the source.
+    """
+
+    split_source: Literal["raw_log_segment"]
+    source_log_relpath: str
+    start_line: int
+    line_limit: int
+
+    @property
+    def end_line_exclusive(self) -> int:
+        """Return the exclusive raw-line boundary of the derived slice."""
+        return self.start_line + self.line_limit
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-friendly provenance summary."""
+        return {
+            "split_source": self.split_source,
+            "source_log_relpath": self.source_log_relpath,
+            "start_line": self.start_line,
+            "line_limit": self.line_limit,
+            "start_line_zero_based": self.start_line - 1,
+            "end_line_exclusive": self.end_line_exclusive,
+            "inclusive_start": self.start_line,
+            "exclusive_end": self.end_line_exclusive,
+        }
+
+
 def build_session_file_boundary_provenance(
     split_files: SplitFileSpecs,
 ) -> FileBoundarySplitProvenance:
@@ -215,6 +253,25 @@ def build_labelled_raw_file_boundary_provenance(
     )
 
 
+def build_raw_log_segment_provenance(
+    *,
+    source_log_relpath: Path,
+    start_line: int,
+    line_limit: int,
+) -> RawLogSegmentProvenance:
+    """Build provenance metadata for a contiguous raw-line segment.
+
+    Returns:
+        RawLogSegmentProvenance: Provenance for a contiguous raw-line slice.
+    """
+    return RawLogSegmentProvenance(
+        split_source="raw_log_segment",
+        source_log_relpath=source_log_relpath.as_posix(),
+        start_line=start_line,
+        line_limit=line_limit,
+    )
+
+
 @dataclass(frozen=True)
 class PostProcessedSource(DatasetSource):
     """Materialise a base source and derive a raw log file from it.
@@ -237,7 +294,12 @@ class PostProcessedSource(DatasetSource):
     @property
     def split_provenance(
         self,
-    ) -> FileBoundarySplitProvenance | NormalOnlySessionPrefixProvenance | None:
+    ) -> (
+        FileBoundarySplitProvenance
+        | NormalOnlySessionPrefixProvenance
+        | RawLogSegmentProvenance
+        | None
+    ):
         """Return provenance for recognised file-boundary split materialisers."""
         provenance = None
         if isinstance(self.post_process, partial):
@@ -274,6 +336,15 @@ class PostProcessedSource(DatasetSource):
                     elif self.post_process.func is materialise_labelled_raw_stream:
                         provenance = build_labelled_raw_file_boundary_provenance(
                             split_files,
+                        )
+                    elif self.post_process.func is materialise_raw_log_segment:
+                        provenance = build_raw_log_segment_provenance(
+                            source_log_relpath=keywords.get(
+                                "source_log_relpath",
+                                Path("Thunderbird.log"),
+                            ),
+                            start_line=int(keywords["start_line"]),
+                            line_limit=int(keywords["line_limit"]),
                         )
         return provenance
 

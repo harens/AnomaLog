@@ -1243,11 +1243,16 @@ def _build_stream_segment_policy(dataset: DatasetVariantConfig) -> dict[str, obj
             "train_on_normal_entities_only": sequence.train_on_normal_entities_only,
         }
     if isinstance(sequence, FixedSequenceConfig):
-        return {
+        policy: dict[str, object] = {
             "mode": "fixed_window",
             "window_size": sequence.window_size,
             "step": sequence.step,
         }
+        if hasattr(sequence, "window_basis"):
+            policy["window_basis"] = sequence.window_basis.value
+            policy["window_alignment_offset"] = sequence.window_alignment_offset
+        policy["trailing_window_policy"] = "drop"
+        return policy
     if isinstance(sequence, TimeSequenceConfig):
         return {
             "mode": "time_window",

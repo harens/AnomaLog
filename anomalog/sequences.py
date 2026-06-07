@@ -23,7 +23,8 @@ from anomalog._sequence_split_policy import (
     resolve_straddling_group_label,
     split_rows_by_label,
 )
-from anomalog.parsers.structured.contracts import is_anomalous_label
+from anomalog.parsers.structured.contracts import StructuredLine, is_anomalous_label
+from anomalog.parsers.structured.parsers import ThunderbirdParser
 from anomalog.representations import (
     SequenceRepresentation,
     SequenceRepresentationView,
@@ -34,7 +35,7 @@ from anomalog.split_validation import validate_split_fractions
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator
 
-    from anomalog.parsers.structured.contracts import StructuredLine, StructuredSink
+    from anomalog.parsers.structured.contracts import StructuredSink
     from anomalog.parsers.structured.parquet.writer_worker import (
         EntityChronologyKey,
     )
@@ -87,6 +88,13 @@ class StraddlingGroupPolicy(str, Enum):
     ASSIGN_BY_FIRST_EVENT = "assign_by_first_event"
     ASSIGN_BY_LAST_EVENT = "assign_by_last_event"
     DROP_STRADDLERS = "drop_straddlers"
+
+
+class FixedWindowBasis(str, Enum):
+    """What positional basis to use for fixed-size windows."""
+
+    COMPACTED_ROWS = "compacted_rows"
+    RAW_POSITIONS = "raw_positions"
 
 
 class RawEntrySplitMode(str, Enum):
@@ -792,6 +800,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         split_label: SplitLabel,
         *,
         allow_group_label_fallback: bool = True,
+        sequence_label: int | None = None,
         group_label_is_anomalous: bool | None = None,
         training_event_mask: tuple[bool, ...] | None = None,
         evaluation_event_mask: tuple[bool, ...] | None = None,
@@ -811,6 +820,8 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             split_label (SplitLabel): Assigned dataset split for the sequence.
             allow_group_label_fallback (bool): Whether entity-level anomaly
                 labels may promote an otherwise normal window to anomalous.
+            sequence_label (int | None): Optional precomputed sequence label
+                derived from the raw raw-line window.
             group_label_is_anomalous (bool | None): Optional precomputed entity
                 label verdict to reuse when the caller has already resolved it.
             training_event_mask (tuple[bool, ...] | None): Optional per-event
@@ -833,7 +844,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
 
         events: list[tuple[str, list[str], int | None]] = []
         event_labels: list[int | None] | None = None
-        seq_label = 0
+        seq_label = 1 if is_anomalous_label(sequence_label) else 0
         prev_ts: int | None = None
 
         unique_ids = self._entity_ids_for_rows(rows)
@@ -1362,8 +1373,183 @@ class EntitySequenceBuilder(SequenceBuilder):
         Returns:
             SequenceSplitCounts: Exact split counts for the entity builder.
         """
+        if (
+            self.split_mode is not None
+            and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            return self._before_grouping_split_counts()
         counts, _ = self._entity_split_counts(label_for_group=self.label_for_group)
         return counts
+
+    def _before_grouping_split_counts(self) -> SequenceSplitCounts:
+        """Count emitted sequences for a raw-entry split applied pre-grouping.
+
+        The raw-entry split can fragment one entity into multiple emitted
+        sequences when ``split_partial_sequences`` is enabled, so the cheap
+        entity-count hint under-reports the actual number of sequences the
+        training loop will consume. This helper counts the realised emitted
+        sequences directly while still avoiding template inference.
+
+        Returns:
+            SequenceSplitCounts: Exact emitted sequence counts for the current
+                raw-entry split policy.
+        """
+        row_labels, _ = self._build_row_split_labels()
+        if not row_labels:
+            return SequenceSplitCounts(
+                total_count=0,
+                train_count=0,
+                ignored_count=0,
+                test_count=0,
+            )
+
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        total_count = 0
+        train_count = 0
+        ignored_count = 0
+        test_count = 0
+        for rows in self.iter_grouped_rows():
+            if not rows:
+                continue
+            (
+                group_total_count,
+                group_train_count,
+                group_ignored_count,
+                group_test_count,
+            ) = self._before_grouping_group_counts(
+                rows=rows,
+                row_label_values=row_label_values,
+                label_for_group=label_for_group,
+            )
+            total_count += group_total_count
+            train_count += group_train_count
+            ignored_count += group_ignored_count
+            test_count += group_test_count
+
+        return SequenceSplitCounts(
+            total_count=total_count,
+            train_count=train_count,
+            ignored_count=ignored_count,
+            test_count=test_count,
+        )
+
+    def _before_grouping_group_counts(
+        self,
+        *,
+        rows: Collection[StructuredLine],
+        row_label_values: dict[int, str],
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[int, int, int, int]:
+        """Count emitted sequences for one grouped window under raw splitting.
+
+        Args:
+            rows (Collection[StructuredLine]): Grouped structured rows.
+            row_label_values (dict[int, str]): Raw-entry split labels keyed by
+                ``line_order``.
+            label_for_group (Callable[[str], int | None]): Group-level anomaly
+                lookup used for normal-only training.
+
+        Returns:
+            tuple[int, int, int, int]: Total, train, ignored, and test emitted
+                sequence counts for the group.
+        """
+        if (
+            self.straddling_group_policy
+            == StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+        ):
+            return self._before_grouping_partial_group_counts(
+                rows=rows,
+                row_label_values=row_label_values,
+                label_for_group=label_for_group,
+            )
+        return self._before_grouping_resolved_group_counts(
+            rows=rows,
+            row_label_values=row_label_values,
+            label_for_group=label_for_group,
+        )
+
+    def _before_grouping_partial_group_counts(
+        self,
+        *,
+        rows: Collection[StructuredLine],
+        row_label_values: dict[int, str],
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[int, int, int, int]:
+        """Count emitted sequences when straddlers are split into segments.
+
+        Returns:
+            tuple[int, int, int, int]: Total, train, ignored, and test emitted
+                sequence counts for the group.
+        """
+        total_count = 0
+        train_count = 0
+        ignored_count = 0
+        test_count = 0
+        for segment_label, segment_rows in split_rows_by_label(
+            rows,
+            row_label_values,
+        ):
+            effective_label = SplitLabel(segment_label)
+            if (
+                self.train_on_normal_entities_only
+                and effective_label is SplitLabel.TRAIN
+                and any(
+                    row.entity_id is not None
+                    and is_anomalous_label(label_for_group(row.entity_id))
+                    for row in segment_rows
+                )
+            ):
+                effective_label = SplitLabel.IGNORED
+            total_count += 1
+            if effective_label is SplitLabel.TRAIN:
+                train_count += 1
+            elif effective_label is SplitLabel.TEST:
+                test_count += 1
+            else:
+                ignored_count += 1
+        return total_count, train_count, ignored_count, test_count
+
+    def _before_grouping_resolved_group_counts(
+        self,
+        *,
+        rows: Collection[StructuredLine],
+        row_label_values: dict[int, str],
+        label_for_group: Callable[[str], int | None],
+    ) -> tuple[int, int, int, int]:
+        """Count emitted sequences when straddlers resolve to one label.
+
+        Returns:
+            tuple[int, int, int, int]: Total, train, ignored, and test emitted
+                sequence counts for the group.
+        """
+        segments = list(split_rows_by_label(rows, row_label_values))
+        if not segments:
+            return 0, 0, 0, 0
+        split_label_value = resolve_straddling_group_label(
+            self.straddling_group_policy.value,
+            segments,
+        )
+        if split_label_value is None:
+            return 0, 0, 0, 0
+        effective_label = SplitLabel(split_label_value)
+        if (
+            self.train_on_normal_entities_only
+            and effective_label is SplitLabel.TRAIN
+            and any(
+                row.entity_id is not None
+                and is_anomalous_label(label_for_group(row.entity_id))
+                for row in rows
+            )
+        ):
+            effective_label = SplitLabel.IGNORED
+        if effective_label is SplitLabel.TRAIN:
+            return 1, 1, 0, 0
+        if effective_label is SplitLabel.TEST:
+            return 1, 0, 0, 1
+        return 1, 0, 1, 0
 
     @override
     def train_sequence_count_unit_hint(self) -> str:
@@ -1666,6 +1852,15 @@ class NonEntitySequenceBuilder(SequenceBuilder):
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class _RawPositionFixedWindow:
+    """Raw-position fixed-window payload used by Thunderbird reconstruction."""
+
+    window_id: int
+    rows: tuple[StructuredLine, ...]
+    label: int
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class FixedSequenceBuilder(NonEntitySequenceBuilder):
     """Sequence builder for fixed-size window grouping.
 
@@ -1673,19 +1868,29 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
         window_size (int): Number of rows per emitted window.
         step (int | None): Row advance between windows. `None` means
             non-overlapping windows.
+        window_basis (FixedWindowBasis): Whether windows are built over the
+            compacted structured rows or over the raw line positions.
+        window_alignment_offset (int): Raw-position offset before the first
+            full raw-position window.
     """
 
     window_size: int
     step: int | None = None
+    window_basis: FixedWindowBasis = FixedWindowBasis.COMPACTED_ROWS
+    window_alignment_offset: int = 0
 
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
-        """Return rows grouped by fixed-size windows.
+        """Yield rows grouped by fixed-size windows.
 
-        Returns:
-            Iterator[Collection[StructuredLine]]: Fixed-size row windows.
+        Yields:
+            Collection[StructuredLine]: Fixed-size row windows.
         """
-        return self.sink.iter_fixed_window_sequences(
+        if self.window_basis is FixedWindowBasis.RAW_POSITIONS:
+            for window in self._iter_raw_position_windows_with_labels():
+                yield window.rows
+            return
+        yield from self.sink.iter_fixed_window_sequences(
             self.window_size,
             step_size=self.step,
         )()
@@ -1697,11 +1902,148 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
         Returns:
             int: Count of fixed-size windows implied by the sink and config.
         """
+        if self.window_basis is FixedWindowBasis.RAW_POSITIONS:
+            return self._count_raw_position_windows()
         return self._count_fixed_windows(
             sink=self.sink,
             window_size=self.window_size,
             step=self.step,
         )
+
+    def _count_raw_position_windows(self) -> int:
+        """Return the number of fixed windows over raw source positions."""
+        step = self._raw_position_window_step()
+
+        raw_count = self._count_raw_positions()
+        usable = raw_count - self.window_alignment_offset
+        if usable < self.window_size:
+            return 0
+        return 1 + ((usable - self.window_size) // step)
+
+    def _raw_position_window_step(self) -> int:
+        """Validate and return the configured raw-position step size.
+
+        Returns:
+            int: Raw-position step size, or zero when no full windows fit.
+
+        Raises:
+            ValueError: If the raw-position window contract is invalid.
+        """
+        if self.window_size <= 0:
+            return 0
+        step = self.step or self.window_size
+        if step <= 0:
+            return 0
+        if step != self.window_size:
+            msg = "raw-position fixed windows require step to match window_size."
+            raise ValueError(msg)
+        if self.window_alignment_offset < 0:
+            msg = "window_alignment_offset must be non-negative."
+            raise ValueError(msg)
+        return step
+
+    def _count_raw_positions(self) -> int:
+        """Count raw positions available in the materialised raw slice.
+
+        Returns:
+            int: Number of raw positions in the source file.
+        """
+        with self.sink.raw_dataset_path.open(
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            return sum(1 for _ in handle)
+
+    def _iter_raw_position_windows_with_labels(
+        self,
+    ) -> Iterator[_RawPositionFixedWindow]:
+        """Yield raw-position windows and their raw-line anomaly labels.
+
+        Yields:
+            _RawPositionFixedWindow: Full raw-position window payload.
+
+        Raises:
+            ValueError: If the raw-position window contract is invalid.
+            TypeError: If the builder is not bound to a Thunderbird parser.
+        """
+        if self.window_basis is not FixedWindowBasis.RAW_POSITIONS:
+            msg = "raw-position windows are only available in raw-position mode."
+            raise ValueError(msg)
+        if not isinstance(self.sink.parser, ThunderbirdParser):
+            msg = "raw-position fixed windows currently require ThunderbirdParser."
+            raise TypeError(msg)
+
+        window_rows: list[StructuredLine] = []
+        window_label = 0
+        usable_position = 0
+        window_id = 0
+
+        with self.sink.raw_dataset_path.open(
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            for raw_line_order, raw_line in enumerate(handle):
+                if raw_line_order < self.window_alignment_offset:
+                    continue
+
+                usable_position += 1
+                raw_label = ThunderbirdParser.raw_label_for_line(raw_line)
+                if is_anomalous_label(raw_label):
+                    window_label = 1
+
+                parsed = self.sink.parser.parse_line(raw_line)
+                if parsed is not None:
+                    window_rows.append(
+                        StructuredLine.with_line_order(
+                            line_order=raw_line_order,
+                            base=parsed,
+                        ),
+                    )
+
+                if usable_position % self.window_size == 0:
+                    yield _RawPositionFixedWindow(
+                        window_id=window_id,
+                        rows=tuple(window_rows),
+                        label=window_label,
+                    )
+                    window_rows = []
+                    window_label = 0
+                    window_id += 1
+
+    @override
+    def __iter__(self) -> Iterator[TemplateSequence]:
+        """Yield fixed-size windows with the configured basis.
+
+        Yields:
+            TemplateSequence: One grouped template sequence per fixed window.
+        """
+        if self.window_basis is FixedWindowBasis.COMPACTED_ROWS:
+            yield from NonEntitySequenceBuilder.__iter__(self)
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+        split_counts = self.split_count_hint()
+        test_start = split_counts.total_count - split_counts.test_count
+
+        for window in self._iter_raw_position_windows_with_labels():
+            if window.window_id >= test_start:
+                split_label = SplitLabel.TEST
+            elif window.window_id < split_counts.train_count:
+                split_label = SplitLabel.TRAIN
+            else:
+                split_label = SplitLabel.IGNORED
+            seq = self._build_sequence(
+                window.window_id,
+                window.rows,
+                infer_template,
+                label_for_group,
+                split_label,
+                allow_group_label_fallback=False,
+                sequence_label=window.label,
+            )
+            if seq is not None:
+                yield seq
 
     @override
     def train_sequence_count_unit_hint(self) -> str:

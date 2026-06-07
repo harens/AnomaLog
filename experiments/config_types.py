@@ -22,6 +22,7 @@ from anomalog.cache import CachePathsConfig
 from anomalog.labels import CSVReader
 from anomalog.presets import resolve_preset
 from anomalog.sequences import (
+    FixedWindowBasis,
     RawEntrySplitMode,
     SplitApplicationOrder,
     StraddlingGroupPolicy,
@@ -644,9 +645,15 @@ class FixedSequenceConfig(
 
     Attributes:
         window_size (int): Number of rows per fixed window.
+        window_basis (FixedWindowBasis): Whether fixed windows operate on the
+            compacted structured rows or the raw line positions.
+        window_alignment_offset (int): Raw-position offset before the first
+            full fixed window.
     """
 
     window_size: int
+    window_basis: FixedWindowBasis = FixedWindowBasis.COMPACTED_ROWS
+    window_alignment_offset: int = 0
 
     def _group_sequences(self, templated: TemplatedDataset) -> SequenceBuilder:
         """Apply fixed-window grouping.
@@ -658,7 +665,12 @@ class FixedSequenceConfig(
         Returns:
             SequenceBuilder: Fixed-window sequence builder.
         """
-        return templated.group_by_fixed_window(self.window_size, step_size=self.step)
+        return templated.group_by_fixed_window(
+            self.window_size,
+            step_size=self.step,
+            window_basis=self.window_basis,
+            window_alignment_offset=self.window_alignment_offset,
+        )
 
 
 class TimeSequenceConfig(

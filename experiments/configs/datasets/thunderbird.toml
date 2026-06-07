@@ -13,6 +13,8 @@ evaluation_unit = "sequence"
 grouping = "fixed"
 window_size = 100
 step = 100
+window_basis = "raw_positions"
+window_alignment_offset = 0
 train_fraction = 0.8
 test_fraction = 0.2
 

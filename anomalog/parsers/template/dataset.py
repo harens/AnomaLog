@@ -12,6 +12,7 @@ from anomalog.sequences import (
     ChronologicalStreamSequenceBuilder,
     EntitySequenceBuilder,
     FixedSequenceBuilder,
+    FixedWindowBasis,
     TimeSequenceBuilder,
 )
 
@@ -138,6 +139,9 @@ class TemplatedDataset:
         self,
         window_size: int,
         step_size: int | None = None,
+        *,
+        window_basis: FixedWindowBasis = FixedWindowBasis.COMPACTED_ROWS,
+        window_alignment_offset: int = 0,
     ) -> FixedSequenceBuilder:
         """Group sequences in fixed-size windows.
 
@@ -145,6 +149,10 @@ class TemplatedDataset:
             window_size (int): Number of rows in each emitted window.
             step_size (int | None): Optional step between successive windows.
                 Defaults to `window_size`.
+            window_basis (FixedWindowBasis): Positional basis used to build the
+                fixed windows.
+            window_alignment_offset (int): Raw-position offset before the first
+                window when `window_basis` is `raw_positions`.
 
         Returns:
             FixedSequenceBuilder: Fixed-window sequence view.
@@ -155,6 +163,8 @@ class TemplatedDataset:
             label_for_group=self.anomaly_labels.label_for_group,
             window_size=window_size,
             step=step_size,
+            window_basis=window_basis,
+            window_alignment_offset=window_alignment_offset,
         )
 
     def group_by_time_window(

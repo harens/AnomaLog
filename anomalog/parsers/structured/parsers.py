@@ -361,6 +361,32 @@ class ThunderbirdParser(StructuredParser):
             None,
         )
 
+    @classmethod
+    def raw_label_for_line(cls, raw_line: str) -> int | None:
+        """Return the raw anomaly label token for one Thunderbird line.
+
+        Args:
+            raw_line (str): Raw Thunderbird log line to inspect.
+
+        Returns:
+            int | None: `0` for normal rows, `1` for anomalous rows, or
+            `None` when the line does not match the Thunderbird envelope.
+
+        Notes:
+            The helper mirrors the raw-line label token even when the parser
+            later skips the row because the message body is empty. That keeps
+            raw-position window labels aligned with the original line stream.
+        """
+        s = raw_line.rstrip("\n")
+        if not s.strip():
+            return None
+
+        m = cls._THUNDERBIRD_RE.match(s)
+        if m is None:
+            return None
+
+        return 0 if m.group("label").strip() == "-" else 1
+
     @override
     def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
         """Parse a single Thunderbird line; return `None` for skipped rows.
