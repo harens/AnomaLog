@@ -1594,7 +1594,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             self.split_mode is None
             or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
         ):
-            yield from super().iter_training_sequences()
+            yield from SequenceBuilder.iter_training_sequences(self)
             return
 
         if self.split_mode not in {
@@ -1602,7 +1602,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             RawEntrySplitMode.PREFIX_FRACTION,
             RawEntrySplitMode.PREFIX_NORMAL_FRACTION,
         }:
-            yield from super().iter_training_sequences()
+            yield from SequenceBuilder.iter_training_sequences(self)
             return
 
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
@@ -1622,7 +1622,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                     raise ValueError(msg)
                 cutoff_entry_index = math.ceil(train_entry_fraction * row_count)
             else:
-                yield from super().iter_training_sequences()
+                yield from SequenceBuilder.iter_training_sequences(self)
                 return
 
         if (
@@ -1644,7 +1644,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             )
             return
 
-        yield from super().iter_training_sequences()
+        yield from SequenceBuilder.iter_training_sequences(self)
 
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
