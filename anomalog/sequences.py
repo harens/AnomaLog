@@ -1608,12 +1608,12 @@ class EntitySequenceBuilder(SequenceBuilder):
         infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
-        cutoff_entry_index = self.train_entry_count
-        if cutoff_entry_index is None:
-            msg = "train_entry_count must be set for PREFIX_COUNT splits."
-            raise ValueError(msg)
-
-        if self.split_mode is not RawEntrySplitMode.PREFIX_COUNT:
+        if self.split_mode is RawEntrySplitMode.PREFIX_COUNT:
+            cutoff_entry_index = self.train_entry_count
+            if cutoff_entry_index is None:
+                msg = "train_entry_count must be set for PREFIX_COUNT splits."
+                raise ValueError(msg)
+        else:
             row_count = self.sink.count_rows()
             if self.split_mode is RawEntrySplitMode.PREFIX_FRACTION:
                 train_entry_fraction = self.train_entry_fraction
