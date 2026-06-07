@@ -19,8 +19,14 @@ from experiments.config import (
     EntitySequenceConfig,
     ExperimentBundle,
 )
+from experiments.config_types import (
+    RawEntryPrefixCountSplitConfig,
+    SplitApplicationOrder,
+    StraddlingGroupPolicy,
+)
 from experiments.models.base import decode_experiment_model_config
 from experiments.models.template_frequency import TemplateFrequencyModelConfig
+from experiments.results import ResultPaths
 from experiments.runners import run_experiment as runner
 
 if TYPE_CHECKING:
@@ -498,6 +504,140 @@ def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
     assert any(
         "Concrete experiment demo failed" in message for _, message in logger_messages
     )
+
+
+def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Concrete raw-entry splits should not pay for an exact count pre-pass.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces dataset construction and
+            model execution so the test can reach the split-count branch
+            without doing any heavy work.
+        tmp_path (Path): Temporary filesystem root used to fabricate the run
+            artefact paths.
+        caplog (pytest.LogCaptureFixture): Captures the runner's skip message so
+            the test can verify the expensive replay is bypassed.
+    """
+
+    @dataclass
+    class _SequenceView:
+        split_mode: object | None = None
+        split_application_order: object | None = None
+        straddling_group_policy: object | None = None
+        train_entry_count: int | None = None
+
+        def with_split_fractions(
+            self,
+            *_args: object,
+        ) -> _SequenceView:
+            return self
+
+        @staticmethod
+        def split_count_hint() -> SimpleNamespace:
+            msg = "exact split counting should be skipped for raw-entry splits"
+            raise AssertionError(msg)
+
+        @staticmethod
+        def train_sequence_count_unit_hint() -> str:
+            return "entities"
+
+    class _Templated:
+        @staticmethod
+        def group_by_entity() -> _SequenceView:
+            return _SequenceView()
+
+    class _DatasetSpec:
+        @staticmethod
+        def build() -> _Templated:
+            return _Templated()
+
+        @staticmethod
+        def clear_cache() -> None:
+            return None
+
+    bundle = ExperimentBundle(
+        experiments_root=tmp_path / "experiments",
+        repo_root=tmp_path,
+        sweep_path=tmp_path / "sweep.toml",
+        dataset_path=tmp_path / "dataset.toml",
+        model_path=tmp_path / "model.toml",
+        sweep=_FakeRunConfig(),
+        dataset=DatasetVariantConfig(
+            name="demo",
+            dataset_name="demo",
+            preset="demo",
+            sequence=EntitySequenceConfig(
+                split=RawEntryPrefixCountSplitConfig(
+                    train_entry_count=1,
+                    application_order=SplitApplicationOrder.BEFORE_GROUPING,
+                    straddling_group_policy=(
+                        StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+                    ),
+                ),
+            ),
+        ),
+        model=decode_experiment_model_config(
+            {"name": "template_frequency"},
+            config_type=TemplateFrequencyModelConfig,
+        ),
+        concrete_name="demo",
+    )
+    result_paths = ResultPaths(
+        run_fingerprint="fingerprint",
+        run_root=tmp_path / "run-root",
+        run_dir=tmp_path / "run",
+        config_path=tmp_path / "run" / "experiment_config.json",
+        dataset_manifest_path=tmp_path / "run" / "dataset_manifest.json",
+        metrics_path=tmp_path / "run" / "metrics.json",
+        predictions_path=tmp_path / "predictions.jsonl",
+        environment_path=tmp_path / "run" / "environment.json",
+        run_log_path=tmp_path / "run.log",
+    )
+    logger = logging.getLogger("tests.execute_bundle_split_count_hint")
+    logger.handlers.clear()
+    logger.setLevel(logging.INFO)
+    logger.propagate = True
+
+    monkeypatch.setattr(
+        runner,
+        "build_dataset_spec",
+        lambda *_args, **_kwargs: _DatasetSpec(),
+    )
+    saw_progress_plan_none = False
+
+    def _run_model(**kwargs: object) -> SimpleNamespace:
+        nonlocal saw_progress_plan_none
+        progress_plan = kwargs["progress_plan"]
+        assert isinstance(progress_plan, runner.RunProgressPlan)
+        assert progress_plan.train is None
+        assert progress_plan.score is None
+        saw_progress_plan_none = True
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runner, "run_model", _run_model)
+    monkeypatch.setattr(runner, "_finalise_bundle_run", lambda **_kwargs: None)
+
+    with caplog.at_level(logging.INFO):
+        returned = runner._execute_bundle_run(  # noqa: SLF001
+            bundle=bundle,
+            options=runner._BundleRunOptions(console=False),  # noqa: SLF001
+            result_paths=result_paths,
+            logger=logger,
+        )
+
+    assert returned == result_paths.run_dir
+    assert any(
+        message.startswith(
+            "Skipping exact sequence split count hint for demo because the "
+            "raw-entry before-grouping split would require a full replay",
+        )
+        for message in caplog.messages
+    )
+    assert saw_progress_plan_none
 
 
 def test_run_experiment_submits_plain_worker_payloads(

@@ -23,6 +23,7 @@ from prefect.logging.configuration import (
 from prefect.logging.formatters import PrefectFormatter
 
 from anomalog.io_utils import get_shared_console
+from anomalog.sequences import SplitApplicationOrder
 from experiments import ConfigError
 from experiments.config import ExperimentBundle, load_experiment_bundles
 from experiments.datasets import build_dataset_spec
@@ -466,11 +467,29 @@ def _execute_bundle_run(
         bundle.dataset.dataset_name,
         perf_counter() - sequence_started_at,
     )
+    raw_split = getattr(bundle.dataset.sequence, "split", None)
+    split_counts_hint = None
+    if (
+        raw_split is None
+        or raw_split.application_order is not SplitApplicationOrder.BEFORE_GROUPING
+    ):
+        split_hint_started_at = perf_counter()
+        split_counts_hint = sequence_view_for_summary.split_count_hint()
+        logger.info(
+            "Stage complete: sequence split count hint for %s in %.3fs",
+            bundle.dataset.dataset_name,
+            perf_counter() - split_hint_started_at,
+        )
+    else:
+        logger.info(
+            "Skipping exact sequence split count hint for %s because the "
+            "raw-entry before-grouping split would require a full replay",
+            bundle.dataset.dataset_name,
+        )
     logger.info(
         "Dataset ready; starting model run for %s",
         bundle.model.detector,
     )
-    split_counts_hint = sequence_view_for_summary.split_count_hint()
     model_started_at = perf_counter()
     model_summary = run_model(
         sequence_factory=lambda: iter(
