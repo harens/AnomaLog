@@ -10,7 +10,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 from prefect.logging import disable_run_logger
-from typing_extensions import Self, override
+from typing_extensions import override
 
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.structured.contracts import (
@@ -413,137 +413,82 @@ def test_sink_statistics_and_entity_grouping_use_real_dataset(
     }
 
 
-def test_sink_prefetch_bucket_heads_uses_parallel_executor(
+def test_sink_entity_grouping_defers_later_buckets_until_needed(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bucket head prefetch should submit every bucket to the executor.
+    """Entity grouping should not touch later buckets before the first yield.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Replaces the executor plumbing so
-            the helper can be exercised deterministically.
+        tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the
+            iterator contract can be exercised deterministically.
     """
-    submitted_bucket_iters: list[Iterator[_EntityGroup]] = []
+    sink = _make_sink(tmp_path)
+    started_buckets: list[int] = []
 
-    class _DoneFuture:
-        def __init__(self, result: _EntityGroup | None) -> None:
-            self._result = result
+    def _iter_buckets(_self: ParquetStructuredSink) -> set[int]:
+        return {0, 1}
 
-        def result(self) -> _EntityGroup | None:
-            return self._result
-
-    class _FakeExecutor:
-        def __init__(self, max_workers: int) -> None:
-            self.max_workers = max_workers
-
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def submit(
-            self,
-            fn: Callable[[Iterator[_EntityGroup]], _EntityGroup | None],
-            bucket_iter: Iterator[_EntityGroup],
-        ) -> _DoneFuture:
-            assert self.max_workers >= 1
-            submitted_bucket_iters.append(bucket_iter)
-            return _DoneFuture(fn(bucket_iter))
-
-    monkeypatch.setattr(parquet_sink, "ThreadPoolExecutor", _FakeExecutor)
-
-    def _as_completed(
-        futures: list[object],
-    ) -> Iterator[object]:
-        return iter(futures)
-
-    monkeypatch.setattr(
-        parquet_sink,
-        "as_completed",
-        _as_completed,
-    )
-
-    prefetch_bucket_heads = ParquetStructuredSink._prefetch_bucket_heads  # noqa: SLF001
-    bucket_heads = prefetch_bucket_heads(
-        [
-            iter(
-                [
-                    _EntityGroup(
-                        order=EntityChronologyKey(0, 100, 0, "early"),
-                        rows=(
-                            structured_line(
-                                line_order=1,
-                                timestamp_unix_ms=100,
-                                entity_id="early",
-                                untemplated_message_text="early-0",
-                                anomalous=0,
-                            ),
-                        ),
-                    ),
-                ],
-            ),
-            iter(
-                [
-                    _EntityGroup(
-                        order=EntityChronologyKey(0, 300, 0, "late"),
-                        rows=(
-                            structured_line(
-                                line_order=0,
-                                timestamp_unix_ms=300,
-                                entity_id="late",
-                                untemplated_message_text="late-0",
-                                anomalous=0,
-                            ),
-                        ),
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    expected_bucket_count = 2
-    assert len(submitted_bucket_iters) == expected_bucket_count
-    assert [bucket_index for bucket_index, _ in bucket_heads] == [0, 1]
-    assert ParquetStructuredSink._prefetch_bucket_heads([]) == []  # noqa: SLF001
-
-    empty_and_full_bucket_heads = ParquetStructuredSink._prefetch_bucket_heads(  # noqa: SLF001
-        [
-            iter([]),
-            iter(
-                [
-                    _EntityGroup(
-                        order=EntityChronologyKey(0, 500, 0, "solo"),
-                        rows=(
-                            structured_line(
-                                line_order=5,
-                                timestamp_unix_ms=500,
-                                entity_id="solo",
-                                untemplated_message_text="solo-0",
-                                anomalous=0,
-                            ),
-                        ),
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    assert empty_and_full_bucket_heads == [
-        (
-            1,
-            _EntityGroup(
-                order=EntityChronologyKey(0, 500, 0, "solo"),
+    def _iter_entity_groups_in_bucket(
+        _self: ParquetStructuredSink,
+        bucket_id: int,
+        *,
+        chronology_index: dict[str, EntityChronologyKey],
+    ) -> Iterator[_EntityGroup]:
+        del chronology_index
+        started_buckets.append(bucket_id)
+        if bucket_id == 0:
+            yield _EntityGroup(
+                order=EntityChronologyKey(0, 100, 0, "bucket-zero"),
                 rows=(
                     structured_line(
-                        line_order=5,
-                        timestamp_unix_ms=500,
-                        entity_id="solo",
-                        untemplated_message_text="solo-0",
+                        line_order=0,
+                        timestamp_unix_ms=100,
+                        entity_id="bucket-zero",
+                        untemplated_message_text="first",
                         anomalous=0,
                     ),
                 ),
+            )
+            return
+
+        yield _EntityGroup(
+            order=EntityChronologyKey(0, 200, 0, "bucket-one"),
+            rows=(
+                structured_line(
+                    line_order=1,
+                    timestamp_unix_ms=200,
+                    entity_id="bucket-one",
+                    untemplated_message_text="second",
+                    anomalous=0,
+                ),
             ),
-        ),
+        )
+
+    monkeypatch.setattr(ParquetStructuredSink, "_iter_buckets", _iter_buckets)
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "_iter_entity_groups_in_bucket",
+        _iter_entity_groups_in_bucket,
+    )
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "load_entity_chronology_index",
+        lambda _self: {},
+    )
+
+    sequence_iter = sink.iter_entity_sequences()()
+    first_rows = next(sequence_iter)
+
+    assert started_buckets == [0]
+    assert [row.entity_id for row in first_rows] == ["bucket-zero"]
+
+    remaining_rows = list(sequence_iter)
+
+    assert started_buckets == [0, 1]
+    assert [[row.entity_id for row in rows] for rows in remaining_rows] == [
+        ["bucket-one"],
     ]
 
 
@@ -1024,16 +969,17 @@ def test_rebuild_structured_cache_removes_existing_cache_root(
     assert cache_root.exists()
 
 
-def test_sink_entity_grouping_merges_buckets_chronologically(
+def test_sink_entity_grouping_preserves_entity_set_in_bucket_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Entity grouping should merge bucket streams by first timestamp.
+    """Entity grouping should preserve the yielded entity set deterministically.
 
     Args:
         tmp_path (Path): Per-test filesystem sandbox for sink cache roots.
-        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the merge
-            order can be exercised without a real parquet scan.
+        monkeypatch (pytest.MonkeyPatch): Replaces sink internals so the
+            deterministic bucket order can be exercised without a real parquet
+            scan.
     """
     sink = _make_sink(tmp_path)
 
@@ -1081,13 +1027,22 @@ def test_sink_entity_grouping_merges_buckets_chronologically(
         "_iter_entity_groups_in_bucket",
         _iter_entity_groups_in_bucket,
     )
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "load_entity_chronology_index",
+        lambda _self: {},
+    )
 
     sequences = list(sink.iter_entity_sequences()())
 
     assert [[row.entity_id for row in rows] for rows in sequences] == [
-        ["early"],
         ["late"],
+        ["early"],
     ]
+    assert {row.entity_id for rows in sequences for row in rows} == {
+        "late",
+        "early",
+    }
 
 
 def test_sink_entity_grouping_sorts_rows_within_each_entity(

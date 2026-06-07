@@ -355,6 +355,9 @@ AnomaLog caches dataset preprocessing work, not experiment model execution.
 - Structured parquet materialisation now writes a tiny entity chronology
   sidecar alongside the parquet partitions, so entity-grouped readers can
   reuse first-seen ordering without rescanning all rows.
+  Entity-grouped reads now stream bucket-by-bucket instead of priming every
+  bucket before the first sequence is yielded, so the first group can appear
+  after one bucket has been materialised.
   Entity-grouped split-count hints now reuse that chronology sidecar too, so
   the runner can log progress and start model execution without a full entity
   scan.
