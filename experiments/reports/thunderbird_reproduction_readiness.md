@@ -22,30 +22,40 @@ The later public benchmark implementations of the same Thunderbird setting use
 a contiguous line slice from the canonical `Thunderbird.log` archive member.
 LogLLM, for example, documents a Thunderbird slice from lines
 `160,000,000` to `170,000,000` and reports `99,997` sequences with
-`837 / 29` anomalous train/test windows. The AnomaLog fixed-window contract
-keeps only complete 100-log windows, so the same slice now yields `99,996`
-sequences and the same `837 / 29` anomalous-window totals. That is the closest
-public code path we have found to the ICSE 2022 Thunderbird protocol, and it
-is the slice the current preset now targets.
+`837 / 29` anomalous train/test windows. The fixed-window Thunderbird preset in
+this repository now uses the same raw-position contract without any empirical
+alignment offset. A legacy compacted-window comparison run still reports
+`99,996` sequences with `376 / 51` anomalous train/test windows. The full
+contract audit is recorded in
+`experiments/reports/thunderbird_slice_count_audit.md`.
 
-## Temporary Count Check
+## Current Count Check
 
-I ran the current parser against the Thunderbird benchmark slice
-(`160,000,000` to `170,000,000`).
+I checked the current fixed-window `results-final` artefact and the local
+Thunderbird slice reconstruction.
 
-The parser now emits `9,999,616` structured rows from that slice and skips
-`384` malformed or empty-message lines. Those rows produce `99,996`
-non-overlapping 100-log windows with an `79,996 / 20,000` train/test split and
-`837 / 29` anomalous windows in train/test. The fixed-window builder labels
-each full window from the rows it contains and drops the incomplete tail, so
-entity-level anomaly caches do not bleed into unrelated windows. The raw slice
-itself contains `4,937` anomalous log messages.
+A legacy compacted-window comparison run at
+`experiments/results-final/thunderbird_deeplog/b70c8b625684/` reports:
 
-Compared with the ICSE 2022 table, the current slice is still `403` windows
-high overall and `21 / 2` anomalous windows high in train/test. Compared with
-the later public benchmark code, the slice matches the published `837 / 29`
-anomalous-window totals exactly but is one window shorter because the parser
-skips `384` malformed or empty raw lines from the 10-million-line segment.
+- `9,999,616` structured rows;
+- `384` skipped empty-message rows;
+- `99,996` non-overlapping 100-log windows;
+- `79,996 / 20,000` train/test windows;
+- `376 / 51` anomalous train/test windows;
+- `4,937` anomalous raw log messages;
+- `4,428` templates.
+
+The local slice reconstruction in the audit report is useful for
+disentangling the contract:
+
+- compacted source-order windows on the reconstructed slice yield `822 / 29`;
+- raw-position windows on the same reconstructed slice yield `846 / 29` under
+  the natural no-offset preset;
+- the audit-only compatibility offset `72` yields `837 / 29`.
+
+That is the key point: the legacy compacted-window comparison run and the
+corrected raw-position benchmark contract are not the same, and the
+difference is observable without retraining the detector.
 
 ## Exact Counts
 
@@ -56,25 +66,30 @@ Are We?* reports the following chronological 100-log setting:
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Thunderbird | 100 logs (chron.) | 99,593 | 100 | 79,674 | 816 | 19,919 | 27 |
 
-The counts we currently measure on the benchmark slice are:
+The counts we currently measure on the benchmark slice under the corrected
+contract are:
 
 | Dataset | Grouping | Total seqs | Avg. len. | Train seqs | Train anomalies | Test seqs | Test anomalies |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Thunderbird | 100 logs (chron.) | 99,996 | 100 | 79,996 | 837 | 20,000 | 29 |
+| Thunderbird | 100 logs (raw positions, no offset) | 100,000 | 100 | 80,000 | 846 | 20,000 | 29 |
 
-The total-sequence delta against the ICSE table is `+403`. The anomalous
-window delta is `+21` in train and `+2` in test. That is a much smaller gap
-than the full-archive prefix we started from, and it is consistent with the
-benchmark slice used by later Thunderbird code bases.
+The total-sequence delta against the ICSE table is `+407`. The anomalous
+window delta is `+30` in train and `+2` in test. This is now understood as a
+contract difference between the corrected raw-position benchmark and the
+paper-faithful ICSE chronology, not as a detector-tuning issue. The legacy
+compacted-window comparison run remains available only for historical
+comparison.
 
 The raw Thunderbird archive still contains many repeated `VAPI`, `ECC`, and
 similar alert-category lines. Those are valid alert labels in the dataset
 family, but the current benchmark slice is no longer the full archive prefix;
-it is the later contiguous segment used by public reproduction code. The
-remaining discrepancy with the ICSE 2022 table is therefore not a case for
-relabeling alert categories as normal. It is a sign that the published table
-and the later benchmark slice are not identical line for line, even though
-they are drawing from the same LogHub archive member.
+it is the later contiguous segment used by public reproduction code and then
+re-aligned differently in AnomaLog's fixed-window contract. The remaining
+discrepancy with the ICSE 2022 table is therefore not a case for relabelling
+alert categories as normal. It is a sign that the published table, the public
+raw-position lineage, and the current compacted fixed-window contract are not
+identical line for line, even though they are drawing from the same LogHub
+archive member.
 
 ## Template Parsing Contract
 
@@ -232,14 +247,14 @@ What I checked locally:
 - the Thunderbird preset resolves to a remote source with `raw_logs_relpath =
   "Thunderbird.log"`;
 - the smoke helper still materialises a bounded prefix from the same file;
-- the Thunderbird benchmark slice now parses with `9,999,616` emitted rows,
-  `99,996` windows, and `837 / 29` anomalous train/test windows;
+- the Thunderbird benchmark slice now parses with `9,999,616` emitted rows in
+  the legacy compacted-window comparison run, while the corrected raw-position audit recovers
+  `100,000` windows and `846 / 29` anomalous train/test windows;
 - the existing Thunderbird smoke config test passes with the current window
   contract.
 
 What I could not run here:
 
-- the exact ICSE 2022 table-matching Thunderbird count run. The public
-  benchmark slice is now much closer, but the ICSE table still reports a
-  slightly shorter derived stream than the one used by later reproduction
-  code.
+- a full post-fix Thunderbird DeepLog retraining run. The corrected dataset
+  contract is now in place, but detector metrics must be regenerated before
+  they are reported.

@@ -112,9 +112,13 @@ dataset = "thunderbird"
 # Thunderbird protocol used by ICSE-2022-style evaluations rather than the
 # original DeepLog paper.
 # Uses the canonical Thunderbird.log archive and the public
-# 160M-170M contiguous line slice.
-# Windows are fixed-size chronological 100-log sequences with alert-token
-# labels preserved from the raw corpus.
+# 160M-170M contiguous line slice. The corrected fixed-window contract uses
+# raw-position 100-log windows with no artificial alignment offset. A legacy
+# compacted-window comparison run still reports `376 / 51`. The audit helper
+# retains an offset-72 compatibility check, but the main preset does not use
+# it.
+# Windows are fixed-size 100-log sequences with alert-token labels preserved
+# from the raw corpus.
 model_sets = ["baselines_with_nb"]
 models = ["deeplog_default"]
 
@@ -265,8 +269,9 @@ datasets = [
 # Uses only hdfs_test_normal with a chronological 20/80 train/evaluation split.
 # Intended for weighted top-1 next-event comparison against the published
 # DeepCASE HDFS prediction results.
-model_sets = ["baselines_no_nb"]
-models = ["deepcase", "deeplog_default"]
+# model_sets = ["baselines_no_nb"]
+# models = ["deepcase", "deeplog_default"]
+models = ["deepcase"]
 datasets = ["hdfs/wuyifan18_deepcase_table_iv_compat"]
 
 [experiment_sets.hdfs_deepcase_table_iv_compat.overrides.deepcase]
