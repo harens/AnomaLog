@@ -496,9 +496,7 @@ def _execute_bundle_run(
             factory=lambda: iter(
                 bundle.dataset.sequence.apply(templated),
             ),
-            train_factory=(
-                sequence_view_for_summary.sequences.iter_training_sequences
-            ),
+            train_factory=sequence_view_for_summary.iter_training_sequences,
         ),
         config=bundle.model,
         prediction_output=PredictionOutputConfig(

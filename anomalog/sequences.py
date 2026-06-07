@@ -14,7 +14,6 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, TypeGuard
 
-import pyarrow.dataset as ds
 from typing_extensions import Self, override
 
 from anomalog._sequence_split_policy import (
@@ -25,7 +24,6 @@ from anomalog._sequence_split_policy import (
     split_rows_by_label,
 )
 from anomalog.parsers.structured.contracts import (
-    ENTITY_FIELD,
     StructuredLine,
     is_anomalous_label,
 )
@@ -1587,6 +1585,10 @@ class EntitySequenceBuilder(SequenceBuilder):
         train population implied by the selected policy. We therefore avoid
         replaying the full suffix and instead materialise just the selected
         train entities or raw-prefix rows, depending on the straddler policy.
+
+        Raises:
+            ValueError: If the requested raw-entry split metadata is missing
+                for a configured before-grouping prefix protocol.
         """
         if (
             self.split_mode is None
@@ -1607,10 +1609,18 @@ class EntitySequenceBuilder(SequenceBuilder):
         label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
 
         cutoff_entry_index = self.train_entry_count
+        if cutoff_entry_index is None:
+            msg = "train_entry_count must be set for PREFIX_COUNT splits."
+            raise ValueError(msg)
+
         if self.split_mode is not RawEntrySplitMode.PREFIX_COUNT:
             row_count = self.sink.count_rows()
             if self.split_mode is RawEntrySplitMode.PREFIX_FRACTION:
-                cutoff_entry_index = math.ceil(self.train_entry_fraction * row_count)
+                train_entry_fraction = self.train_entry_fraction
+                if train_entry_fraction is None:
+                    msg = "train_entry_fraction must be set for PREFIX_FRACTION splits."
+                    raise ValueError(msg)
+                cutoff_entry_index = math.ceil(train_entry_fraction * row_count)
             else:
                 yield from super().iter_training_sequences()
                 return
@@ -1749,11 +1759,14 @@ class EntitySequenceBuilder(SequenceBuilder):
             entity_id: [] for entity_id in entity_order
         }
         selected_entities = set(entity_order)
-        entity_filter = ds.field(ENTITY_FIELD).isin(entity_order)
-        for row in self.sink.iter_structured_lines(filter_expr=entity_filter)():
-            if row.entity_id is None or row.entity_id not in selected_entities:
+        for rows in self.sink.iter_entity_sequences()():
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            if entity_id is None or entity_id not in selected_entities:
                 continue
-            entity_rows[row.entity_id].append(row)
+            entity_rows[entity_id].extend(rows)
 
         window_id = 0
         for entity_id in entity_order:

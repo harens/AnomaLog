@@ -15,6 +15,7 @@ from experiments.models.base import (
     ModelManifest,
     PredictionOutcome,
     SequenceSummary,
+    decode_experiment_model_config,
 )
 from experiments.models.evaluate import (
     PredictionOutputConfig,
@@ -24,6 +25,7 @@ from experiments.models.evaluate import (
     stream_predictions,
 )
 from experiments.models.progress import ProgressHint
+from experiments.models.template_frequency import TemplateFrequencyModelConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -159,7 +161,10 @@ def test_iter_train_sequences_keeps_late_train_sequences_by_default() -> None:
     assert [sequence.window_id for sequence in sequences] == [1, 3]
 
 
-def test_run_model_uses_bounded_train_factory(tmp_path: Path) -> None:
+def test_run_model_uses_bounded_train_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Model fitting should use the bounded train replay when provided."""
 
     @dataclass(slots=True)
@@ -186,7 +191,11 @@ def test_run_model_uses_bounded_train_factory(tmp_path: Path) -> None:
             return PredictionOutcome(predicted_label=0, score=0.0)
 
         @override
-        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+        def model_manifest(
+            self,
+            *,
+            sequence_summary: SequenceSummary,
+        ) -> ModelManifest:
             del sequence_summary
             return ModelManifest(
                 detector=self.detector_name,
@@ -196,12 +205,6 @@ def test_run_model_uses_bounded_train_factory(tmp_path: Path) -> None:
                 test_label_counts={},
             )
 
-    @dataclass(frozen=True, slots=True)
-    class _RunConfig:
-        @override
-        def build_detector(self) -> _RecordingDetector:
-            return _RecordingDetector()
-
     sequences = [
         _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
         _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
@@ -209,12 +212,22 @@ def test_run_model_uses_bounded_train_factory(tmp_path: Path) -> None:
     ]
     train_sequences = [sequences[0]]
 
+    config = decode_experiment_model_config(
+        {"name": "template_frequency"},
+        config_type=TemplateFrequencyModelConfig,
+    )
+    monkeypatch.setattr(
+        TemplateFrequencyModelConfig,
+        "build_detector",
+        lambda _self: _RecordingDetector(),
+    )
+
     summary = run_model(
         sequence_factory=SequenceFactory(
             factory=lambda: iter(sequences),
             train_factory=lambda: iter(train_sequences),
         ),
-        config=_RunConfig(),
+        config=config,
         prediction_output=PredictionOutputConfig(
             predictions_path=tmp_path / "predictions.jsonl",
             write_predictions=False,

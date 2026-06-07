@@ -333,9 +333,7 @@ def test_entity_sequences_fractional_split_counts_only_normals() -> None:
     assert [sequence.label for sequence in sequences] == [0, 0, 1]
 
 
-def test_entity_sequence_builder_iter_training_sequences_stops_at_raw_cutoff() -> (
-    None
-):
+def test_entity_sequence_builder_iter_training_sequences_stops_at_raw_cutoff() -> None:
     """Before-grouping training replay should stop once the raw cutoff is reached."""
 
     @dataclass(frozen=True)
