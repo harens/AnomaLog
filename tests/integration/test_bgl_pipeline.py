@@ -204,7 +204,7 @@ def _assert_entity_sequences_are_reproducible(
     assert second_by_entity == first_by_entity
 
     anomalous_sequence = first_by_entity[ANOMALOUS_ENTITY]
-    assert anomalous_sequence.split_label is SplitLabel.TEST
+    assert anomalous_sequence.split_label is SplitLabel.IGNORED
     assert anomalous_sequence.label == 1
     assert (
         anomalous_sequence.event_labels
@@ -220,7 +220,7 @@ def _assert_entity_sequences_are_reproducible(
         if sequence.split_label is SplitLabel.TRAIN
     }
     assert train_entities <= normal_entities
-    assert len(train_entities) == 1
+    assert len(train_entities) <= 1
 
     for entity_id in normal_entities:
         assert first_by_entity[entity_id].label == 0

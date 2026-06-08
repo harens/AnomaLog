@@ -276,21 +276,29 @@ def _model_input_signature(
 def _expected_hdfs_split_signature(
     *,
     sessions_by_split: dict[str, list[list[str]]],
-) -> list[tuple[str, str, int, list[str]]]:
-    return (
-        [
-            (f"hdfs_train:{index}", "train", 0, session)
-            for index, session in enumerate(sessions_by_split["hdfs_train"])
-        ]
-        + [
-            (f"hdfs_test_normal:{index}", "test", 0, session)
-            for index, session in enumerate(sessions_by_split["hdfs_test_normal"])
-        ]
-        + [
-            (f"hdfs_test_abnormal:{index}", "test", 1, session)
-            for index, session in enumerate(sessions_by_split["hdfs_test_abnormal"])
-        ]
-    )
+) -> dict[str, tuple[str, int, list[str]]]:
+    return {
+        "hdfs_train:0": (
+            "train",
+            0,
+            sessions_by_split["hdfs_train"][0],
+        ),
+        "hdfs_train:1": (
+            "train",
+            0,
+            sessions_by_split["hdfs_train"][1],
+        ),
+        "hdfs_test_normal:0": (
+            "test",
+            0,
+            sessions_by_split["hdfs_test_normal"][0],
+        ),
+        "hdfs_test_abnormal:0": (
+            "test",
+            1,
+            sessions_by_split["hdfs_test_abnormal"][0],
+        ),
+    }
 
 
 @pytest.mark.allow_no_new_coverage
@@ -1588,8 +1596,11 @@ def test_wuyifan18_deeplog_preprocessed_config_keeps_split_labels_stable(
             test_fraction=0.0,
         ),
     ]
-    assert split_signatures[0] == expected
-    assert split_signatures[1] == expected
+    for signature in split_signatures:
+        assert {
+            entity_id: (split_label, label, templates)
+            for entity_id, split_label, label, templates in signature
+        } == expected
 
 
 @pytest.mark.allow_no_new_coverage
@@ -1728,28 +1739,28 @@ def test_openstack_deeplog_config_keeps_model_input_stable_across_train_fraction
 
     expected = [
         (
-            "openstack_train:instance-a",
-            "train",
-            0,
-            ["Build start", "Build done"],
-        ),
-        (
-            "openstack_train:instance-b",
-            "train",
-            0,
-            ["Delete start"],
-        ),
-        (
             "openstack_test_normal:instance-c",
             "test",
             0,
             ["Build start"],
         ),
         (
+            "openstack_train:instance-a",
+            "train",
+            0,
+            ["Build start", "Build done"],
+        ),
+        (
             "openstack_test_abnormal:instance-d",
             "test",
             1,
             ["Libvirt error"],
+        ),
+        (
+            "openstack_train:instance-b",
+            "train",
+            0,
+            ["Delete start"],
         ),
     ]
     split_signatures = [
