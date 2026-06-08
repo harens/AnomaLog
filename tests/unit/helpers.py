@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import ClassVar, TypedDict
 from unittest.mock import create_autospec
 
+import pyarrow.dataset as ds
 from prefect.context import TaskRunContext
 from typing_extensions import NotRequired, Unpack, override
 
@@ -180,16 +181,44 @@ class InMemoryStructuredSink(StructuredSink):
 
     def iter_structured_lines_in_source_order(
         self,
+        filter_expr: ds.Expression | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Yield stored rows ordered by their raw line order.
+
+        Args:
+            filter_expr (ds.Expression | None): Ignored filter expression used to keep
+                the test helper signature aligned with sink implementations.
 
         Returns:
             Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
                 yields stored rows ordered by `line_order`.
         """
+        del filter_expr
 
         def _iter() -> Iterator[StructuredLine]:
             yield from sorted(self.rows, key=lambda row: row.line_order)
+
+        return _iter
+
+    def iter_entity_sequences_from_line_order(
+        self,
+        min_line_order: int,
+    ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
+        """Yield suffix groups from stored rows at or after a line-order cut.
+
+        Returns:
+            Callable[[], Iterator[Sequence[StructuredLine]]]: Zero-argument
+                callable yielding grouped suffix rows by entity.
+        """
+        groups: dict[str, list[StructuredLine]] = {}
+        for row in self.rows:
+            if row.line_order < min_line_order or row.entity_id is None:
+                continue
+            groups.setdefault(row.entity_id, []).append(row)
+
+        def _iter() -> Iterator[Sequence[StructuredLine]]:
+            for rows in groups.values():
+                yield tuple(rows)
 
         return _iter
 

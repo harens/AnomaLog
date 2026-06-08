@@ -55,6 +55,7 @@ class Drain3Parser(TemplateParser):
     """
 
     name: ClassVar[str] = "drain3"
+    is_identity_parser: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -273,6 +274,7 @@ class IdentityTemplateParser(TemplateParser):
     """
 
     name: ClassVar[str] = "identity"
+    is_identity_parser: ClassVar[bool] = True
     dataset_name: str | None = None
 
     @override
@@ -334,6 +336,7 @@ class SpellTemplateParser(TemplateParser):
     """
 
     name: ClassVar[str] = "spell"
+    is_identity_parser: ClassVar[bool] = False
     dataset_name: str | None = None
     tau: float = 0.5
     max_lcs_comparisons_per_line: int | None = 10000

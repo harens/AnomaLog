@@ -194,12 +194,19 @@ class ParquetStructuredSink(StructuredSink):
 
     def iter_structured_lines_in_source_order(
         self,
+        filter_expr: ds.Expression | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Iterate over structured rows in raw-entry order.
 
         The parquet dataset is partitioned by entity buckets, so this merges the
         bucket-local scans by `line_order` to recover the original raw-entry
         chronology without materialising the entire dataset in memory.
+
+        Args:
+            filter_expr (ds.Expression | None): Optional dataset filter applied
+                before bucket-local source-order merging. This is used by the
+                split-aware suffix replay paths to avoid rescanning the train
+                prefix when only the test suffix is needed.
 
         Returns:
             Callable[[], Iterator[StructuredLine]]: Zero-argument callable that
@@ -215,6 +222,8 @@ class ParquetStructuredSink(StructuredSink):
                     expr = ds.field(ENTITY_BUCKET_FIELD).is_null()
                 else:
                     expr = ds.field(ENTITY_BUCKET_FIELD) == bucket
+                if filter_expr is not None:
+                    expr &= filter_expr
                 bucket_iters.append(
                     self.iter_structured_lines(
                         batch_size=self._DEFAULT_BATCH_SIZE,
@@ -607,11 +616,42 @@ class ParquetStructuredSink(StructuredSink):
 
         return _iter
 
+    def iter_entity_sequences_from_line_order(
+        self,
+        min_line_order: int,
+    ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
+        """Yield entity sequences whose rows occur at or after a raw cutoff.
+
+        Args:
+            min_line_order (int): Inclusive raw-entry cutoff used to filter out
+                the train prefix before entity grouping.
+
+        Returns:
+            Callable[[], Iterator[Collection[StructuredLine]]]: Callable
+                producing entity-grouped rows for the suffix at or after the
+                requested cutoff.
+        """
+
+        def _iter() -> Iterator[Collection[StructuredLine]]:
+            chronology_index = self.load_entity_chronology_index()
+            for bucket_id in sorted(self._iter_buckets()):
+                yield from (
+                    group.rows
+                    for group in self._iter_entity_groups_in_bucket(
+                        bucket_id,
+                        chronology_index=chronology_index,
+                        min_line_order=min_line_order,
+                    )
+                )
+
+        return _iter
+
     def _iter_entity_groups_in_bucket(
         self,
         bucket_id: int,
         *,
         chronology_index: dict[str, EntityChronologyKey],
+        min_line_order: int | None = None,
     ) -> Iterator[_EntityGroup]:
         """Yield entity groups from one bucket ordered by first timestamp.
 
@@ -619,14 +659,19 @@ class ParquetStructuredSink(StructuredSink):
             bucket_id (int): Parquet bucket identifier to scan.
             chronology_index (dict[str, EntityChronologyKey]): Materialised
                 chronology metadata keyed by entity id.
+            min_line_order (int | None): Optional inclusive raw-entry cutoff
+                used to prune the train prefix before grouping.
 
         Yields:
             _EntityGroup: One entity group from the requested bucket.
         """
         by_entity: dict[str, list[StructuredLine]] = {}
         entity_sorted: dict[str, bool] = {}
+        filter_expr = ds.field(ENTITY_BUCKET_FIELD) == bucket_id
+        if min_line_order is not None:
+            filter_expr &= ds.field(LINE_FIELD) >= min_line_order
         for row in self.iter_structured_lines(
-            filter_expr=(ds.field(ENTITY_BUCKET_FIELD) == bucket_id),
+            filter_expr=filter_expr,
         )():
             if row.entity_id is None:
                 continue

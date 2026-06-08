@@ -6,6 +6,7 @@ from functools import partial
 from pathlib import Path
 from typing import ClassVar
 
+import pyarrow.dataset as ds
 import pytest
 from prefect.assets import Asset
 from prefect.logging import disable_run_logger
@@ -163,8 +164,11 @@ class _RecordingSink(StructuredSink):
 
     def iter_structured_lines_in_source_order(
         self,
+        filter_expr: ds.Expression | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
-        return self._sink.iter_structured_lines_in_source_order()
+        return self._sink.iter_structured_lines_in_source_order(
+            filter_expr=filter_expr,
+        )
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
         return self._sink.load_inline_label_cache()

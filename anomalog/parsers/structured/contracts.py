@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, NamedTuple, Protocol, runtime_checkable
 
+import pyarrow.dataset as ds
+
 # Shared field names to avoid magic strings elsewhere.
 LINE_FIELD = "line_order"
 TIMESTAMP_FIELD = "timestamp_unix_ms"
@@ -196,8 +198,13 @@ class StructuredSink(Protocol):
 
     def iter_structured_lines_in_source_order(
         self,
+        filter_expr: ds.Expression | None = None,
     ) -> Callable[[], Iterator[StructuredLine]]:
         """Return structured rows in the original raw-entry order.
+
+        Args:
+            filter_expr (object | None): Optional sink-specific structured-row
+                filter expression applied before source-order merging.
 
         Returns:
             Callable[[], Iterator[StructuredLine]]: Zero-argument callable that

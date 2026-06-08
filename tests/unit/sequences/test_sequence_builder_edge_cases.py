@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 from typing_extensions import override
 
+from anomalog.parsers.structured.contracts import BaseStructuredLine
+from anomalog.parsers.structured.deeplog_preprocessed import (
+    DelimitedLabelledEventParser,
+)
 from anomalog.parsers.structured.parsers import ThunderbirdParser
+from anomalog.parsers.template.parsers import IdentityTemplateParser
 from anomalog.sequences import (
     EntitySequenceBuilder,
     FixedSequenceBuilder,
@@ -27,8 +33,9 @@ from tests.unit.helpers import (
 from tests.unit.sequences.test_sequences import _sink, _upper_template
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator
-    from pathlib import Path
+    from collections.abc import Callable, Collection, Iterator
+
+    from prefect.assets import Asset
 
     from anomalog.parsers.structured.contracts import StructuredLine
 
@@ -49,6 +56,45 @@ class _EmptyThenFullGroupsBuilder(EntitySequenceBuilder):
                 anomalous=0,
             ),
         ]
+
+
+class _DelimitedParser(DelimitedLabelledEventParser):
+    """Parser for the temporary raw-source benchmark fixture."""
+
+    name: ClassVar[str] = "delimited"
+
+    @override
+    def parse_line(self, raw_line: str) -> BaseStructuredLine | None:
+        timestamp_s, entity_id, message, anomalous_s = raw_line.split("|", maxsplit=3)
+        return BaseStructuredLine(
+            timestamp_unix_ms=int(timestamp_s) if timestamp_s else None,
+            entity_id=entity_id or None,
+            untemplated_message_text=message,
+            anomalous=int(anomalous_s) if anomalous_s else None,
+        )
+
+
+class _UpperTemplateParser(IdentityTemplateParser):
+    """Template parser fixture that is intentionally not identity."""
+
+    name: ClassVar[str] = "upper"
+    is_identity_parser: ClassVar[bool] = False
+
+    @override
+    def inference(
+        self,
+        unstructured_text: str,
+    ) -> tuple[str, list[str]]:
+        return unstructured_text.upper(), []
+
+    @override
+    def train(
+        self,
+        untemplated_text_iterator: Callable[[], Iterator[str]],
+        *,
+        asset_deps: list[Asset] | None = None,
+    ) -> None:
+        del untemplated_text_iterator, asset_deps
 
 
 def test_before_grouping_split_counts_cover_empty_and_empty_group_cases() -> None:
@@ -276,6 +322,7 @@ def test_before_grouping_test_replay_skips_the_train_prefix() -> None:
         sink=sink,
         infer_template=_upper_template,
         label_for_group=lambda _: 0,
+        template_parser=_UpperTemplateParser("demo"),
         split_mode=RawEntrySplitMode.PREFIX_COUNT,
         split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
         straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
@@ -288,10 +335,286 @@ def test_before_grouping_test_replay_skips_the_train_prefix() -> None:
     test_sequences = list(builder.iter_test_sequences())
 
     assert [sequence.window_id for sequence in train_sequences] == [0]
-    assert [sequence.window_id for sequence in test_sequences] == [1]
+    assert [sequence.window_id for sequence in test_sequences] == [0]
     assert [sequence.split_label for sequence in test_sequences] == [
         SplitLabel.TEST,
     ]
+
+
+def test_before_grouping_test_replay_uses_suffix_scan_helper() -> None:
+    """Raw-entry test replay should use a suffix-only scan when available."""
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="a",
+                untemplated_message_text="first-a",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=200,
+                entity_id="a",
+                untemplated_message_text="second-a",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=2,
+                timestamp_unix_ms=300,
+                entity_id="a",
+                untemplated_message_text="third-a",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=400,
+                entity_id="b",
+                untemplated_message_text="first-b",
+                anomalous=0,
+            ),
+        ],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        template_parser=_UpperTemplateParser("demo"),
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    test_sequences = list(builder.iter_test_sequences())
+
+    assert [sequence.window_id for sequence in test_sequences] == [0, 1]
+    assert [sequence.split_label for sequence in test_sequences] == [
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.templates for sequence in test_sequences] == [
+        ["THIRD-A"],
+        ["FIRST-B"],
+    ]
+
+
+def test_before_grouping_test_replay_uses_raw_source_resume(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Raw-entry test replay should resume from the raw source cutoff."""
+    caplog.set_level("INFO", logger="anomalog.sequences")
+    raw_path = tmp_path / "raw.log"
+    raw_path.write_text(
+        "100|a|first-a|0\n200|a|second-a|0\n300|a|third-a|0\n400|b|first-b|0\n",
+        encoding="utf-8",
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=raw_path,
+        parser=_DelimitedParser(),
+        rows=[],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        template_parser=_UpperTemplateParser("demo"),
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    test_sequences = list(builder.iter_test_sequences())
+
+    assert (
+        "Resuming before-grouping test replay for demo from raw entry 2" in caplog.text
+    )
+    assert [sequence.window_id for sequence in test_sequences] == [0, 1]
+    assert [sequence.split_label for sequence in test_sequences] == [
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.templates for sequence in test_sequences] == [
+        ["THIRD-A"],
+        ["FIRST-B"],
+    ]
+
+
+def test_before_grouping_training_replay_caches_raw_source_offset(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Raw-entry training replay should cache the test boundary offset."""
+    caplog.set_level("INFO", logger="anomalog.sequences")
+    raw_path = tmp_path / "raw.log"
+    raw_path.write_text(
+        "100|a|first-a|0\n200|a|second-a|0\n300|a|third-a|0\n400|b|first-b|0\n",
+        encoding="utf-8",
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=raw_path,
+        parser=_DelimitedParser(),
+        rows=[],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        template_parser=_UpperTemplateParser("demo"),
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    train_sequences = list(builder.iter_training_sequences())
+    test_sequences = list(builder.iter_test_sequences())
+
+    assert builder.raw_replay_state.test_start_byte_offset is not None
+    assert (
+        "Resuming before-grouping test replay for demo from cached raw byte offset"
+    ) in caplog.text
+    assert [sequence.window_id for sequence in train_sequences] == [0]
+    assert [sequence.window_id for sequence in test_sequences] == [0, 1]
+    assert [sequence.split_label for sequence in test_sequences] == [
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+
+
+def test_before_grouping_test_replay_uses_dense_raw_source_resume(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dense raw-session replay should resume without rebuilding the prefix."""
+    caplog.set_level("INFO", logger="anomalog.sequences")
+    raw_path = tmp_path / "raw.log"
+    raw_path.write_text(
+        "a\t0\tfirst-a\na\t0\tsecond-a\na\t0\tthird-a\nb\t0\tfirst-b\n",
+        encoding="utf-8",
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=raw_path,
+        parser=DelimitedLabelledEventParser(),
+        rows=[],
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=IdentityTemplateParser("demo").inference,
+        label_for_group=lambda _: 0,
+        template_parser=IdentityTemplateParser("demo"),
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    train_sequences = list(builder.iter_training_sequences())
+    test_sequences = list(builder.iter_test_sequences())
+
+    assert builder.raw_replay_state.test_start_byte_offset is not None
+    assert (
+        "Resuming before-grouping test replay for demo from cached raw byte offset"
+    ) in caplog.text
+    assert [sequence.window_id for sequence in train_sequences] == [0]
+    assert [sequence.window_id for sequence in test_sequences] == [0, 1]
+    assert [sequence.split_label for sequence in test_sequences] == [
+        SplitLabel.TEST,
+        SplitLabel.TEST,
+    ]
+    assert [sequence.templates for sequence in test_sequences] == [
+        ["third-a"],
+        ["first-b"],
+    ]
+
+
+def test_before_grouping_raw_entry_summary_streams_and_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw-entry split summaries should stream once and then reuse the cache."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="one",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="two",
+            anomalous=1,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="three",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="four",
+            anomalous=0,
+        ),
+    )
+
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+    )
+
+    summary = builder.build_raw_entry_split_summary()
+    assert summary is not None
+    expected_train_raw_entry_count = 2
+    expected_train_normal_entry_count = 1
+    expected_train_anomalous_entry_count = 1
+    expected_test_raw_entry_count = 2
+    expected_test_normal_entry_count = 2
+    expected_test_anomalous_entry_count = 0
+    expected_straddling_group_count = 1
+    assert summary.train_raw_entry_count == expected_train_raw_entry_count
+    assert summary.train_normal_entry_count == expected_train_normal_entry_count
+    assert summary.train_anomalous_entry_count == expected_train_anomalous_entry_count
+    assert summary.test_raw_entry_count == expected_test_raw_entry_count
+    assert summary.test_normal_entry_count == expected_test_normal_entry_count
+    assert summary.test_anomalous_entry_count == expected_test_anomalous_entry_count
+    assert summary.straddling_group_count == expected_straddling_group_count
+
+    monkeypatch.setattr(
+        EntitySequenceBuilder,
+        "_build_before_grouping_raw_entry_split_summary",
+        lambda _self: (_ for _ in ()).throw(
+            AssertionError("raw-entry split summary should be cached"),
+        ),
+    )
+
+    assert builder.build_raw_entry_split_summary() is summary
 
 
 def test_fixed_sequence_builder_raw_position_mode_handles_contracts_and_gaps(

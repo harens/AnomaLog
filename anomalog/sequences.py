@@ -7,12 +7,14 @@ time-based) and decorates them with inferred templates and anomaly labels.
 from __future__ import annotations
 
 import functools
+import logging
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Collection, Iterable, Iterator
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, TypeGuard
+from itertools import islice
+from typing import TYPE_CHECKING, Protocol, TypeGuard, runtime_checkable
 
 from typing_extensions import Self, override
 
@@ -36,8 +38,6 @@ from anomalog.representations import (
 from anomalog.split_validation import validate_split_fractions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Iterator
-
     from anomalog.parsers.structured.contracts import StructuredSink
     from anomalog.parsers.structured.parquet.writer_worker import (
         EntityChronologyKey,
@@ -46,8 +46,150 @@ if TYPE_CHECKING:
         ExtractedParameters,
         LogTemplate,
         TemplatedDataset,
+        TemplateParser,
     )
     from experiments.models.base import SequenceSummary
+
+_DENSE_RAW_SESSION_FIELD_COUNT = 3
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _BeforeGroupingRawReplayState:
+    """Mutable cache for the raw-file boundary used by before-grouping splits."""
+
+    test_start_byte_offset: int | None = None
+    raw_entry_split_summary: RawEntrySplitSummary | None = None
+
+
+@dataclass(slots=True)
+class _BeforeGroupingRawEntrySummaryCounts:
+    """Accumulate raw-entry split diagnostics in one streaming pass."""
+
+    train_normal_entry_count: int = 0
+    train_anomalous_entry_count: int = 0
+    test_normal_entry_count: int = 0
+    test_anomalous_entry_count: int = 0
+    straddling_group_count: int = 0
+
+    @property
+    def train_raw_entry_count(self) -> int:
+        """Return the total number of raw entries assigned to train."""
+        return self.train_normal_entry_count + self.train_anomalous_entry_count
+
+    @property
+    def test_raw_entry_count(self) -> int:
+        """Return the total number of raw entries assigned to test."""
+        return self.test_normal_entry_count + self.test_anomalous_entry_count
+
+
+def _count_before_grouping_raw_group_entries(
+    *,
+    rows: Collection[StructuredLine],
+    cutoff_entry_index: int,
+) -> tuple[int, int, int, int, int]:
+    """Count the raw entries emitted by one grouped window.
+
+    Returns:
+        tuple[int, int, int, int, int]: Train normal, train anomalous, test
+            normal, test anomalous, and straddling-group counts for the group.
+    """
+    train_normal_entry_count = 0
+    train_anomalous_entry_count = 0
+    test_normal_entry_count = 0
+    test_anomalous_entry_count = 0
+    has_train_rows = False
+    has_test_rows = False
+    for row in rows:
+        if row.line_order is None:
+            continue
+        if row.line_order < cutoff_entry_index:
+            has_train_rows = True
+            if is_anomalous_label(row.anomalous):
+                train_anomalous_entry_count += 1
+            else:
+                train_normal_entry_count += 1
+            continue
+        has_test_rows = True
+        if is_anomalous_label(row.anomalous):
+            test_anomalous_entry_count += 1
+        else:
+            test_normal_entry_count += 1
+    return (
+        train_normal_entry_count,
+        train_anomalous_entry_count,
+        test_normal_entry_count,
+        test_anomalous_entry_count,
+        1 if has_train_rows and has_test_rows else 0,
+    )
+
+
+def _count_before_grouping_raw_entry_summary(
+    groups: Iterable[Collection[StructuredLine]],
+    *,
+    cutoff_entry_index: int,
+) -> _BeforeGroupingRawEntrySummaryCounts:
+    """Count raw-entry split diagnostics in one streaming pass.
+
+    Returns:
+        _BeforeGroupingRawEntrySummaryCounts: Accumulated diagnostics for the
+            grouped raw-entry replay path.
+    """
+    counts = _BeforeGroupingRawEntrySummaryCounts()
+    for rows in groups:
+        if not rows:
+            continue
+        (
+            group_train_normal_entry_count,
+            group_train_anomalous_entry_count,
+            group_test_normal_entry_count,
+            group_test_anomalous_entry_count,
+            group_straddling_group_count,
+        ) = _count_before_grouping_raw_group_entries(
+            rows=rows,
+            cutoff_entry_index=cutoff_entry_index,
+        )
+        counts.train_normal_entry_count += group_train_normal_entry_count
+        counts.train_anomalous_entry_count += group_train_anomalous_entry_count
+        counts.test_normal_entry_count += group_test_normal_entry_count
+        counts.test_anomalous_entry_count += group_test_anomalous_entry_count
+        counts.straddling_group_count += group_straddling_group_count
+    return counts
+
+
+@runtime_checkable
+class _SupportsEntityCount(Protocol):
+    """Sink capability for providing an exact entity count."""
+
+    def load_entity_count(self) -> int | None:
+        """Return a cached entity count when available."""
+
+
+@runtime_checkable
+class _SupportsEntityChronologyIndex(Protocol):
+    """Sink capability for exposing entity chronology metadata."""
+
+    def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
+        """Return the materialised entity chronology index."""
+
+
+@runtime_checkable
+class _SupportsInlineLabelCache(Protocol):
+    """Sink capability for exposing sparse inline anomaly labels."""
+
+    def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
+        """Return sparse inline label caches keyed by line and group."""
+
+
+@runtime_checkable
+class _SupportsEntitySequenceSuffixScan(Protocol):
+    """Sink capability for suffix-only entity grouping."""
+
+    def iter_entity_sequences_from_line_order(
+        self,
+        min_line_order: int,
+    ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
+        """Return a suffix-only entity grouping iterator factory."""
 
 
 class SplitLabel(str, Enum):
@@ -378,8 +520,11 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         sink (StructuredSink): Structured sink supplying grouped rows.
         infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
             Template inference function for row message text.
-        label_for_group (Callable[[str], int | None]): Group-level anomaly label
-            lookup by entity id.
+    label_for_group (Callable[[str], int | None]): Group-level anomaly label
+        lookup by entity id.
+        template_parser (TemplateParser | None): Optional parser object kept
+            alongside `infer_template` so optimisation paths can inspect parser
+            capabilities without peeking at bound-method metadata.
         split_mode (RawEntrySplitMode | None): Raw-entry split mode used for
             special reproduction protocols. `None` preserves the legacy
             sequence-fraction split behaviour.
@@ -402,6 +547,13 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
     sink: StructuredSink
     infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]]
     label_for_group: Callable[[str], int | None]
+    template_parser: TemplateParser | None = None
+    raw_replay_state: _BeforeGroupingRawReplayState = field(
+        default_factory=_BeforeGroupingRawReplayState,
+        init=False,
+        repr=False,
+        compare=False,
+    )
     split_mode: RawEntrySplitMode | None = None
     split_application_order: SplitApplicationOrder = (
         SplitApplicationOrder.AFTER_GROUPING
@@ -781,13 +933,20 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             or self.split_application_order != SplitApplicationOrder.BEFORE_GROUPING
         ):
             return None
+        cached_summary = self.raw_replay_state.raw_entry_split_summary
+        if cached_summary is not None:
+            return cached_summary
+        streamed_summary = self._build_before_grouping_raw_entry_split_summary()
+        if streamed_summary is not None:
+            self.raw_replay_state.raw_entry_split_summary = streamed_summary
+            return streamed_summary
         row_labels, summary = self._build_row_split_labels()
         if summary is None:
             return None
         row_label_values = {
             line_order: label.value for line_order, label in row_labels.items()
         }
-        return replace(
+        fallback_summary = replace(
             summary,
             straddling_group_count=count_straddling_groups(
                 self.iter_grouped_rows(),
@@ -795,6 +954,15 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             ),
             straddling_group_policy=self.straddling_group_policy.value,
         )
+        self.raw_replay_state.raw_entry_split_summary = fallback_summary
+        return fallback_summary
+
+    def _build_before_grouping_raw_entry_split_summary(
+        self,
+    ) -> RawEntrySplitSummary | None:
+        """Return a specialised before-grouping summary when available."""
+        del self
+        return None
 
     @abstractmethod
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
@@ -1206,6 +1374,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             sink=td.sink,
             infer_template=td.template_parser.inference,
             label_for_group=td.anomaly_labels.label_for_group,
+            template_parser=td.template_parser,
         )
 
     def with_train_on_normal_entities_only(
@@ -1255,17 +1424,19 @@ class EntitySequenceBuilder(SequenceBuilder):
             tuple[SequenceSplitCounts, int]: Exact split counts and eligible
                 normal count within the train pool.
         """
-        entity_count_loader = getattr(self.sink, "load_entity_count", None)
-        if callable(entity_count_loader):
-            total_entities = entity_count_loader()
+        if isinstance(self.sink, _SupportsEntityCount):
+            total_entities = self.sink.load_entity_count()
             if total_entities is not None:
                 counts = self._split_counts(total_entities)
                 train_pool_count = total_entities - counts.test_count
                 if not self.train_on_normal_entities_only:
                     return counts, train_pool_count
 
-        chronology_loader = getattr(self.sink, "load_entity_chronology_index", None)
-        chronology_index = chronology_loader() if callable(chronology_loader) else {}
+        chronology_index = (
+            self.sink.load_entity_chronology_index()
+            if isinstance(self.sink, _SupportsEntityChronologyIndex)
+            else {}
+        )
         if chronology_index:
             return self._entity_split_counts_from_chronology(
                 chronology_index=chronology_index,
@@ -1298,9 +1469,8 @@ class EntitySequenceBuilder(SequenceBuilder):
         if not self.train_on_normal_entities_only:
             return counts, train_pool_count
 
-        inline_label_loader = getattr(self.sink, "load_inline_label_cache", None)
-        if callable(inline_label_loader):
-            _, group_labels = inline_label_loader()
+        if isinstance(self.sink, _SupportsInlineLabelCache):
+            _, group_labels = self.sink.load_inline_label_cache()
             if not group_labels:
                 return counts, train_pool_count
             normal_pool_count = sum(
@@ -1635,6 +1805,13 @@ class EntitySequenceBuilder(SequenceBuilder):
             self.straddling_group_policy
             is StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
         ):
+            if self._can_use_before_grouping_raw_source_test_path():
+                yield from self._iter_training_sequences_from_raw_source_prefix(
+                    cutoff_entry_index=cutoff_entry_index,
+                    infer_template=infer_template,
+                    label_for_group=label_for_group,
+                )
+                return
             yield from self._iter_training_sequences_from_raw_prefix(
                 cutoff_entry_index=cutoff_entry_index,
                 infer_template=infer_template,
@@ -1719,7 +1896,8 @@ class EntitySequenceBuilder(SequenceBuilder):
         return (
             self.split_mode is not None
             and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
-            and self.split_mode in {
+            and self.split_mode
+            in {
                 RawEntrySplitMode.PREFIX_COUNT,
                 RawEntrySplitMode.PREFIX_FRACTION,
             }
@@ -1728,11 +1906,11 @@ class EntitySequenceBuilder(SequenceBuilder):
     def _before_grouping_cutoff_entry_index(self) -> int:
         """Return the raw-entry cutoff used by before-grouping prefix splits.
 
-        Raises:
-            ValueError: If the configured raw-entry split metadata is missing.
-
         Returns:
             int: Zero-based raw-entry index where the test suffix begins.
+
+        Raises:
+            ValueError: If the configured raw-entry split metadata is missing.
         """
         if self.split_mode is RawEntrySplitMode.PREFIX_COUNT:
             cutoff_entry_index = self.train_entry_count
@@ -1747,6 +1925,106 @@ class EntitySequenceBuilder(SequenceBuilder):
             msg = "train_entry_fraction must be set for PREFIX_FRACTION splits."
             raise ValueError(msg)
         return math.ceil(train_entry_fraction * row_count)
+
+    @override
+    def _build_before_grouping_raw_entry_split_summary(
+        self,
+    ) -> RawEntrySplitSummary | None:
+        """Return a before-grouping raw-entry summary without full replay.
+
+        Returns:
+            RawEntrySplitSummary | None: Cached or streamed summary for the
+            current before-grouping raw-entry split, or `None` when the split
+            is not active.
+        """
+        if self.split_mode is None:
+            return None
+        if self.split_mode in {
+            RawEntrySplitMode.PREFIX_COUNT,
+            RawEntrySplitMode.PREFIX_FRACTION,
+        }:
+            return self._build_before_grouping_raw_entry_split_summary_from_stream()
+        return self._build_before_grouping_raw_entry_split_summary_from_plan()
+
+    def _build_before_grouping_raw_entry_split_summary_from_stream(
+        self,
+    ) -> RawEntrySplitSummary:
+        """Stream raw-entry split diagnostics for count/fraction prefixes.
+
+        Returns:
+            RawEntrySplitSummary: Streaming summary for prefix count or
+            prefix fraction raw-entry splits.
+
+        Raises:
+            RuntimeError: If the method is reached without an active raw-entry
+                split.
+        """
+        split_mode = self.split_mode
+        if split_mode is None:
+            msg = "split_mode must be set for before-grouping raw summaries."
+            raise RuntimeError(msg)
+        total_rows = self.sink.count_rows()
+        if total_rows <= 0:
+            return RawEntrySplitSummary(
+                split_mode=split_mode.value,
+                application_order=self.split_application_order.value,
+                cutoff_entry_index=0,
+                train_raw_entry_count=0,
+                train_normal_entry_count=0,
+                train_anomalous_entry_count=0,
+                test_raw_entry_count=0,
+                test_normal_entry_count=0,
+                test_anomalous_entry_count=0,
+                straddling_group_count=0,
+                straddling_group_policy=self.straddling_group_policy.value,
+            )
+
+        cutoff_entry_index = min(self._before_grouping_cutoff_entry_index(), total_rows)
+        counts = _count_before_grouping_raw_entry_summary(
+            self.iter_grouped_rows(),
+            cutoff_entry_index=cutoff_entry_index,
+        )
+
+        return RawEntrySplitSummary(
+            split_mode=split_mode.value,
+            application_order=self.split_application_order.value,
+            cutoff_entry_index=cutoff_entry_index,
+            train_raw_entry_count=cutoff_entry_index,
+            train_normal_entry_count=counts.train_normal_entry_count,
+            train_anomalous_entry_count=counts.train_anomalous_entry_count,
+            test_raw_entry_count=total_rows - cutoff_entry_index,
+            test_normal_entry_count=counts.test_normal_entry_count,
+            test_anomalous_entry_count=counts.test_anomalous_entry_count,
+            straddling_group_count=counts.straddling_group_count,
+            straddling_group_policy=self.straddling_group_policy.value,
+        )
+
+    def _build_before_grouping_raw_entry_split_summary_from_plan(
+        self,
+    ) -> RawEntrySplitSummary | None:
+        """Fallback to the legacy planned-row summary for other policies.
+
+        Returns:
+            RawEntrySplitSummary | None: Legacy summary for policies that
+            still rely on raw-row label planning, or `None` when the split is
+            inactive.
+        """
+        if self.split_mode is None:
+            return None
+        row_labels, summary = self._build_row_split_labels()
+        if summary is None:
+            return None
+        row_label_values = {
+            line_order: label.value for line_order, label in row_labels.items()
+        }
+        return replace(
+            summary,
+            straddling_group_count=count_straddling_groups(
+                self.iter_grouped_rows(),
+                row_label_values,
+            ),
+            straddling_group_policy=self.straddling_group_policy.value,
+        )
 
     def _iter_before_grouping_test_sequences(
         self,
@@ -1766,6 +2044,74 @@ class EntitySequenceBuilder(SequenceBuilder):
             TemplateSequence: Test-split sequences emitted from the suffix.
         """
         cutoff_entry_index = self._before_grouping_cutoff_entry_index()
+        if self._can_use_before_grouping_raw_source_test_path():
+            cached_offset = self._before_grouping_test_start_byte_offset()
+            if cached_offset is None:
+                _LOGGER.info(
+                    (
+                        "Resuming before-grouping test replay for %s from raw "
+                        "entry %s; the first test sequence may take a while "
+                        "while the cutoff is scanned"
+                    ),
+                    self.sink.dataset_name,
+                    cutoff_entry_index,
+                )
+            else:
+                _LOGGER.info(
+                    (
+                        "Resuming before-grouping test replay for %s from "
+                        "cached raw byte offset %s (raw entry %s)"
+                    ),
+                    self.sink.dataset_name,
+                    cached_offset,
+                    cutoff_entry_index,
+                )
+            if self._uses_identity_template_parser() and (
+                self._uses_dense_raw_session_parser()
+            ):
+                yield from (
+                    self._iter_before_grouping_test_sequences_from_dense_raw_source(
+                        cutoff_entry_index=cutoff_entry_index,
+                    )
+                )
+                return
+            yield from self._iter_before_grouping_test_sequences_from_raw_source(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+        if isinstance(self.sink, _SupportsEntitySequenceSuffixScan) and (
+            self.straddling_group_policy
+            in {
+                StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+                StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+            }
+        ):
+            chronology_index = (
+                self.sink.load_entity_chronology_index()
+                if isinstance(self.sink, _SupportsEntityChronologyIndex)
+                else {}
+            )
+            if (
+                self.straddling_group_policy
+                is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT
+                and not chronology_index
+            ):
+                yield from self._iter_before_grouping_test_sequences_from_first_event(
+                    cutoff_entry_index=cutoff_entry_index,
+                    infer_template=infer_template,
+                    label_for_group=label_for_group,
+                )
+                return
+            yield from self._iter_before_grouping_test_sequences_from_suffix_groups(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+                suffix_group_iter_factory=self.sink.iter_entity_sequences_from_line_order,
+                chronology_index=chronology_index,
+            )
+            return
         if (
             self.straddling_group_policy
             is StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
@@ -1784,6 +2130,408 @@ class EntitySequenceBuilder(SequenceBuilder):
             )
             return
         yield from SequenceBuilder.iter_test_sequences(self)
+
+    def _can_use_before_grouping_raw_source_test_path(self) -> bool:
+        """Return whether the raw source can resume from the test boundary."""
+        return (
+            self.split_mode is not None
+            and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
+            and self.split_mode
+            in {
+                RawEntrySplitMode.PREFIX_COUNT,
+                RawEntrySplitMode.PREFIX_FRACTION,
+            }
+            and self.straddling_group_policy
+            in {
+                StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+                StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+            }
+            and self.template_parser is not None
+            and self.sink.raw_dataset_path.exists()
+        )
+
+    def _cache_before_grouping_test_start_byte_offset(self, offset: int) -> None:
+        """Remember where the test suffix starts in the raw source."""
+        if self.raw_replay_state.test_start_byte_offset is None:
+            self.raw_replay_state.test_start_byte_offset = offset
+
+    def _before_grouping_test_start_byte_offset(self) -> int | None:
+        """Return the cached raw-source offset for the test suffix, if known."""
+        return self.raw_replay_state.test_start_byte_offset
+
+    def _uses_identity_template_parser(self) -> bool:
+        """Return whether the builder is backed by the identity parser."""
+        return bool(
+            self.template_parser is not None
+            and self.template_parser.is_identity_parser,
+        )
+
+    def _uses_dense_raw_session_parser(self) -> bool:
+        """Return whether the raw compat source can be parsed directly."""
+        return self.sink.parser.__class__.__name__ == "DelimitedLabelledEventParser"
+
+    def _iter_training_sequences_from_raw_source_prefix(  # noqa: C901
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield train sequences by scanning the raw source up to the cutoff.
+
+        The raw-source scan populates the cached test boundary offset so the
+        paired test replay can resume at the exact cutoff without rescanning
+        the train prefix. The cached state stays O(1) because it stores one
+        integer byte offset.
+        """
+        _LOGGER.info(
+            "Scanning raw source for train replay of %s up to raw entry %s",
+            self.sink.dataset_name,
+            cutoff_entry_index,
+        )
+        raw_dataset_path = self.sink.raw_dataset_path
+        parser = self.sink.parser
+        current_entity_id: str | None = None
+        current_rows: list[StructuredLine] = []
+        current_entity_emittable = True
+        window_id = 0
+        raw_line_order = 0
+
+        with raw_dataset_path.open(
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            while True:
+                line_start = handle.tell()
+                if raw_line_order >= cutoff_entry_index:
+                    self._cache_before_grouping_test_start_byte_offset(line_start)
+                    break
+
+                raw_line = handle.readline()
+                if not raw_line:
+                    self._cache_before_grouping_test_start_byte_offset(line_start)
+                    break
+
+                parsed = parser.parse_line(raw_line.rstrip("\n").rstrip("\r"))
+                if parsed is None:
+                    raw_line_order += 1
+                    continue
+
+                row = StructuredLine.with_line_order(
+                    line_order=raw_line_order,
+                    base=parsed,
+                )
+                raw_line_order += 1
+                entity_id = row.entity_id
+                if entity_id is None:
+                    continue
+
+                if entity_id != current_entity_id:
+                    if current_rows and current_entity_emittable:
+                        seq = self._build_sequence(
+                            window_id,
+                            current_rows,
+                            infer_template,
+                            label_for_group,
+                            SplitLabel.TRAIN,
+                            continuous_context=self.continuous_context,
+                            allow_group_label_fallback=False,
+                        )
+                        if seq is not None:
+                            yield seq
+                            window_id += 1
+                    current_entity_id = entity_id
+                    current_rows = []
+                    current_entity_emittable = not (
+                        self.train_on_normal_entities_only
+                        and is_anomalous_label(label_for_group(entity_id))
+                    )
+
+                if current_entity_emittable:
+                    current_rows.append(row)
+
+        if current_rows and current_entity_emittable:
+            seq = self._build_sequence(
+                window_id,
+                current_rows,
+                infer_template,
+                label_for_group,
+                SplitLabel.TRAIN,
+                continuous_context=self.continuous_context,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
+
+    def _iter_before_grouping_test_sequences_from_raw_source(  # noqa: C901
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield test sequences by resuming the raw source at the cutoff.
+
+        The compat session streams are already ordered by the raw-entry split
+        key, so resuming from the raw file avoids rescanning the parquet cache
+        while keeping the replay memory bounded to the current entity segment.
+        """
+        _LOGGER.info(
+            "Scanning raw source for test replay of %s from raw entry %s",
+            self.sink.dataset_name,
+            cutoff_entry_index,
+        )
+        chronology_index = (
+            self.sink.load_entity_chronology_index()
+            if isinstance(self.sink, _SupportsEntityChronologyIndex)
+            else {}
+        )
+        raw_dataset_path = self.sink.raw_dataset_path
+        parser = self.sink.parser
+        current_entity_id: str | None = None
+        current_rows: list[StructuredLine] = []
+        current_entity_emittable = True
+        window_id = 0
+        cached_offset = self._before_grouping_test_start_byte_offset()
+
+        with raw_dataset_path.open(
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            if cached_offset is not None:
+                handle.seek(cached_offset)
+                raw_line_iter: Iterator[str] = handle
+            else:
+                raw_line_iter = islice(handle, cutoff_entry_index, None)
+            raw_line_order = cutoff_entry_index
+
+            for raw_line in raw_line_iter:
+                parsed = parser.parse_line(raw_line.rstrip("\n").rstrip("\r"))
+                if parsed is None:
+                    raw_line_order += 1
+                    continue
+
+                row = StructuredLine.with_line_order(
+                    line_order=raw_line_order,
+                    base=parsed,
+                )
+                raw_line_order += 1
+                entity_id = row.entity_id
+                if entity_id is None:
+                    continue
+
+                if entity_id != current_entity_id:
+                    if current_rows and current_entity_emittable:
+                        seq = self._build_sequence(
+                            window_id,
+                            current_rows,
+                            infer_template,
+                            label_for_group,
+                            SplitLabel.TEST,
+                            continuous_context=self.continuous_context,
+                            allow_group_label_fallback=False,
+                        )
+                        if seq is not None:
+                            yield seq
+                            window_id += 1
+                    current_entity_id = entity_id
+                    current_rows = []
+                    current_entity_emittable = True
+                    if (
+                        self.straddling_group_policy
+                        is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT
+                    ):
+                        chronology = chronology_index.get(entity_id)
+                        current_entity_emittable = (
+                            chronology is None
+                            or chronology.first_line_order >= cutoff_entry_index
+                        )
+
+                if current_entity_emittable:
+                    current_rows.append(row)
+
+        if current_rows and current_entity_emittable:
+            seq = self._build_sequence(
+                window_id,
+                current_rows,
+                infer_template,
+                label_for_group,
+                SplitLabel.TEST,
+                continuous_context=self.continuous_context,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
+
+    def _iter_before_grouping_test_sequences_from_dense_raw_source(  # noqa: C901, PLR0912, PLR0914
+        self,
+        *,
+        cutoff_entry_index: int,
+    ) -> Iterator[TemplateSequence]:
+        """Yield test sequences by slicing a dense raw session stream.
+
+        The HDFS compat stream is a dense tab-separated session/event file and
+        the identity template parser preserves the raw event text. In that
+        configuration we can skip the generic structured-row wrapper entirely
+        and build template sequences directly from the raw suffix.
+        """
+        _LOGGER.info(
+            "Scanning dense raw source for test replay of %s from raw entry %s",
+            self.sink.dataset_name,
+            cutoff_entry_index,
+        )
+        raw_dataset_path = self.sink.raw_dataset_path
+        chronology_index = (
+            self.sink.load_entity_chronology_index()
+            if isinstance(self.sink, _SupportsEntityChronologyIndex)
+            else {}
+        )
+        current_entity_id: str | None = None
+        current_events: list[tuple[str, list[str], int | None]] = []
+        current_event_labels: list[int | None] | None = None
+        current_entity_emittable = True
+        current_sequence_is_anomalous = False
+        window_id = 0
+        cached_offset = self._before_grouping_test_start_byte_offset()
+
+        with raw_dataset_path.open(
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            if cached_offset is not None:
+                handle.seek(cached_offset)
+                raw_line_iter: Iterator[str] = handle
+            else:
+                raw_line_iter = islice(handle, cutoff_entry_index, None)
+
+            for raw_line in raw_line_iter:
+                s = raw_line.rstrip("\n").rstrip("\r")
+                if not s:
+                    continue
+                parts = s.split("\t")
+                if len(parts) != _DENSE_RAW_SESSION_FIELD_COUNT:
+                    continue
+                entity_id, label_s, event_id = parts
+                if entity_id != current_entity_id:
+                    if current_events and current_entity_emittable:
+                        yield TemplateSequence(
+                            events=current_events,
+                            label=1 if current_sequence_is_anomalous else 0,
+                            entity_ids=[current_entity_id] if current_entity_id else [],
+                            window_id=window_id,
+                            split_label=SplitLabel.TEST,
+                            event_labels=(
+                                tuple(current_event_labels)
+                                if current_event_labels is not None
+                                else None
+                            ),
+                            continuous_context=self.continuous_context,
+                        )
+                        window_id += 1
+                    current_entity_id = entity_id
+                    current_events = []
+                    current_event_labels = None
+                    current_entity_emittable = True
+                    current_sequence_is_anomalous = False
+                    if (
+                        self.straddling_group_policy
+                        is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT
+                    ):
+                        chronology = chronology_index.get(entity_id)
+                        current_entity_emittable = (
+                            chronology is None
+                            or chronology.first_line_order >= cutoff_entry_index
+                        )
+                if not current_entity_emittable:
+                    continue
+                current_events.append((event_id, [], None))
+                label = int(label_s)
+                if not current_sequence_is_anomalous and is_anomalous_label(label):
+                    current_sequence_is_anomalous = True
+                if label is not None:
+                    if current_event_labels is None:
+                        current_event_labels = [None] * (len(current_events) - 1)
+                    current_event_labels.append(label)
+                elif current_event_labels is not None:
+                    current_event_labels.append(None)
+
+        if current_events and current_entity_emittable:
+            yield TemplateSequence(
+                events=current_events,
+                label=1 if current_sequence_is_anomalous else 0,
+                entity_ids=[current_entity_id] if current_entity_id else [],
+                window_id=window_id,
+                split_label=SplitLabel.TEST,
+                event_labels=(
+                    tuple(current_event_labels)
+                    if current_event_labels is not None
+                    else None
+                ),
+                continuous_context=self.continuous_context,
+            )
+
+    def _iter_before_grouping_test_sequences_from_suffix_groups(
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+        suffix_group_iter_factory: Callable[
+            [int],
+            Callable[[], Iterator[Collection[StructuredLine]]],
+        ],
+        chronology_index: dict[str, EntityChronologyKey],
+    ) -> Iterator[TemplateSequence]:
+        """Yield test sequences from a suffix-only grouped row scan.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained suffix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+            suffix_group_iter_factory: Sink-level suffix iterator factory for
+                the suffix replay path.
+            chronology_index (dict[str, EntityChronologyKey]): Entity chronology
+                metadata used to exclude entities that started before the
+                cutoff when assign-by-first-event is active.
+
+        Yields:
+            TemplateSequence: Test-side grouped suffix sequences.
+        """
+        for window_id, rows in enumerate(
+            suffix_group_iter_factory(cutoff_entry_index)(),
+        ):
+            if not rows:
+                continue
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            if entity_id is None:
+                continue
+            if (
+                self.straddling_group_policy
+                is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT
+            ):
+                chronology = chronology_index.get(entity_id)
+                if (
+                    chronology is not None
+                    and chronology.first_line_order < cutoff_entry_index
+                ):
+                    continue
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                SplitLabel.TEST,
+                continuous_context=self.continuous_context,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
 
     def _iter_before_grouping_test_sequences_from_partial_split(
         self,

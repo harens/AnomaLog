@@ -1,7 +1,7 @@
 """Tests for `ParquetStructuredSink`."""
 
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import ClassVar
 
@@ -489,6 +489,64 @@ def test_sink_entity_grouping_defers_later_buckets_until_needed(
     assert started_buckets == [0, 1]
     assert [[row.entity_id for row in rows] for rows in remaining_rows] == [
         ["bucket-one"],
+    ]
+
+
+def test_sink_entity_grouping_from_line_order_filters_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entity grouping should honour the line-order suffix filter."""
+    sink = _make_sink(tmp_path)
+    seen_filter_exprs: list[ds.Expression | None] = []
+
+    def _iter_structured_lines(
+        _self: ParquetStructuredSink,
+        columns: Sequence[str] | None = None,
+        *,
+        filter_expr: ds.Expression | None = None,
+        batch_size: int | None = None,
+    ) -> Callable[[], Iterator[StructuredLine]]:
+        del columns, batch_size
+        seen_filter_exprs.append(filter_expr)
+
+        def _iter() -> Iterator[StructuredLine]:
+            yield structured_line(
+                line_order=2,
+                timestamp_unix_ms=200,
+                entity_id="bucket-one",
+                untemplated_message_text="second",
+                anomalous=0,
+            )
+            yield structured_line(
+                line_order=3,
+                timestamp_unix_ms=300,
+                entity_id="bucket-two",
+                untemplated_message_text="third",
+                anomalous=0,
+            )
+
+        return _iter
+
+    monkeypatch.setattr(ParquetStructuredSink, "_iter_buckets", lambda _self: {0})
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "iter_structured_lines",
+        _iter_structured_lines,
+    )
+    monkeypatch.setattr(
+        ParquetStructuredSink,
+        "load_entity_chronology_index",
+        lambda _self: {},
+    )
+
+    groups = list(sink.iter_entity_sequences_from_line_order(2)())
+
+    assert len(seen_filter_exprs) == 1
+    assert seen_filter_exprs[0] is not None
+    assert [[row.entity_id for row in rows] for rows in groups] == [
+        ["bucket-one"],
+        ["bucket-two"],
     ]
 
 

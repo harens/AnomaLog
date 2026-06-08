@@ -34,11 +34,16 @@ class TemplateParser(Protocol):
 
     Attributes:
         name (ClassVar[str]): Stable registry/config name for the parser.
+        is_identity_parser (ClassVar[bool]): Whether the parser leaves the raw
+            text unchanged. Parsers default to `False`; identity parsers
+            override this to `True` so sequence builders can use dense raw
+            source fast paths without guessing from class names.
         dataset_name (str | None): Optional dataset identifier used to scope
             runtime caches or persisted parser state.
     """
 
     name: ClassVar[str]
+    is_identity_parser: ClassVar[bool] = False
     dataset_name: str | None
 
     def inference(

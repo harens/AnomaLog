@@ -1508,6 +1508,7 @@ def test_templated_dataset_chronological_stream_view_is_constructible() -> None:
     @dataclass(frozen=True)
     class _TemplateParser:
         name: ClassVar[str] = "test"
+        is_identity_parser: ClassVar[bool] = False
         dataset_name: str | None = "demo"
 
         @staticmethod
