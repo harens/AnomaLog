@@ -164,7 +164,16 @@ class ResultWriteContext:
 
 @dataclass(frozen=True, slots=True)
 class _ResultSummaryCache:
-    """Optional precomputed summaries reused during result persistence."""
+    """Optional precomputed summaries reused during result persistence.
+
+    Attributes:
+        split_summary (SequenceSplitSummary | None): Cached sequence split
+            summary reused when writing the dataset manifest.
+        raw_entry_split_summary (RawEntrySplitSummary | None): Cached raw-entry
+            split summary reused when writing the dataset manifest.
+        metric_report (dict[str, object] | None): Cached metric report reused
+            when writing the metrics artefact.
+    """
 
     split_summary: SequenceSplitSummary | None = None
     raw_entry_split_summary: RawEntrySplitSummary | None = None
@@ -594,7 +603,7 @@ def build_run_metrics_report(
         model_summary (ModelRunSummary): Model-side summary for the run.
         debug_reporting (bool): Whether to preserve the verbose diagnostic
             payloads in the written metrics report.
-        cached_summaries (_ResultSummaryCache | None): Optional precomputed
+        cached_summaries (_SupportsResultSummaryCache | None): Optional precomputed
             summaries to reuse when building or persisting the report.
 
     Returns:

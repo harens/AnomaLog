@@ -176,7 +176,13 @@ def test_run_model_can_skip_event_mask_filter_for_pure_test_stream(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pure test-suffix streams should not pay the generic mask filter cost."""
+    """Pure test-suffix streams should not pay the generic mask filter cost.
+
+    Args:
+        tmp_path (Path): Temporary directory used for the prediction output.
+        monkeypatch (pytest.MonkeyPatch): Test double used to make the fast
+            path observable without changing the detector contract.
+    """
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):

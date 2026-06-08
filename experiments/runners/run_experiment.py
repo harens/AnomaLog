@@ -430,16 +430,12 @@ def _run_bundle(
         run_name=bundle.concrete_name,
         console=options.console,
     ) as logger:
-        try:
-            return _execute_bundle_run(
-                bundle=bundle,
-                options=options,
-                result_paths=result_paths,
-                logger=logger,
-            )
-        except Exception:
-            logger.exception("Concrete experiment %s failed", bundle.concrete_name)
-            raise
+        return _execute_bundle_run(
+            bundle=bundle,
+            options=options,
+            result_paths=result_paths,
+            logger=logger,
+        )
 
 
 def _execute_bundle_run(
@@ -450,6 +446,12 @@ def _execute_bundle_run(
     logger: logging.Logger,
 ) -> Path:
     """Execute one concrete run after logging and result paths are ready.
+
+    Args:
+        bundle (ExperimentBundle): Concrete experiment bundle to execute.
+        options (_BundleRunOptions): Execution flags for the concrete run.
+        result_paths (ResultPaths): Deterministic output paths for the run.
+        logger (logging.Logger): Logger bound to the run log file.
 
     Returns:
         Path: Deterministic run directory containing the written artefacts.

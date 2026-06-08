@@ -62,7 +62,12 @@ class WindowContractSummary:
     remainder: int
 
     def as_dict(self) -> dict[str, int | str]:
-        """Return a JSON-friendly representation."""
+        """Return a JSON-friendly representation.
+
+        Returns:
+            dict[str, int | str]: Serialised contract summary suitable for
+                JSON output.
+        """
         return {
             "ordering": self.ordering,
             "offset": self.offset,
@@ -212,7 +217,23 @@ def find_matching_offsets(  # noqa: PLR0913
     window_size: int = _DEFAULT_WINDOW_SIZE,
     search_limit: int = _DEFAULT_OFFSET_SEARCH_LIMIT,
 ) -> list[WindowContractSummary]:
-    """Return offsets that reproduce the requested anomalous-window totals."""
+    """Return offsets that reproduce the requested anomalous-window totals.
+
+    Args:
+        flags (Sequence[bool] | np.ndarray): Boolean anomaly mask in the order
+            under test.
+        target_train_anomalous (int): Target anomalous-window count for the
+            training prefix.
+        target_test_anomalous (int): Target anomalous-window count for the
+            test suffix.
+        train_window_count (int): Number of windows assigned to train.
+        window_size (int): Number of positions per non-overlapping window.
+        search_limit (int): Number of candidate offsets to scan.
+
+    Returns:
+        list[WindowContractSummary]: Offsets whose anomaly totals match the
+            requested contract.
+    """
     matches: list[WindowContractSummary] = []
     for offset in range(search_limit):
         summary = count_fixed_window_flags(
@@ -331,7 +352,17 @@ def audit_thunderbird_slice_json(
     start_line_order: int = _DEFAULT_START_LINE_ORDER,
     end_line_order: int = _DEFAULT_END_LINE_ORDER,
 ) -> str:
-    """Return the Thunderbird slice audit as a compact JSON string."""
+    """Return the Thunderbird slice audit as a compact JSON string.
+
+    Args:
+        cache_root (Path | None): Optional override for the local AnomaLog
+            cache root. Defaults to the user's cache directory.
+        start_line_order (int): Inclusive raw line position for the slice.
+        end_line_order (int): Inclusive raw line position for the slice.
+
+    Returns:
+        str: Compact JSON representation of the Thunderbird slice audit.
+    """
     return json.dumps(
         audit_thunderbird_slice(
             cache_root=cache_root,

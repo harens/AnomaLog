@@ -201,7 +201,12 @@ def test_build_run_metrics_report_drops_debug_only_diagnostics(
 def test_build_run_metrics_report_reuses_precomputed_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Precomputed metric reports should bypass the expensive report builder."""
+    """Precomputed metric reports should bypass the expensive report builder.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to ensure the
+            report builder is not called when a cached report is supplied.
+    """
 
     @dataclass(slots=True)
     class _SummaryCache:
@@ -273,7 +278,14 @@ def test_write_run_outputs_reuses_cached_split_summaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cached split summaries should avoid a second sequence replay."""
+    """Cached split summaries should avoid a second sequence replay.
+
+    Args:
+        tmp_path (Path): Temporary directory used for the synthetic run
+            artefacts.
+        monkeypatch (pytest.MonkeyPatch): Test double used to observe that the
+            split summaries are reused rather than recomputed.
+    """
     bundle = next(
         bundle
         for bundle in load_experiment_bundles(
@@ -500,6 +512,83 @@ def test_build_metric_metadata_keeps_only_manifest_metadata(
     assert (
         metadata["primary_metric_scope"] == MetricScope.SEQUENCE_LEVEL_DETECTION.value
     )
+
+
+def test_build_split_policy_replays_sequence_summary_when_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Split-policy metadata should fall back to the builder when uncached.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to force the
+            metadata builder down the uncached branch.
+    """
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("data"),
+            cache_root=Path("cache"),
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    model_summary = ModelRunSummary(
+        metrics={},
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=0,
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+        ),
+    )
+
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_metric_blocks",
+        lambda **_: {},
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_stream_segment_policy",
+        lambda _dataset: {"mode": "none"},
+    )
+    metadata = experiment_results.build_metric_metadata(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+    )
+    assert metadata["split_policy"] == {
+        "train_fraction": pytest.approx(0.2),
+        "test_fraction": pytest.approx(0.8),
+        "train_on_normal_entities_only": False,
+        "application_order": None,
+        "straddling_group_policy": None,
+        "raw_entry_split": None,
+        "raw_entry_split_summary": None,
+    }
 
 
 def test_build_dataset_manifest_trims_debug_only_fields(
