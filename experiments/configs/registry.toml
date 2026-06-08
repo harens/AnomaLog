@@ -269,9 +269,8 @@ datasets = [
 # Uses only hdfs_test_normal with a chronological 20/80 train/evaluation split.
 # Intended for weighted top-1 next-event comparison against the published
 # DeepCASE HDFS prediction results.
-# model_sets = ["baselines_no_nb"]
-# models = ["deepcase", "deeplog_default"]
-models = ["deepcase"]
+model_sets = ["baselines_no_nb"]
+models = ["deepcase", "deeplog_default"]
 datasets = ["hdfs/wuyifan18_deepcase_table_iv_compat"]
 
 [experiment_sets.hdfs_deepcase_table_iv_compat.overrides.deepcase]
