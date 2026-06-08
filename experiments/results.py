@@ -41,7 +41,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from anomalog.parsers.template import TemplatedDataset
-    from anomalog.sequences import SequenceBuilder, SequenceSplitSummary
+    from anomalog.sequences import (
+        RawEntrySplitSummary,
+        SequenceBuilder,
+        SequenceSplitSummary,
+    )
     from experiments.config import ExperimentBundle
     from experiments.models import ModelRunSummary, SequenceSummary
 
@@ -53,6 +57,12 @@ class _DatasetStatisticsBundle(Protocol):
 class _DatasetStatisticsContext(Protocol):
     templated: TemplatedDataset
     model_summary: ModelRunSummary
+
+
+class _SupportsResultSummaryCache(Protocol):
+    split_summary: SequenceSplitSummary | None
+    raw_entry_split_summary: RawEntrySplitSummary | None
+    metric_report: dict[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +162,15 @@ class ResultWriteContext:
     debug_reporting: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _ResultSummaryCache:
+    """Optional precomputed summaries reused during result persistence."""
+
+    split_summary: SequenceSplitSummary | None = None
+    raw_entry_split_summary: RawEntrySplitSummary | None = None
+    metric_report: dict[str, object] | None = None
+
+
 def prepare_result_paths(
     bundle: ExperimentBundle,
     *,
@@ -174,23 +193,40 @@ def prepare_result_paths(
 def write_run_outputs(
     *,
     context: ResultWriteContext,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
+    metric_report: dict[str, object] | None = None,
 ) -> None:
     """Persist the full experiment result bundle.
 
     Args:
         context (ResultWriteContext): Resolved run inputs and persistence
             targets for the run.
+        split_summary (SequenceSplitSummary | None): Optional precomputed
+            split-summary metadata to reuse when building the manifest.
+        raw_entry_split_summary (RawEntrySplitSummary | None): Optional
+            precomputed raw-entry split summary to reuse when building the
+            manifest.
+        metric_report (dict[str, object] | None): Optional precomputed metric
+            report to reuse when writing the metrics artefact.
     """
     bundle = context.bundle
     sequences = context.sequences
     model_summary = context.model_summary
     result_paths = context.result_paths
     debug_reporting = context.debug_reporting
+    cached_summaries = _ResultSummaryCache(
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
+        metric_report=metric_report,
+    )
     _write_json(result_paths.config_path, bundle.normalized_config())
     _write_json(
         result_paths.dataset_manifest_path,
         build_dataset_manifest(
             context=context,
+            split_summary=split_summary,
+            raw_entry_split_summary=raw_entry_split_summary,
         ),
     )
     metric_report = build_run_metrics_report(
@@ -198,6 +234,7 @@ def write_run_outputs(
         sequences=sequences,
         model_summary=model_summary,
         debug_reporting=debug_reporting,
+        cached_summaries=cached_summaries,
     )
     _write_json(result_paths.metrics_path, metric_report)
     parameter_ci_report = _parameter_ci_report(model_summary.metrics)
@@ -240,12 +277,19 @@ def stable_fingerprint(payload: object) -> str:
 def build_dataset_manifest(
     *,
     context: ResultWriteContext,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
 ) -> dict[str, object]:
     """Build a provenance manifest for the preprocessed dataset and sequences.
 
     Args:
         context (ResultWriteContext): Resolved run inputs and persistence
             targets for the run.
+        split_summary (SequenceSplitSummary | None): Optional precomputed
+            split-summary metadata to reuse instead of replaying the builder.
+        raw_entry_split_summary (RawEntrySplitSummary | None): Optional
+            precomputed raw-entry split summary to reuse instead of replaying
+            the builder.
 
     Returns:
         dict[str, object]: Dataset and sequence provenance manifest.
@@ -256,11 +300,13 @@ def build_dataset_manifest(
     sequence_summary = model_summary.sequence_summary
     raw_logs_path = context.templated.sink.raw_dataset_path.resolve()
     timestamp_min, timestamp_max = context.templated.sink.timestamp_bounds()
-    split_summary = build_sequence_split_summary(
-        context.sequences,
-        sequence_summary=sequence_summary,
-    )
-    raw_entry_split_summary = context.sequences.build_raw_entry_split_summary()
+    if split_summary is None:
+        split_summary = build_sequence_split_summary(
+            context.sequences,
+            sequence_summary=sequence_summary,
+        )
+    if raw_entry_split_summary is None:
+        raw_entry_split_summary = context.sequences.build_raw_entry_split_summary()
     manifest = {
         "run_fingerprint": context.result_paths.run_fingerprint,
         "dataset_fingerprint": stable_fingerprint(serialise_config(bundle.dataset)),
@@ -315,6 +361,8 @@ def build_dataset_manifest(
             bundle=bundle,
             sequences=context.sequences,
             model_summary=model_summary,
+            split_summary=split_summary,
+            raw_entry_split_summary=raw_entry_split_summary,
         ),
     }
     manifest["model_manifest"] = _compact_model_manifest(
@@ -483,6 +531,8 @@ def build_metric_metadata(
     bundle: ExperimentBundle,
     sequences: SequenceBuilder,
     model_summary: ModelRunSummary,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
 ) -> dict[str, object]:
     """Build the task metadata that accompanies persisted metric blocks.
 
@@ -490,6 +540,11 @@ def build_metric_metadata(
         bundle (ExperimentBundle): Experiment bundle being evaluated.
         sequences (SequenceBuilder): Sequence builder used for the run.
         model_summary (ModelRunSummary): Model-side summary for the run.
+        split_summary (SequenceSplitSummary | None): Optional precomputed
+            split-summary metadata to reuse when building the split policy.
+        raw_entry_split_summary (RawEntrySplitSummary | None): Optional
+            precomputed raw-entry split summary to reuse when building the
+            split policy.
 
     Returns:
         dict[str, object]: Shared task metadata for the persisted dataset
@@ -509,6 +564,8 @@ def build_metric_metadata(
         bundle=bundle,
         sequences=sequences,
         model_summary=model_summary,
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
     )
     stream_segment_policy = _build_stream_segment_policy(bundle.dataset)
     return {
@@ -527,6 +584,7 @@ def build_run_metrics_report(
     sequences: SequenceBuilder,
     model_summary: ModelRunSummary,
     debug_reporting: bool = False,
+    cached_summaries: _SupportsResultSummaryCache | None = None,
 ) -> dict[str, object]:
     """Build the final task-aware metric report written to ``metrics.json``.
 
@@ -536,11 +594,22 @@ def build_run_metrics_report(
         model_summary (ModelRunSummary): Model-side summary for the run.
         debug_reporting (bool): Whether to preserve the verbose diagnostic
             payloads in the written metrics report.
+        cached_summaries (_ResultSummaryCache | None): Optional precomputed
+            summaries to reuse when building or persisting the report.
 
     Returns:
         dict[str, object]: Serialised task-aware metric report with metadata
             and canonical metric blocks.
     """
+    if cached_summaries is not None and cached_summaries.metric_report is not None:
+        return _compact_run_metrics_report(
+            cached_summaries.metric_report,
+            debug_reporting=debug_reporting,
+        )
+    split_summary = None if cached_summaries is None else cached_summaries.split_summary
+    raw_entry_split_summary = (
+        None if cached_summaries is None else cached_summaries.raw_entry_split_summary
+    )
     metric_blocks = _build_metric_blocks(
         bundle=bundle,
         model_summary=model_summary,
@@ -549,6 +618,8 @@ def build_run_metrics_report(
         bundle=bundle,
         sequences=sequences,
         model_summary=model_summary,
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
     )
     run_metrics = model_summary.metrics
     report = {
@@ -1203,17 +1274,21 @@ def _build_split_policy(
     bundle: ExperimentBundle,
     sequences: SequenceBuilder,
     model_summary: ModelRunSummary,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
 ) -> dict[str, object]:
-    split_summary = build_sequence_split_summary(
-        sequences,
-        sequence_summary=model_summary.sequence_summary,
-    )
+    if split_summary is None:
+        split_summary = build_sequence_split_summary(
+            sequences,
+            sequence_summary=model_summary.sequence_summary,
+        )
     policy: dict[str, object] = {
         "train_fraction": split_summary.requested_train_fraction,
         "test_fraction": split_summary.requested_test_fraction,
         "train_on_normal_entities_only": split_summary.train_on_normal_entities_only,
     }
-    raw_entry_split_summary = sequences.build_raw_entry_split_summary()
+    if raw_entry_split_summary is None:
+        raw_entry_split_summary = sequences.build_raw_entry_split_summary()
     sequence = bundle.dataset.sequence
     raw_split = getattr(sequence, "split", None)
     if raw_split is not None:

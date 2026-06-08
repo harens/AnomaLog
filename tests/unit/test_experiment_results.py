@@ -1,6 +1,7 @@
 """Tests for experiment result manifest helpers."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,11 @@ import pytest
 import experiments.results as experiment_results
 from anomalog.cache import CachePathsConfig
 from anomalog.parsers.template import IdentityTemplateParser, TemplatedDataset
-from anomalog.sequences import EntitySequenceBuilder
+from anomalog.sequences import (
+    EntitySequenceBuilder,
+    RawEntrySplitSummary,
+    SequenceSplitSummary,
+)
 from experiments.config import load_experiment_bundles
 from experiments.models.base import ModelManifest, ModelRunSummary, SequenceSummary
 from experiments.models.metric_reporting import MetricBlock
@@ -191,6 +196,199 @@ def test_build_run_metrics_report_drops_debug_only_diagnostics(
     assert diagnostics["top_k"] == {"k_values": [1, 2], "accuracy": {}}
     assert "hit_count" not in diagnostics["top_k"]
     assert diagnostics["classification_top1_weighted"] == {"precision": 0.2}
+
+
+def test_build_run_metrics_report_reuses_precomputed_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Precomputed metric reports should bypass the expensive report builder."""
+
+    @dataclass(slots=True)
+    class _SummaryCache:
+        split_summary: SequenceSplitSummary | None = None
+        raw_entry_split_summary: RawEntrySplitSummary | None = None
+        metric_report: dict[str, object] | None = None
+
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=Path("raw.log"),
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=Path("data"),
+            cache_root=Path("cache"),
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    model_summary = ModelRunSummary(
+        metrics={},
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=0,
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+        ),
+    )
+    precomputed_report: dict[str, object] = {"sequence_count": 0}
+    monkeypatch.setattr(
+        experiment_results,
+        "_build_metric_blocks",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("metric blocks should not be rebuilt"),
+        ),
+    )
+
+    report = experiment_results.build_run_metrics_report(
+        bundle=bundle,
+        sequences=sequences,
+        model_summary=model_summary,
+        cached_summaries=_SummaryCache(metric_report=precomputed_report),
+    )
+
+    assert report == precomputed_report
+
+
+def test_write_run_outputs_reuses_cached_split_summaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached split summaries should avoid a second sequence replay."""
+    bundle = next(
+        bundle
+        for bundle in load_experiment_bundles(
+            Path("experiments/configs/datasets/bgl/entity_chronological.toml"),
+        )
+        if bundle.model.detector == "deeplog"
+    )
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=tmp_path / "raw.log",
+        parser=NullStructuredParser(),
+        rows=[],
+    )
+    sink.raw_dataset_path.write_text("", encoding="utf-8")
+    templated = TemplatedDataset(
+        sink=sink,
+        cache_paths=CachePathsConfig(
+            data_root=tmp_path / "data",
+            cache_root=tmp_path / "cache",
+        ),
+        template_parser=IdentityTemplateParser(),
+        anomaly_labels=label_lookup(),
+    )
+    sequences = templated.sequences()
+    result_paths = experiment_results.ResultPaths(
+        run_fingerprint="fingerprint",
+        run_root=tmp_path,
+        run_dir=tmp_path,
+        config_path=tmp_path / "experiment_config.json",
+        dataset_manifest_path=tmp_path / "dataset_manifest.json",
+        metrics_path=tmp_path / "metrics.json",
+        predictions_path=tmp_path / "predictions.jsonl",
+        environment_path=tmp_path / "environment.json",
+        run_log_path=tmp_path / "run.log",
+    )
+    model_summary = ModelRunSummary(
+        metrics={"sequence_count": 0},
+        model_manifest=ModelManifest(
+            detector="deeplog",
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+            ignored_sequence_count=0,
+        ),
+        sequence_summary=SequenceSummary(
+            sequence_count=0,
+            train_sequence_count=0,
+            test_sequence_count=0,
+            train_label_counts={},
+            test_label_counts={},
+        ),
+    )
+    context = experiment_results.ResultWriteContext(
+        bundle=bundle,
+        templated=templated,
+        sequences=sequences,
+        model_summary=model_summary,
+        result_paths=result_paths,
+    )
+    split_summary = SequenceSplitSummary(
+        requested_train_fraction=0.5,
+        requested_test_fraction=0.5,
+        train_on_normal_entities_only=None,
+        train_pool_sequence_count=0,
+        ineligible_train_pool_count=0,
+        realised_train_sequence_count=0,
+        excluded_from_train_count=0,
+        eligible_train_sequence_count=0,
+        ignored_sequence_count=0,
+        effective_train_fraction_of_eligible=0.0,
+        effective_train_fraction_overall=0.0,
+    )
+    raw_entry_split_summary = RawEntrySplitSummary(
+        split_mode="raw_entry_prefix_count",
+        application_order="before_grouping",
+        cutoff_entry_index=0,
+        train_raw_entry_count=0,
+        train_normal_entry_count=0,
+        train_anomalous_entry_count=0,
+        test_raw_entry_count=0,
+        test_normal_entry_count=0,
+        test_anomalous_entry_count=0,
+    )
+    precomputed_report: dict[str, object] = {"sequence_count": 0}
+    monkeypatch.setattr(
+        experiment_results,
+        "build_sequence_split_summary",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("split summary should not be rebuilt"),
+        ),
+    )
+    monkeypatch.setattr(
+        type(sequences),
+        "build_raw_entry_split_summary",
+        lambda _self: (_ for _ in ()).throw(
+            AssertionError("raw-entry split summary should not be rebuilt"),
+        ),
+    )
+    monkeypatch.setattr(
+        experiment_results,
+        "build_environment_metadata",
+        lambda **_: {"environment": "metadata"},
+    )
+
+    experiment_results.write_run_outputs(
+        context=context,
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
+        metric_report=precomputed_report,
+    )
+
+    assert json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8")) == {
+        "sequence_count": 0,
+    }
 
 
 def test_prepare_result_paths_places_reruns_under_attempt_directories() -> None:

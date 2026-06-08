@@ -86,6 +86,13 @@ class _OneShotSequenceView:
     def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
         return iter(self)
 
+    def iter_test_sequences(self) -> Iterator[SimpleNamespace]:
+        return iter(self)
+
+    @staticmethod
+    def build_raw_entry_split_summary() -> None:
+        return None
+
 
 @dataclass(frozen=True)
 class _FakeRunConfig:
@@ -172,8 +179,9 @@ def _build_run_metrics_report(
     sequences: Iterable[object],
     model_summary: object,
     debug_reporting: bool = False,
+    cached_summaries: object | None = None,
 ) -> dict[str, object]:
-    del bundle, model_summary, debug_reporting
+    del bundle, model_summary, debug_reporting, cached_summaries
     list(sequences)
     return {
         "primary_metric_scope": None,
@@ -455,6 +463,10 @@ def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
         def iter_training_sequences() -> Iterator[SimpleNamespace]:
             return iter(())
 
+        @staticmethod
+        def iter_test_sequences() -> Iterator[SimpleNamespace]:
+            return iter(())
+
     class _Logger:
         @staticmethod
         def info(message: str, *args: object) -> None:
@@ -560,6 +572,10 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
         def iter_training_sequences() -> Iterator[SimpleNamespace]:
             return iter(())
 
+        @staticmethod
+        def iter_test_sequences() -> Iterator[SimpleNamespace]:
+            return iter(())
+
     class _Templated:
         @staticmethod
         def group_by_entity() -> _SequenceView:
@@ -649,7 +665,7 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
     assert any(
         message.startswith(
             "Skipping exact sequence split count hint for demo because the "
-            "raw-entry before-grouping split would require a full replay",
+            "before-grouping raw-entry split is expensive to count exactly",
         )
         for message in caplog.messages
     )
@@ -1173,6 +1189,13 @@ def test_run_bundle_rebuilds_sequence_views_for_each_stage(
         def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
             return iter(self)
 
+        def iter_test_sequences(self) -> Iterator[SimpleNamespace]:
+            return iter(self)
+
+        @staticmethod
+        def build_raw_entry_split_summary() -> None:
+            return None
+
     class _TemplatedStub:
         def __init__(self) -> None:
             self.group_by_entity_calls = 0
@@ -1492,6 +1515,13 @@ def test_run_bundle_rerun_keeps_existing_attempts_and_writes_new_one(
 
         def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
             return iter(self)
+
+        def iter_test_sequences(self) -> Iterator[SimpleNamespace]:
+            return iter(self)
+
+        @staticmethod
+        def build_raw_entry_split_summary() -> None:
+            return None
 
     class _TemplatedStub:
         @staticmethod

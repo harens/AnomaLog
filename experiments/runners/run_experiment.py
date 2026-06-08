@@ -36,6 +36,7 @@ from experiments.models.evaluate import PredictionOutputConfig, SequenceFactory
 from experiments.registry import resolve_registry_experiment
 from experiments.results import (
     ResultWriteContext,
+    _ResultSummaryCache,
     build_run_metrics_report,
     build_sequence_split_summary,
     prepare_result_paths,
@@ -46,7 +47,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from anomalog.parsers.template import TemplatedDataset
-    from anomalog.sequences import SequenceSplitSummary
+    from anomalog.sequences import (
+        RawEntrySplitSummary,
+        SequenceBuilder,
+        SequenceSplitSummary,
+    )
     from experiments.models import ModelRunSummary
     from experiments.results import ResultPaths
 
@@ -487,11 +492,13 @@ def _execute_bundle_run(
     else:
         logger.info(
             "Skipping exact sequence split count hint for %s because the "
-            "raw-entry before-grouping split would require a full replay",
+            "before-grouping raw-entry split is expensive to count exactly",
             bundle.dataset.dataset_name,
         )
     use_test_factory = getattr(
-        bundle.dataset.sequence, "train_on_normal_entities_only", False,
+        bundle.dataset.sequence,
+        "train_on_normal_entities_only",
+        False,
     ) is False and (
         raw_split is None
         or (
@@ -520,6 +527,12 @@ def _execute_bundle_run(
                 sequence_view_for_summary.iter_test_sequences
                 if use_test_factory
                 else None
+            ),
+            test_sequences_are_pure=bool(
+                use_test_factory
+                and raw_split is not None
+                and raw_split.application_order
+                is SplitApplicationOrder.BEFORE_GROUPING,
             ),
         ),
         config=bundle.model,
@@ -574,31 +587,31 @@ def _finalise_bundle_run(
         context (_BundleFinaliseContext): Fully materialised bundle run state
             and output locations.
     """
-    split_summary = _build_bundle_split_summary(context=context)
-    _log_bundle_split_summary(context=context, split_summary=split_summary)
-    metric_report = _build_bundle_metric_report(context=context)
-    _log_bundle_metric_report(context=context, metric_report=metric_report)
-    _write_bundle_outputs(context=context)
 
+    def _build_sequence_view() -> SequenceBuilder:
+        return context.bundle.dataset.sequence.apply(context.templated)
 
-def _build_bundle_split_summary(
-    *,
-    context: _BundleFinaliseContext,
-) -> SequenceSplitSummary:
-    split_summary_started_at = perf_counter()
-    sequences_for_split_summary = context.bundle.dataset.sequence.apply(
-        context.templated,
-    )
+    summary_sequences = _build_sequence_view()
     split_summary = build_sequence_split_summary(
-        sequences_for_split_summary,
+        summary_sequences,
         sequence_summary=context.model_summary.sequence_summary,
     )
-    context.logger.info(
-        "Stage complete: split summary construction for %s in %.3fs",
-        context.bundle.dataset.dataset_name,
-        perf_counter() - split_summary_started_at,
+    raw_entry_split_summary = summary_sequences.build_raw_entry_split_summary()
+    _log_bundle_split_summary(context=context, split_summary=split_summary)
+    metric_report = _build_bundle_metric_report(
+        context=context,
+        sequences=_build_sequence_view(),
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
     )
-    return split_summary
+    _log_bundle_metric_report(context=context, metric_report=metric_report)
+    _write_bundle_outputs(
+        context=context,
+        sequences=_build_sequence_view(),
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
+        metric_report=metric_report,
+    )
 
 
 def _log_bundle_split_summary(
@@ -636,14 +649,20 @@ def _log_bundle_split_summary(
 def _build_bundle_metric_report(
     *,
     context: _BundleFinaliseContext,
+    sequences: SequenceBuilder,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
 ) -> dict[str, object]:
     metrics_started_at = perf_counter()
-    sequences_for_metrics = context.bundle.dataset.sequence.apply(context.templated)
     metric_report = build_run_metrics_report(
         bundle=context.bundle,
-        sequences=sequences_for_metrics,
+        sequences=sequences,
         model_summary=context.model_summary,
         debug_reporting=context.debug_reporting,
+        cached_summaries=_ResultSummaryCache(
+            split_summary=split_summary,
+            raw_entry_split_summary=raw_entry_split_summary,
+        ),
     )
     context.logger.info(
         "Stage complete: run metric report construction for %s in %.3fs",
@@ -672,18 +691,24 @@ def _log_bundle_metric_report(
 def _write_bundle_outputs(
     *,
     context: _BundleFinaliseContext,
+    sequences: SequenceBuilder,
+    split_summary: SequenceSplitSummary | None = None,
+    raw_entry_split_summary: RawEntrySplitSummary | None = None,
+    metric_report: dict[str, object] | None = None,
 ) -> None:
     outputs_started_at = perf_counter()
-    sequences_for_outputs = context.bundle.dataset.sequence.apply(context.templated)
     write_run_outputs(
         context=ResultWriteContext(
             bundle=context.bundle,
             templated=context.templated,
-            sequences=sequences_for_outputs,
+            sequences=sequences,
             model_summary=context.model_summary,
             result_paths=context.result_paths,
             debug_reporting=context.debug_reporting,
         ),
+        split_summary=split_summary,
+        raw_entry_split_summary=raw_entry_split_summary,
+        metric_report=metric_report,
     )
     context.logger.info(
         "Stage complete: run output writing for %s in %.3fs",
