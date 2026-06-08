@@ -25,7 +25,11 @@ from prefect.logging.formatters import PrefectFormatter
 from anomalog.io_utils import get_shared_console
 from anomalog.sequences import SplitApplicationOrder
 from experiments import ConfigError
-from experiments.config import ExperimentBundle, load_experiment_bundles
+from experiments.config import (
+    ExperimentBundle,
+    RawEntryPrefixNormalFractionSplitConfig,
+    load_experiment_bundles,
+)
 from experiments.datasets import build_dataset_spec
 from experiments.models import ProgressHint, RunProgressPlan, run_model
 from experiments.models.evaluate import PredictionOutputConfig, SequenceFactory
@@ -486,6 +490,21 @@ def _execute_bundle_run(
             "raw-entry before-grouping split would require a full replay",
             bundle.dataset.dataset_name,
         )
+    use_test_factory = getattr(
+        bundle.dataset.sequence, "train_on_normal_entities_only", False,
+    ) is False and (
+        raw_split is None
+        or (
+            raw_split.application_order is not SplitApplicationOrder.BEFORE_GROUPING
+            or (
+                raw_split.straddling_group_policy.value != "drop_straddlers"
+                and not isinstance(
+                    raw_split,
+                    RawEntryPrefixNormalFractionSplitConfig,
+                )
+            )
+        )
+    )
     logger.info(
         "Dataset ready; starting model run for %s",
         bundle.model.detector,
@@ -497,6 +516,11 @@ def _execute_bundle_run(
                 bundle.dataset.sequence.apply(templated),
             ),
             train_factory=sequence_view_for_summary.iter_training_sequences,
+            test_factory=(
+                sequence_view_for_summary.iter_test_sequences
+                if use_test_factory
+                else None
+            ),
         ),
         config=bundle.model,
         prediction_output=PredictionOutputConfig(

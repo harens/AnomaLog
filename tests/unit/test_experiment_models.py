@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import inspect
 import json
 import logging
 import math
@@ -939,6 +940,60 @@ def test_template_frequency_detector_reports_event_level_metrics() -> None:
         + event_metrics["fn"]
         == expected_event_count
     )
+
+
+def test_template_frequency_detector_reuses_sequence_losses_for_event_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Template-frequency should score each event only once during prediction.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to wrap the private
+            scorer and count template-score lookups.
+    """
+    detector = _template_frequency_config(
+        name="template_frequency",
+        score_threshold=0.0,
+    ).build_detector()
+    with Progress(disable=True) as progress:
+        detector.fit(
+            [
+                _sequence(
+                    52,
+                    templates=["normal login", "normal read"],
+                    label=0,
+                    split_label=SplitLabel.TRAIN,
+                ),
+            ],
+            progress=progress,
+        )
+
+    sequence = _sequence(
+        62,
+        templates=["normal login", "panic failure", "normal read"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        event_labels=(0, 1, 0),
+        evaluation_event_mask=(True, True, True),
+    )
+    call_count = 0
+    original_score_template = inspect.getattr_static(
+        detector,
+        "_score_template",
+    ).__get__(detector, type(detector))
+
+    def counting_score_template(template: str) -> float:
+        nonlocal call_count
+        call_count += 1
+        return original_score_template(template)
+
+    monkeypatch.setattr(detector, "_score_template", counting_score_template)
+
+    detector.predict(sequence)
+
+    assert call_count == len(sequence.events)
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    assert metrics["event_level_detection"]["events_seen"] == len(sequence.events)
 
 
 def test_markov_detector_predictions_are_repeatable() -> None:

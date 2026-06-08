@@ -220,8 +220,10 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             PredictionOutcome: Predicted label and anomaly score for the sequence.
         """
-        score = self.score(sequence)
-        self._record_event_level_predictions(sequence)
+        if sequence.event_labels is None:
+            score = self.score(sequence)
+        else:
+            score = self._score_sequence_and_event_metrics(sequence)
         predicted_label = int(score > self.score_threshold)
         return PredictionOutcome(
             predicted_label=predicted_label,
@@ -295,6 +297,43 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             loss_sum += self._score_template(template)
         return loss_sum / len(templates)
 
+    def _score_sequence_and_event_metrics(
+        self,
+        sequence: TemplateSequence,
+    ) -> float:
+        """Return a sequence score while updating event-level metrics.
+
+        Args:
+            sequence (TemplateSequence): Sequence to score.
+
+        Returns:
+            float: Mean sequence score for the sequence.
+        """
+        event_labels = sequence.event_labels
+        if event_labels is None:
+            return self.score(sequence)
+        eligible_event_mask = _evaluation_event_mask(sequence)
+        event_count = len(sequence.events)
+        if event_count == 0:
+            return 0.0
+        loss_sum = 0.0
+        for (template, _, _), actual_label, is_eligible in zip(
+            sequence.events,
+            event_labels,
+            eligible_event_mask,
+            strict=False,
+        ):
+            loss = self._score_template(template)
+            loss_sum += loss
+            if not is_eligible or actual_label is None:
+                continue
+            predicted_label = int(loss > self.event_score_threshold)
+            self._event_level_state.record(
+                actual_label=actual_label,
+                predicted_label=predicted_label,
+            )
+        return loss_sum / event_count
+
     def _calibrate_thresholds(
         self,
         *,
@@ -352,34 +391,6 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             )
         calibration_event_scores.sort()
         return calibration_event_scores
-
-    def _record_event_level_predictions(self, sequence: TemplateSequence) -> None:
-        """Accumulate event-level confusion counts for one scored sequence.
-
-        Args:
-            sequence (TemplateSequence): Sequence whose event-level predictions
-                should be recorded.
-        """
-        if sequence.event_labels is None:
-            return
-        eligible_event_mask = _evaluation_event_mask(sequence)
-        if not eligible_event_mask:
-            return
-        for template, actual_label, is_eligible in zip(
-            (template for template, _, _ in sequence.events),
-            sequence.event_labels,
-            eligible_event_mask,
-            strict=True,
-        ):
-            if not is_eligible or actual_label is None:
-                continue
-            predicted_label = int(
-                self._score_template(template) > self.event_score_threshold,
-            )
-            self._event_level_state.record(
-                actual_label=actual_label,
-                predicted_label=predicted_label,
-            )
 
     def _event_level_state_snapshot(self) -> EventLevelDetectionDiagnostics | None:
         """Return the latest event-level detection diagnostics.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.progress import Progress
@@ -257,3 +257,87 @@ def test_run_model_uses_bounded_train_factory(
     assert summary.sequence_summary.train_sequence_count == 1
     expected_test_sequence_count = 2
     assert summary.sequence_summary.test_sequence_count == expected_test_sequence_count
+
+
+def test_run_model_uses_bounded_test_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model scoring should use the bounded test replay when provided.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the fabricated run
+            artefacts.
+        monkeypatch (pytest.MonkeyPatch): Replaces the model config and
+            detector construction so the test can observe the chosen scoring
+            stream directly.
+    """
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: ClassVar[str] = "recording"
+        seen_test_windows: list[int] = field(default_factory=list)
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del logger
+            list(progress.track(train_sequences, description="Recording fit"))
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            assert sequence.split_label is SplitLabel.TEST
+            self.seen_test_windows.append(sequence.window_id)
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(
+            self,
+            *,
+            sequence_summary: SequenceSummary,
+        ) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(1, templates=["train-a"], label=0, split_label=SplitLabel.TRAIN),
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(3, templates=["test-b"], label=1, split_label=SplitLabel.TEST),
+    ]
+    config = decode_experiment_model_config(
+        {"name": "template_frequency"},
+        config_type=TemplateFrequencyModelConfig,
+    )
+    monkeypatch.setattr(
+        TemplateFrequencyModelConfig,
+        "build_detector",
+        lambda _self: _RecordingDetector(),
+    )
+
+    summary = run_model(
+        sequence_factory=SequenceFactory(
+            factory=lambda: iter(sequences),
+            train_factory=lambda: iter(sequences[:1]),
+            test_factory=lambda: iter(sequences[1:]),
+        ),
+        config=config,
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "predictions.jsonl",
+            write_predictions=False,
+        ),
+        logger=logging.getLogger("tests.run_model.test_factory"),
+    )
+
+    assert summary.sequence_summary.train_sequence_count == 1
+    assert summary.sequence_summary.test_sequence_count == EXPECTED_TEST_SEQUENCE_COUNT

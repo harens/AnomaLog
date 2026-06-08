@@ -240,6 +240,60 @@ def test_before_grouping_training_replay_handles_cutoff_and_prefix_entities() ->
     ]
 
 
+def test_before_grouping_test_replay_skips_the_train_prefix() -> None:
+    """Raw-entry test replay should resume after the train prefix only once."""
+    sink = _sink(
+        structured_line(
+            line_order=0,
+            timestamp_unix_ms=100,
+            entity_id="a",
+            untemplated_message_text="first-a",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=1,
+            timestamp_unix_ms=200,
+            entity_id="a",
+            untemplated_message_text="second-a",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=2,
+            timestamp_unix_ms=300,
+            entity_id="a",
+            untemplated_message_text="third-a",
+            anomalous=0,
+        ),
+        structured_line(
+            line_order=3,
+            timestamp_unix_ms=400,
+            entity_id="a",
+            untemplated_message_text="fourth-a",
+            anomalous=0,
+        ),
+    )
+    builder = EntitySequenceBuilder(
+        sink=sink,
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+        train_frac=0.5,
+        test_frac=0.5,
+    )
+
+    train_sequences = list(builder.iter_training_sequences())
+    test_sequences = list(builder.iter_test_sequences())
+
+    assert [sequence.window_id for sequence in train_sequences] == [0]
+    assert [sequence.window_id for sequence in test_sequences] == [1]
+    assert [sequence.split_label for sequence in test_sequences] == [
+        SplitLabel.TEST,
+    ]
+
+
 def test_fixed_sequence_builder_raw_position_mode_handles_contracts_and_gaps(
     tmp_path: Path,
 ) -> None:

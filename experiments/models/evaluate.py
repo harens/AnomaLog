@@ -49,10 +49,14 @@ class SequenceFactory:
         train_factory (Callable[[], Iterator[TemplateSequence]] | None):
             Optional bounded replay used when the protocol exposes a cheaper
             fit-time training prefix.
+        test_factory (Callable[[], Iterator[TemplateSequence]] | None):
+            Optional bounded replay used when the protocol exposes a cheaper
+            test-suffix traversal.
     """
 
     factory: Callable[[], Iterator[TemplateSequence]]
     train_factory: Callable[[], Iterator[TemplateSequence]] | None = None
+    test_factory: Callable[[], Iterator[TemplateSequence]] | None = None
 
     def __call__(self) -> Iterator[TemplateSequence]:
         """Return the underlying lazy sequence stream.
@@ -73,6 +77,17 @@ class SequenceFactory:
         if self.train_factory is not None:
             return self.train_factory()
         return iter_train_sequences(self.factory)
+
+    def test_sequences(self) -> Iterator[TemplateSequence]:
+        """Return the bounded test replay when one is available.
+
+        Returns:
+            Iterator[TemplateSequence]: Test-suffix stream for scoring when the
+                caller can provide one, otherwise the shared filtered replay.
+        """
+        if self.test_factory is not None:
+            return self.test_factory()
+        return iter_test_sequences(self.factory)
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,19 +277,32 @@ def run_model(
         ModelRunSummary: Metrics, manifest, and sequence summary for the run.
     """
     detector = config.build_detector()
-    fit_detector(
+    train_metrics = fit_detector(
         detector=detector,
         train_sequences=sequence_factory.train_sequences(),
         logger=logger,
         train_progress_hint=None if progress_plan is None else progress_plan.train,
     )
-    accumulator = stream_predictions(
-        detector=detector,
-        sequence_factory=sequence_factory,
-        prediction_output=prediction_output,
-        logger=logger,
-        score_progress_hint=None if progress_plan is None else progress_plan.score,
-    )
+    if sequence_factory.test_factory is not None:
+        test_metrics = stream_predictions(
+            detector=detector,
+            sequence_factory=sequence_factory.test_sequences,
+            prediction_output=prediction_output,
+            logger=logger,
+            score_progress_hint=None if progress_plan is None else progress_plan.score,
+        )
+        accumulator = _merge_train_and_test_metrics(
+            train_metrics=train_metrics,
+            test_metrics=test_metrics,
+        )
+    else:
+        accumulator = stream_predictions(
+            detector=detector,
+            sequence_factory=sequence_factory.factory,
+            prediction_output=prediction_output,
+            logger=logger,
+            score_progress_hint=None if progress_plan is None else progress_plan.score,
+        )
     sequence_summary = accumulator.summary()
     metrics = accumulator.metrics()
     extra_metrics = detector.run_metrics(run_metrics=metrics)
@@ -304,13 +332,30 @@ def iter_train_sequences(
             yield sequence
 
 
+def iter_test_sequences(
+    sequence_factory: Callable[[], Iterator[TemplateSequence]],
+) -> Iterator[TemplateSequence]:
+    """Yield test sequences from a sequence factory.
+
+    Args:
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing the full sequence stream.
+
+    Yields:
+        TemplateSequence: Sequences belonging to the test split.
+    """
+    for sequence in sequence_factory():
+        if sequence.split_label is SplitLabel.TEST:
+            yield sequence
+
+
 def fit_detector(
     *,
     detector: ExperimentDetector,
     train_sequences: Iterable[TemplateSequence],
     logger: logging.Logger,
     train_progress_hint: ProgressHint | None = None,
-) -> None:
+) -> RunMetrics:
     """Fit a detector on the training split.
 
     Args:
@@ -319,14 +364,29 @@ def fit_detector(
         logger (logging.Logger): Logger used for progress messages.
         train_progress_hint (ProgressHint | None): Exact bounded train-fit
             progress metadata when known cheaply by the caller.
+
+    Returns:
+        RunMetrics: Train-split counters recorded while fitting.
     """
     logger.info("Fitting %s detector on training split", detector.detector_name)
-    train_sequences = with_known_total(train_sequences, hint=train_progress_hint)
+    train_metrics = RunMetrics()
+    train_sequences_iterable = train_sequences
+
+    def _recorded_train_sequences() -> Iterator[TemplateSequence]:
+        for sequence in train_sequences_iterable:
+            train_metrics.record_train(sequence)
+            yield sequence
+
+    train_sequences = with_known_total(
+        _recorded_train_sequences(),
+        hint=train_progress_hint,
+    )
     with make_count_progress(
         unit=None if train_progress_hint is None else train_progress_hint.unit,
     ) as progress:
         detector.fit(train_sequences, progress=progress, logger=logger)
     logger.info("Finished fitting %s detector", detector.detector_name)
+    return train_metrics
 
 
 def stream_predictions(
@@ -446,6 +506,42 @@ def _iter_test_sequences(
         if sequence.split_label is SplitLabel.IGNORED:
             accumulator.record_ignored(sequence)
             continue
+
+
+def _merge_train_and_test_metrics(
+    *,
+    train_metrics: RunMetrics,
+    test_metrics: RunMetrics,
+) -> RunMetrics:
+    """Combine separated train and test split accumulators.
+
+    Args:
+        train_metrics (RunMetrics): Train-only counters recorded during fit.
+        test_metrics (RunMetrics): Test-only counters recorded during scoring.
+
+    Returns:
+        RunMetrics: Combined run metrics for the full evaluation.
+    """
+    return RunMetrics(
+        sequence_count=train_metrics.sequence_count + test_metrics.sequence_count,
+        train_sequence_count=train_metrics.train_sequence_count,
+        test_sequence_count=test_metrics.test_sequence_count,
+        ignored_sequence_count=(
+            train_metrics.ignored_sequence_count + test_metrics.ignored_sequence_count
+        ),
+        tp=test_metrics.tp,
+        tn=test_metrics.tn,
+        fp=test_metrics.fp,
+        fn=test_metrics.fn,
+        abstained_prediction_count=test_metrics.abstained_prediction_count,
+        test_score_sum=test_metrics.test_score_sum,
+        train_label_counts=dict(train_metrics.train_label_counts),
+        test_label_counts=dict(test_metrics.test_label_counts),
+        ignored_label_counts={
+            **train_metrics.ignored_label_counts,
+            **test_metrics.ignored_label_counts,
+        },
+    )
 
 
 def _prediction_is_abstained(prediction: PredictionOutcome) -> bool:

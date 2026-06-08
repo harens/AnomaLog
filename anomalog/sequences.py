@@ -689,6 +689,12 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             if sequence.split_label is SplitLabel.TRAIN:
                 yield sequence
 
+    def iter_test_sequences(self) -> Iterator[TemplateSequence]:
+        """Yield the test slice used by model scoring."""
+        for sequence in self:
+            if sequence.split_label is SplitLabel.TEST:
+                yield sequence
+
     @abstractmethod
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping.
@@ -1647,6 +1653,238 @@ class EntitySequenceBuilder(SequenceBuilder):
         yield from SequenceBuilder.iter_training_sequences(self)
 
     @override
+    def iter_test_sequences(self) -> Iterator[TemplateSequence]:
+        """Yield only the test suffix used for detector scoring.
+
+        Yields:
+            TemplateSequence: Sequences assigned to the test split.
+        """
+        if self.train_on_normal_entities_only:
+            yield from SequenceBuilder.iter_test_sequences(self)
+            return
+
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+
+        if self._can_use_before_grouping_raw_prefix_test_path():
+            yield from self._iter_before_grouping_test_sequences(
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+
+        if (
+            self.split_mode is not None
+            and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
+        ):
+            yield from SequenceBuilder.iter_test_sequences(self)
+            return
+
+        counts, _ = self._entity_split_counts(label_for_group=label_for_group)
+        test_start_index = counts.total_count - counts.test_count
+
+        for window_id, rows in enumerate(self.iter_grouped_rows()):
+            entity_id = next(
+                (row.entity_id for row in rows if row.entity_id is not None),
+                None,
+            )
+            prefixed_split_label = _split_label_from_prefixed_entity_id(entity_id)
+            if prefixed_split_label is not None and self.split_mode is None:
+                split_label = prefixed_split_label
+            elif self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING:
+                continue
+            elif window_id >= test_start_index:
+                split_label = SplitLabel.TEST
+            else:
+                continue
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                split_label,
+                continuous_context=self.continuous_context,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
+
+    def _can_use_before_grouping_raw_prefix_test_path(self) -> bool:
+        """Return whether the test suffix can be replayed without full replay.
+
+        Returns:
+            bool: `True` when the before-grouping raw split can be served by a
+                dedicated suffix iterator.
+        """
+        return (
+            self.split_mode is not None
+            and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
+            and self.split_mode in {
+                RawEntrySplitMode.PREFIX_COUNT,
+                RawEntrySplitMode.PREFIX_FRACTION,
+            }
+        )
+
+    def _before_grouping_cutoff_entry_index(self) -> int:
+        """Return the raw-entry cutoff used by before-grouping prefix splits.
+
+        Raises:
+            ValueError: If the configured raw-entry split metadata is missing.
+
+        Returns:
+            int: Zero-based raw-entry index where the test suffix begins.
+        """
+        if self.split_mode is RawEntrySplitMode.PREFIX_COUNT:
+            cutoff_entry_index = self.train_entry_count
+            if cutoff_entry_index is None:
+                msg = "train_entry_count must be set for PREFIX_COUNT splits."
+                raise ValueError(msg)
+            return cutoff_entry_index
+
+        row_count = self.sink.count_rows()
+        train_entry_fraction = self.train_entry_fraction
+        if train_entry_fraction is None:
+            msg = "train_entry_fraction must be set for PREFIX_FRACTION splits."
+            raise ValueError(msg)
+        return math.ceil(train_entry_fraction * row_count)
+
+    def _iter_before_grouping_test_sequences(
+        self,
+        *,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield test sequences for before-grouping raw-entry prefix splits.
+
+        Args:
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the emitted suffix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Test-split sequences emitted from the suffix.
+        """
+        cutoff_entry_index = self._before_grouping_cutoff_entry_index()
+        if (
+            self.straddling_group_policy
+            is StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES
+        ):
+            yield from self._iter_before_grouping_test_sequences_from_partial_split(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+        if self.straddling_group_policy is StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT:
+            yield from self._iter_before_grouping_test_sequences_from_first_event(
+                cutoff_entry_index=cutoff_entry_index,
+                infer_template=infer_template,
+                label_for_group=label_for_group,
+            )
+            return
+        yield from SequenceBuilder.iter_test_sequences(self)
+
+    def _iter_before_grouping_test_sequences_from_partial_split(
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield test-side partial sequences from a raw-entry prefix split.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained suffix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Test-side partial sequences.
+        """
+        window_id = 0
+        for rows in self.iter_grouped_rows():
+            rows_before = [
+                row
+                for row in rows
+                if row.line_order is not None and row.line_order < cutoff_entry_index
+            ]
+            rows_after = [
+                row
+                for row in rows
+                if row.line_order is not None and row.line_order >= cutoff_entry_index
+            ]
+            if rows_before and rows_after:
+                seq = self._build_sequence(
+                    window_id + 1,
+                    rows_after,
+                    infer_template,
+                    label_for_group,
+                    SplitLabel.TEST,
+                )
+                if seq is not None:
+                    yield seq
+                window_id += 2
+                continue
+            if rows_after:
+                seq = self._build_sequence(
+                    window_id,
+                    rows_after,
+                    infer_template,
+                    label_for_group,
+                    SplitLabel.TEST,
+                )
+                if seq is not None:
+                    yield seq
+                window_id += 1
+                continue
+            if rows_before:
+                window_id += 1
+
+    def _iter_before_grouping_test_sequences_from_first_event(
+        self,
+        *,
+        cutoff_entry_index: int,
+        infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
+        label_for_group: Callable[[str], int | None],
+    ) -> Iterator[TemplateSequence]:
+        """Yield test-side whole entities assigned by their first event.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained suffix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Test-side whole entities.
+        """
+        window_id = 0
+        for rows in self.iter_grouped_rows():
+            if not rows:
+                continue
+            first_line_order = next(
+                (row.line_order for row in rows if row.line_order is not None),
+                None,
+            )
+            if first_line_order is not None and first_line_order >= cutoff_entry_index:
+                seq = self._build_sequence(
+                    window_id,
+                    rows,
+                    infer_template,
+                    label_for_group,
+                    SplitLabel.TEST,
+                )
+                if seq is not None:
+                    yield seq
+            window_id += 1
+
+    @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
         """Return rows grouped by entity.
 
@@ -2015,6 +2253,41 @@ class NonEntitySequenceBuilder(SequenceBuilder):
             SequenceSplitCounts: Exact split counts for the grouping strategy.
         """
         return self._split_counts(self.count_windows())
+
+    @override
+    def iter_test_sequences(self) -> Iterator[TemplateSequence]:
+        """Yield only the test suffix used for detector scoring.
+
+        Yields:
+            TemplateSequence: Sequences assigned to the test split.
+        """
+        rows_iter = self.iter_grouped_rows()
+        infer_template = functools.lru_cache(maxsize=50_000)(self.infer_template)
+        label_for_group = functools.lru_cache(maxsize=100_000)(self.label_for_group)
+
+        split_counts = self.split_count_hint()
+        train_limit = split_counts.train_count
+        test_start = split_counts.total_count - split_counts.test_count
+
+        for window_id, rows in enumerate(rows_iter):
+            if window_id >= test_start:
+                split_label = SplitLabel.TEST
+            elif window_id < train_limit:
+                split_label = SplitLabel.TRAIN
+            else:
+                split_label = SplitLabel.IGNORED
+            if split_label is not SplitLabel.TEST:
+                continue
+            seq = self._build_sequence(
+                window_id,
+                rows,
+                infer_template,
+                label_for_group,
+                split_label,
+                allow_group_label_fallback=False,
+            )
+            if seq is not None:
+                yield seq
 
     def __iter__(self) -> Iterator[TemplateSequence]:
         """Iterate over template sequences yielded by the configured grouping.
