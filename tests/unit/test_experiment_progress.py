@@ -161,6 +161,17 @@ def test_iter_train_sequences_keeps_late_train_sequences_by_default() -> None:
     assert [sequence.window_id for sequence in sequences] == [1, 3]
 
 
+def test_sequence_factory_train_sequences_falls_back_to_generic_replay() -> None:
+    """SequenceFactory should preserve the default filtered replay contract."""
+    factory = SequenceFactory(
+        factory=lambda: iter(_interleaved_sequence_stream()),
+    )
+
+    sequences = list(factory.train_sequences())
+
+    assert [sequence.window_id for sequence in sequences] == [1, 3]
+
+
 def test_run_model_uses_bounded_train_factory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

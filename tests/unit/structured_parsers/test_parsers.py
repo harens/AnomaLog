@@ -116,6 +116,12 @@ def test_bgl_parser_keeps_row_when_epoch_fallback_is_unparseable(
     assert parsed.timestamp_unix_ms is None
 
 
+def test_thunderbird_raw_label_for_line_skips_blank_and_malformed_rows() -> None:
+    """Thunderbird raw-label parsing should reject blank and malformed lines."""
+    assert ThunderbirdParser.raw_label_for_line("   ") is None
+    assert ThunderbirdParser.raw_label_for_line("not a thunderbird line") is None
+
+
 def test_structured_parser_registry_resolves_builtins() -> None:
     """Built-in structured parsers register themselves by config name."""
     assert resolve_structured_parser("bgl") is BGLParser

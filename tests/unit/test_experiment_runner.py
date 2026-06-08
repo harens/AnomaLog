@@ -599,6 +599,7 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
             {"name": "template_frequency"},
             config_type=TemplateFrequencyModelConfig,
         ),
+        applied_overrides={"dataset.train_fraction": 0.25},
         concrete_name="demo",
     )
     result_paths = ResultPaths(
@@ -650,6 +651,10 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
             "Skipping exact sequence split count hint for demo because the "
             "raw-entry before-grouping split would require a full replay",
         )
+        for message in caplog.messages
+    )
+    assert any(
+        message.startswith("Applied overrides: {'dataset.train_fraction': 0.25}")
         for message in caplog.messages
     )
     assert saw_progress_plan_none

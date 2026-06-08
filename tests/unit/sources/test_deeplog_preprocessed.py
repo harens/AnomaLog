@@ -13,11 +13,14 @@ from anomalog.sources.contracts import DatasetSource
 from anomalog.sources.deeplog_preprocessed import (
     FileBoundarySplitProvenance,
     NormalOnlySessionPrefixProvenance,
+    RawLogSegmentProvenance,
     build_labelled_raw_file_boundary_provenance,
     build_normal_only_session_prefix_provenance,
+    build_raw_log_segment_provenance,
     build_session_file_boundary_provenance,
     materialise_labelled_raw_stream,
     materialise_labelled_session_stream,
+    materialise_raw_log_segment,
 )
 from anomalog.sources.openstack import materialise_openstack_deeplog_parameter_ci_subset
 
@@ -368,6 +371,55 @@ def test_post_processed_source_reports_known_split_provenance(
         post_process=lambda _source_root, _raw_logs_path: None,
     )
     assert unrelated_source.split_provenance is None
+
+
+def test_post_processed_source_reports_raw_segment_provenance(
+    tmp_path: Path,
+) -> None:
+    """Raw-segment helpers should expose the derived slice boundary.
+
+    Args:
+        tmp_path (Path): Temporary directory used to stage the synthetic
+            source tree.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    segment = build_raw_log_segment_provenance(
+        source_log_relpath=Path("Thunderbird.log"),
+        start_line=4,
+        line_limit=8,
+    )
+    assert segment == RawLogSegmentProvenance(
+        split_source="raw_log_segment",
+        source_log_relpath="Thunderbird.log",
+        start_line=4,
+        line_limit=8,
+    )
+    expected_end_line_exclusive = 12
+    assert segment.end_line_exclusive == expected_end_line_exclusive
+    assert segment.as_dict() == {
+        "split_source": "raw_log_segment",
+        "source_log_relpath": "Thunderbird.log",
+        "start_line": 4,
+        "line_limit": 8,
+        "start_line_zero_based": 3,
+        "end_line_exclusive": expected_end_line_exclusive,
+        "inclusive_start": 4,
+        "exclusive_end": expected_end_line_exclusive,
+    }
+
+    derived_source = PostProcessedSource(
+        base_source=_StubSource(source_root),
+        post_process=partial(
+            materialise_raw_log_segment,
+            source_log_relpath=Path("Thunderbird.log"),
+            start_line=4,
+            line_limit=8,
+        ),
+    )
+
+    assert derived_source.split_provenance == segment
 
 
 def test_post_processed_source_materialise_reports_missing_output_file(

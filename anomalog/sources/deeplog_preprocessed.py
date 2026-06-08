@@ -151,7 +151,12 @@ class RawLogSegmentProvenance:
         return self.start_line + self.line_limit
 
     def as_dict(self) -> dict[str, object]:
-        """Return a JSON-friendly provenance summary."""
+        """Return a JSON-friendly provenance summary.
+
+        Returns:
+            dict[str, object]: Provenance metadata suitable for serialising in
+                manifests and reports.
+        """
         return {
             "split_source": self.split_source,
             "source_log_relpath": self.source_log_relpath,
@@ -261,6 +266,11 @@ def build_raw_log_segment_provenance(
 ) -> RawLogSegmentProvenance:
     """Build provenance metadata for a contiguous raw-line segment.
 
+    Args:
+        source_log_relpath (Path): Relative path of the source log slice.
+        start_line (int): Inclusive 1-based raw line at which the slice starts.
+        line_limit (int): Maximum number of raw lines retained from the source.
+
     Returns:
         RawLogSegmentProvenance: Provenance for a contiguous raw-line slice.
     """
@@ -305,6 +315,15 @@ class PostProcessedSource(DatasetSource):
         if isinstance(self.post_process, partial):
             keywords = self.post_process.keywords
             if keywords is not None:
+                if self.post_process.func is materialise_raw_log_segment:
+                    return build_raw_log_segment_provenance(
+                        source_log_relpath=keywords.get(
+                            "source_log_relpath",
+                            Path("Thunderbird.log"),
+                        ),
+                        start_line=int(keywords["start_line"]),
+                        line_limit=int(keywords["line_limit"]),
+                    )
                 split_files = keywords.get("split_files")
                 if split_files is not None:
                     if self.post_process.func is materialise_labelled_session_stream:
@@ -336,15 +355,6 @@ class PostProcessedSource(DatasetSource):
                     elif self.post_process.func is materialise_labelled_raw_stream:
                         provenance = build_labelled_raw_file_boundary_provenance(
                             split_files,
-                        )
-                    elif self.post_process.func is materialise_raw_log_segment:
-                        provenance = build_raw_log_segment_provenance(
-                            source_log_relpath=keywords.get(
-                                "source_log_relpath",
-                                Path("Thunderbird.log"),
-                            ),
-                            start_line=int(keywords["start_line"]),
-                            line_limit=int(keywords["line_limit"]),
                         )
         return provenance
 
