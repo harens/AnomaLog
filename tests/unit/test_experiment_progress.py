@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
+import pytest
 from rich.progress import Progress
 from typing_extensions import override
 
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    import pytest
 
 EXPECTED_TEST_SEQUENCE_COUNT = 2
 
@@ -170,6 +170,99 @@ def test_sequence_factory_train_sequences_falls_back_to_generic_replay() -> None
     sequences = list(factory.train_sequences())
 
     assert [sequence.window_id for sequence in sequences] == [1, 3]
+
+
+def test_run_model_can_skip_event_mask_filter_for_pure_test_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pure test-suffix streams should not pay the generic mask filter cost."""
+
+    @dataclass(slots=True)
+    class _RecordingDetector(ExperimentDetector):
+        detector_name: ClassVar[str] = "recording"
+        seen_test_windows: list[int] = field(default_factory=list)
+
+        @override
+        def fit(
+            self,
+            train_sequences: Iterable[TemplateSequence],
+            *,
+            progress: Progress,
+            logger: logging.Logger | None = None,
+        ) -> None:
+            del train_sequences, progress, logger
+
+        @override
+        def predict(self, sequence: TemplateSequence) -> PredictionOutcome:
+            assert sequence.split_label is SplitLabel.TEST
+            self.seen_test_windows.append(sequence.window_id)
+            return PredictionOutcome(predicted_label=0, score=0.0)
+
+        @override
+        def model_manifest(self, *, sequence_summary: SequenceSummary) -> ModelManifest:
+            del sequence_summary
+            return ModelManifest(
+                detector=self.detector_name,
+                train_sequence_count=0,
+                test_sequence_count=0,
+                train_label_counts={},
+                test_label_counts={},
+            )
+
+    sequences = [
+        _sequence(2, templates=["test-a"], label=0, split_label=SplitLabel.TEST),
+        _sequence(3, templates=["test-b"], label=1, split_label=SplitLabel.TEST),
+    ]
+    progress = Progress(disable=True)
+
+    def _progress_factory(unit: str | None = None) -> Progress:
+        del unit
+        return progress
+
+    monkeypatch.setattr(
+        "experiments.models.evaluate.make_count_progress",
+        _progress_factory,
+    )
+    monkeypatch.setattr(
+        "experiments.models.evaluate.evaluation_event_mask_for_sequence",
+        lambda _sequence: pytest.fail(
+            "pure test streams should not be re-filtered by evaluation masks",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "experiments.models.evaluate.evaluation_event_mask_for_sequence",
+        lambda _sequence: pytest.fail(
+            "pure test streams should not be re-filtered by evaluation masks",
+        ),
+    )
+    monkeypatch.setattr(
+        TemplateFrequencyModelConfig,
+        "build_detector",
+        lambda _self: _RecordingDetector(),
+    )
+
+    summary = run_model(
+        sequence_factory=SequenceFactory(
+            factory=lambda: iter(sequences),
+            train_factory=lambda: iter(()),
+            test_factory=lambda: iter(sequences),
+            test_sequences_are_pure=True,
+        ),
+        config=decode_experiment_model_config(
+            {"name": "template_frequency"},
+            config_type=TemplateFrequencyModelConfig,
+        ),
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "predictions.jsonl",
+            write_predictions=False,
+        ),
+        logger=logging.getLogger("tests.run_model.pure_test"),
+        progress_plan=None,
+    )
+
+    assert summary.sequence_summary.test_sequence_count == len(sequences)
 
 
 def test_run_model_uses_bounded_train_factory(

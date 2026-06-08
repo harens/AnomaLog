@@ -220,8 +220,20 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             PredictionOutcome: Predicted label and anomaly score for the sequence.
         """
+        pure_test_stream = (
+            sequence.split_label is SplitLabel.TEST
+            and sequence.evaluation_event_mask is None
+        )
         if sequence.event_labels is None:
-            score = self.score(sequence)
+            if pure_test_stream:
+                score = self._score_sequence_templates(sequence.events)
+            else:
+                score = self.score(sequence)
+        elif pure_test_stream:
+            score = self._score_sequence_and_event_metrics_from_events(
+                sequence.events,
+                sequence.event_labels,
+            )
         else:
             score = self._score_sequence_and_event_metrics(sequence)
         predicted_label = int(score > self.score_threshold)
@@ -267,6 +279,11 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         Returns:
             float: Mean negative log-probability under the learned template model.
         """
+        if (
+            sequence.split_label is SplitLabel.TEST
+            and sequence.evaluation_event_mask is None
+        ):
+            return self._score_sequence_templates(sequence.events)
         templates = _eligible_evaluation_templates(sequence)
         return self._score_templates(templates)
 
@@ -297,6 +314,39 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
             loss_sum += self._score_template(template)
         return loss_sum / len(templates)
 
+    def _score_sequence_templates(
+        self,
+        events: list[tuple[str, list[str], int | None]],
+    ) -> float:
+        """Return the mean loss for a pure test sequence without mask setup."""
+        if not events:
+            return 0.0
+        loss_sum = 0.0
+        for template, _, _ in events:
+            loss_sum += self._score_template(template)
+        return loss_sum / len(events)
+
+    def _score_sequence_and_event_metrics_from_events(
+        self,
+        events: list[tuple[str, list[str], int | None]],
+        event_labels: tuple[int | None, ...],
+    ) -> float:
+        """Return a sequence score while updating event-level metrics."""
+        if not events:
+            return 0.0
+        loss_sum = 0.0
+        for (template, _, _), actual_label in zip(events, event_labels, strict=True):
+            loss = self._score_template(template)
+            loss_sum += loss
+            if actual_label is None:
+                continue
+            predicted_label = int(loss > self.event_score_threshold)
+            self._event_level_state.record(
+                actual_label=actual_label,
+                predicted_label=predicted_label,
+            )
+        return loss_sum / len(events)
+
     def _score_sequence_and_event_metrics(
         self,
         sequence: TemplateSequence,
@@ -312,6 +362,14 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         event_labels = sequence.event_labels
         if event_labels is None:
             return self.score(sequence)
+        if (
+            sequence.split_label is SplitLabel.TEST
+            and sequence.evaluation_event_mask is None
+        ):
+            return self._score_sequence_and_event_metrics_from_events(
+                sequence.events,
+                event_labels,
+            )
         eligible_event_mask = _evaluation_event_mask(sequence)
         event_count = len(sequence.events)
         if event_count == 0:

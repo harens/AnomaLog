@@ -52,11 +52,15 @@ class SequenceFactory:
         test_factory (Callable[[], Iterator[TemplateSequence]] | None):
             Optional bounded replay used when the protocol exposes a cheaper
             test-suffix traversal.
+        test_sequences_are_pure (bool): Whether `test_factory` already yields
+            only evaluation-target sequences, allowing the scoring loop to skip
+            the generic event-mask filter.
     """
 
     factory: Callable[[], Iterator[TemplateSequence]]
     train_factory: Callable[[], Iterator[TemplateSequence]] | None = None
     test_factory: Callable[[], Iterator[TemplateSequence]] | None = None
+    test_sequences_are_pure: bool = False
 
     def __call__(self) -> Iterator[TemplateSequence]:
         """Return the underlying lazy sequence stream.
@@ -284,13 +288,23 @@ def run_model(
         train_progress_hint=None if progress_plan is None else progress_plan.train,
     )
     if sequence_factory.test_factory is not None:
-        test_metrics = stream_predictions(
-            detector=detector,
-            sequence_factory=sequence_factory.test_sequences,
-            prediction_output=prediction_output,
-            logger=logger,
-            score_progress_hint=None if progress_plan is None else progress_plan.score,
-        )
+        score_hint = None if progress_plan is None else progress_plan.score
+        if sequence_factory.test_sequences_are_pure:
+            test_metrics = stream_pure_test_predictions(
+                detector=detector,
+                sequence_factory=sequence_factory.test_sequences,
+                prediction_output=prediction_output,
+                logger=logger,
+                score_progress_hint=score_hint,
+            )
+        else:
+            test_metrics = stream_predictions(
+                detector=detector,
+                sequence_factory=sequence_factory.test_sequences,
+                prediction_output=prediction_output,
+                logger=logger,
+                score_progress_hint=score_hint,
+            )
         accumulator = _merge_train_and_test_metrics(
             train_metrics=train_metrics,
             test_metrics=test_metrics,
@@ -477,6 +491,78 @@ def _iter_prediction_inputs(
         return
     for sequence in test_sequences:
         yield sequence, detector.predict(sequence)
+
+
+def stream_pure_test_predictions(
+    *,
+    detector: ExperimentDetector,
+    sequence_factory: Callable[[], Iterator[TemplateSequence]],
+    prediction_output: PredictionOutputConfig,
+    logger: logging.Logger,
+    score_progress_hint: ProgressHint | None = None,
+) -> RunMetrics:
+    """Write pure test predictions incrementally while accumulating metrics.
+
+    Args:
+        detector (ExperimentDetector): Fitted detector to evaluate.
+        sequence_factory (Callable[[], Iterator[TemplateSequence]]): Factory
+            producing only test-split sequences.
+        prediction_output (PredictionOutputConfig): Prediction stream settings.
+        logger (logging.Logger): Logger for progress messages.
+        score_progress_hint (ProgressHint | None): Exact bounded test-scoring
+            progress metadata when known cheaply by the caller.
+
+    Returns:
+        RunMetrics: Accumulated metrics for the streamed run.
+    """
+    accumulator = RunMetrics()
+    file_context = (
+        prediction_output.predictions_path.open("w", encoding="utf-8")
+        if prediction_output.write_predictions
+        else nullcontext(None)
+    )
+    with (
+        file_context as file_obj,
+        make_count_progress(
+            unit=None if score_progress_hint is None else score_progress_hint.unit,
+        ) as progress,
+    ):
+        score_task = progress.add_task(
+            score_stage_description(detector.detector_name),
+            total=None if score_progress_hint is None else score_progress_hint.total,
+        )
+        test_sequences = sequence_factory()
+        if isinstance(detector, BatchExperimentDetector):
+            iterator = detector.predict_all(test_sequences)
+            for sequence, outcome in iterator:
+                prediction = outcome.to_prediction_record(sequence)
+                abstained = _prediction_is_abstained(outcome)
+                if file_obj is not None:
+                    file_obj.write(
+                        msgspec.json.encode(prediction.to_dict()).decode("utf-8"),
+                    )
+                    file_obj.write("\n")
+                accumulator.record_test(sequence, outcome, abstained=abstained)
+                progress.advance(score_task)
+            return accumulator
+        for sequence in test_sequences:
+            outcome = detector.predict(sequence)
+            prediction = outcome.to_prediction_record(sequence)
+            abstained = _prediction_is_abstained(outcome)
+            if file_obj is not None:
+                file_obj.write(
+                    msgspec.json.encode(prediction.to_dict()).decode("utf-8"),
+                )
+                file_obj.write("\n")
+            accumulator.record_test(sequence, outcome, abstained=abstained)
+            progress.advance(score_task)
+            if accumulator.test_sequence_count % _PROGRESS_EVERY == 0:
+                logger.info(
+                    "Processed %s test sequences for %s detector",
+                    accumulator.test_sequence_count,
+                    detector.detector_name,
+                )
+    return accumulator
 
 
 def _iter_test_sequences(

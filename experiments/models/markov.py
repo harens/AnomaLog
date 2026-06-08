@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 import msgspec
 
+from anomalog.sequences import SplitLabel
 from experiments.models.base import (
     ExperimentDetector,
     ExperimentModelConfig,
@@ -27,7 +28,7 @@ from experiments.models.event_level_detection import (
 )
 from experiments.models.progress import fit_stage_description
 from experiments.models.sequence_masks import (
-    evaluation_event_index_mask,
+    evaluation_event_mask_for_sequence,
     training_event_index_mask,
 )
 
@@ -267,15 +268,35 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         prefix_templates = (
             self._stream_context_templates if sequence.continuous_context else []
         )
-        score = self._score_sequence(
-            sequence,
-            eligible_target_indexes=set(evaluation_event_index_mask(sequence)),
-            prefix_templates=prefix_templates,
+        pure_test_stream = (
+            sequence.split_label is SplitLabel.TEST
+            and sequence.evaluation_event_mask is None
         )
-        self._record_event_level_predictions(
-            sequence,
-            prefix_templates=prefix_templates,
-        )
+        if sequence.event_labels is None:
+            if pure_test_stream:
+                score = self._score_sequence(
+                    sequence,
+                    prefix_templates=prefix_templates,
+                )
+            else:
+                score = self._score_sequence(
+                    sequence,
+                    eligible_target_mask=evaluation_event_mask_for_sequence(sequence),
+                    prefix_templates=prefix_templates,
+                )
+        elif pure_test_stream:
+            score = self._score_sequence(
+                sequence,
+                prefix_templates=prefix_templates,
+                event_labels=sequence.event_labels,
+            )
+        else:
+            score = self._score_sequence(
+                sequence,
+                eligible_target_mask=evaluation_event_mask_for_sequence(sequence),
+                prefix_templates=prefix_templates,
+                event_labels=sequence.event_labels,
+            )
         self._advance_stream_context(
             sequence=sequence,
             prefix_templates=prefix_templates,
@@ -319,9 +340,21 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             float: Mean negative log transition probability under the learned
             Markov model.
         """
+        if (
+            sequence.split_label is SplitLabel.TEST
+            and sequence.evaluation_event_mask is None
+        ):
+            return self._score_sequence(
+                sequence,
+                prefix_templates=(
+                    self._stream_context_templates
+                    if sequence.continuous_context
+                    else []
+                ),
+            )
         return self._score_sequence(
             sequence,
-            eligible_target_indexes=set(evaluation_event_index_mask(sequence)),
+            eligible_target_mask=evaluation_event_mask_for_sequence(sequence),
             prefix_templates=(
                 self._stream_context_templates if sequence.continuous_context else []
             ),
@@ -331,8 +364,10 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
         self,
         sequence: TemplateSequence,
         *,
-        eligible_target_indexes: set[int] | None,
+        eligible_target_indexes: set[int] | None = None,
+        eligible_target_mask: tuple[bool, ...] | None = None,
         prefix_templates: list[str] | None,
+        event_labels: tuple[int | None, ...] | None = None,
     ) -> float:
         """Return the masked mean negative log transition probability.
 
@@ -340,28 +375,34 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             sequence (TemplateSequence): Sequence to score.
             eligible_target_indexes (set[int] | None): Optional target indexes
                 allowed to contribute to the score.
+            eligible_target_mask (tuple[bool, ...] | None): Optional per-event
+                evaluation eligibility mask.
             prefix_templates (list[str] | None): Optional trailing context from
                 the previous chronological chunk.
+            event_labels (tuple[int | None, ...] | None): Optional per-event
+                labels to accumulate event-level metrics while scoring.
 
         Returns:
             float: Mean negative log transition probability over the eligible
             transitions in the sequence.
         """
-        transitions = [
-            (context, next_template)
-            for target_index, context, next_template in _sequence_transitions(
-                sequence.templates,
-                self.order,
-                prefix_templates=prefix_templates,
-            )
-            if eligible_target_indexes is None
-            or target_index in eligible_target_indexes
-        ]
-        if not transitions:
-            return 0.0
         vocabulary_size = max(len(self.normal_template_vocabulary), 1)
         loss_sum = 0.0
-        for context, next_template in transitions:
+        transition_count = 0
+        for target_index, context, next_template in _sequence_transitions(
+            sequence.templates,
+            self.order,
+            prefix_templates=prefix_templates,
+        ):
+            if eligible_target_mask is not None:
+                if target_index >= len(eligible_target_mask):
+                    continue
+                if not eligible_target_mask[target_index]:
+                    continue
+            elif eligible_target_indexes is not None and (
+                target_index not in eligible_target_indexes
+            ):
+                continue
             numerator = (
                 self.transition_counts_by_context.get(context, Counter()).get(
                     next_template,
@@ -372,8 +413,24 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
             denominator = self.context_counts.get(context, 0) + (
                 self.smoothing * vocabulary_size
             )
-            loss_sum += -math.log(numerator / denominator)
-        return loss_sum / len(transitions)
+            transition_score = -math.log(numerator / denominator)
+            loss_sum += transition_score
+            transition_count += 1
+            if event_labels is None:
+                continue
+            if target_index >= len(event_labels):
+                continue
+            actual_label = event_labels[target_index]
+            if actual_label is None:
+                continue
+            predicted_label = int(transition_score > self.event_score_threshold)
+            self._event_level_state.record(
+                actual_label=actual_label,
+                predicted_label=predicted_label,
+            )
+        if transition_count == 0:
+            return 0.0
+        return loss_sum / transition_count
 
     def _learn_sequence(
         self,
@@ -459,46 +516,6 @@ class MarkovDetector(SingleFitMixin, ExperimentDetector):
                 ),
             )
         return prepared_sequence, []
-
-    def _record_event_level_predictions(
-        self,
-        sequence: TemplateSequence,
-        *,
-        prefix_templates: list[str] | None,
-    ) -> None:
-        """Accumulate event-level confusion counts for one scored sequence.
-
-        Args:
-            sequence (TemplateSequence): Sequence whose labelled events should
-                be scored.
-            prefix_templates (list[str] | None): Optional trailing history from
-                the previous chronological chunk.
-        """
-        if sequence.event_labels is None:
-            return
-        eligible_target_indexes = set(evaluation_event_index_mask(sequence))
-        if not eligible_target_indexes:
-            return
-        for target_index, context, next_template in _sequence_transitions(
-            sequence.templates,
-            self.order,
-            prefix_templates=prefix_templates,
-        ):
-            if target_index not in eligible_target_indexes:
-                continue
-            if target_index >= len(sequence.event_labels):
-                continue
-            actual_label = sequence.event_labels[target_index]
-            if actual_label is None:
-                continue
-            predicted_label = int(
-                self._transition_score(context, next_template)
-                > self.event_score_threshold,
-            )
-            self._event_level_state.record(
-                actual_label=actual_label,
-                predicted_label=predicted_label,
-            )
 
     def _transition_score(self, context: tuple[str, ...], next_template: str) -> float:
         """Return the negative log transition probability for one event.
