@@ -59,7 +59,11 @@ class _EmptyThenFullGroupsBuilder(EntitySequenceBuilder):
 
 
 class _DelimitedParser(DelimitedLabelledEventParser):
-    """Parser for the temporary raw-source benchmark fixture."""
+    """Parser for the temporary raw-source benchmark fixture.
+
+    Attributes:
+        name (ClassVar[str]): Registry name used by the test helper.
+    """
 
     name: ClassVar[str] = "delimited"
 
@@ -75,7 +79,13 @@ class _DelimitedParser(DelimitedLabelledEventParser):
 
 
 class _UpperTemplateParser(IdentityTemplateParser):
-    """Template parser fixture that is intentionally not identity."""
+    """Template parser fixture that is intentionally not identity.
+
+    Attributes:
+        name (ClassVar[str]): Registry name used by the test helper.
+        is_identity_parser (ClassVar[bool]): Explicitly disabled so the raw
+            replay path exercises the non-identity branch under test.
+    """
 
     name: ClassVar[str] = "upper"
     is_identity_parser: ClassVar[bool] = False
@@ -138,6 +148,65 @@ def test_before_grouping_split_counts_cover_empty_and_empty_group_cases() -> Non
         ignored_count=0,
         test_count=0,
     )
+
+
+def test_before_grouping_raw_entry_helpers_count_train_test_and_straddlers() -> None:
+    """Raw-entry counting helpers should accumulate per-group diagnostics.
+
+    The helper is exercised through the public split-summary builder so the
+    regression stays aligned with the supported API surface.
+    """
+    expected_train_raw_entry_count = 2
+    expected_test_raw_entry_count = 2
+    builder = EntitySequenceBuilder(
+        sink=_sink(
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=100,
+                entity_id="entity-a",
+                untemplated_message_text="train-normal",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=1,
+                timestamp_unix_ms=101,
+                entity_id="entity-a",
+                untemplated_message_text="train-anomalous",
+                anomalous=1,
+            ),
+            structured_line(
+                line_order=3,
+                timestamp_unix_ms=102,
+                entity_id="entity-a",
+                untemplated_message_text="test-normal",
+                anomalous=0,
+            ),
+            structured_line(
+                line_order=4,
+                timestamp_unix_ms=103,
+                entity_id="entity-b",
+                untemplated_message_text="test-anomalous",
+                anomalous=1,
+            ),
+        ),
+        infer_template=_upper_template,
+        label_for_group=lambda _: 0,
+        split_mode=RawEntrySplitMode.PREFIX_COUNT,
+        split_application_order=SplitApplicationOrder.BEFORE_GROUPING,
+        straddling_group_policy=StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+        train_entry_count=2,
+    )
+
+    summary = builder.build_raw_entry_split_summary()
+
+    assert summary is not None
+    assert summary.train_raw_entry_count == expected_train_raw_entry_count
+    assert summary.train_normal_entry_count == 1
+    assert summary.train_anomalous_entry_count == 1
+    assert summary.test_raw_entry_count == expected_test_raw_entry_count
+    assert summary.test_normal_entry_count == 1
+    assert summary.test_anomalous_entry_count == 1
+    assert summary.straddling_group_count == 1
 
 
 def test_before_grouping_group_counts_cover_ignored_and_empty_segments() -> None:
@@ -408,7 +477,13 @@ def test_before_grouping_test_replay_uses_raw_source_resume(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Raw-entry test replay should resume from the raw source cutoff."""
+    """Raw-entry test replay should resume from the raw source cutoff.
+
+    Args:
+        tmp_path (Path): Temporary directory that holds the synthetic raw log.
+        caplog (pytest.LogCaptureFixture): Capture fixture used to assert the
+            resume log line is emitted.
+    """
     caplog.set_level("INFO", logger="anomalog.sequences")
     raw_path = tmp_path / "raw.log"
     raw_path.write_text(
@@ -454,7 +529,13 @@ def test_before_grouping_training_replay_caches_raw_source_offset(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Raw-entry training replay should cache the test boundary offset."""
+    """Raw-entry training replay should cache the test boundary offset.
+
+    Args:
+        tmp_path (Path): Temporary directory that holds the synthetic raw log.
+        caplog (pytest.LogCaptureFixture): Capture fixture used to assert the
+            cached-offset log line is emitted.
+    """
     caplog.set_level("INFO", logger="anomalog.sequences")
     raw_path = tmp_path / "raw.log"
     raw_path.write_text(
@@ -499,7 +580,13 @@ def test_before_grouping_test_replay_uses_dense_raw_source_resume(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Dense raw-session replay should resume without rebuilding the prefix."""
+    """Dense raw-session replay should resume without rebuilding the prefix.
+
+    Args:
+        tmp_path (Path): Temporary directory that holds the synthetic raw log.
+        caplog (pytest.LogCaptureFixture): Capture fixture used to assert the
+            cached-offset log line is emitted.
+    """
     caplog.set_level("INFO", logger="anomalog.sequences")
     raw_path = tmp_path / "raw.log"
     raw_path.write_text(
@@ -547,7 +634,12 @@ def test_before_grouping_test_replay_uses_dense_raw_source_resume(
 def test_before_grouping_raw_entry_summary_streams_and_caches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Raw-entry split summaries should stream once and then reuse the cache."""
+    """Raw-entry split summaries should stream once and then reuse the cache.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to observe that the
+            summary calculation only scans the grouped stream once.
+    """
     sink = _sink(
         structured_line(
             line_order=0,

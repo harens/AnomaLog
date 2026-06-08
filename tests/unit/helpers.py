@@ -206,6 +206,10 @@ class InMemoryStructuredSink(StructuredSink):
     ) -> Callable[[], Iterator[Sequence[StructuredLine]]]:
         """Yield suffix groups from stored rows at or after a line-order cut.
 
+        Args:
+            min_line_order (int): Inclusive lower bound on the raw line order
+                used to build the suffix grouping.
+
         Returns:
             Callable[[], Iterator[Sequence[StructuredLine]]]: Zero-argument
                 callable yielding grouped suffix rows by entity.

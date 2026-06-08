@@ -14,7 +14,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from itertools import islice
-from typing import TYPE_CHECKING, Protocol, TypeGuard, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeGuard, runtime_checkable
 
 from typing_extensions import Self, override
 
@@ -52,11 +52,23 @@ if TYPE_CHECKING:
 
 _DENSE_RAW_SESSION_FIELD_COUNT = 3
 _LOGGER = logging.getLogger(__name__)
+SuffixGroupIterFactory: TypeAlias = Callable[
+    [int],
+    Callable[[], Iterator[Collection[StructuredLine]]],
+]
 
 
 @dataclass(slots=True)
 class _BeforeGroupingRawReplayState:
-    """Mutable cache for the raw-file boundary used by before-grouping splits."""
+    """Mutable cache for the raw-file boundary used by before-grouping splits.
+
+    Attributes:
+        test_start_byte_offset (int | None): Cached raw-file byte offset for
+            the start of the test suffix, or `None` when not yet known.
+        raw_entry_split_summary (RawEntrySplitSummary | None): Cached raw-entry
+            split diagnostics for the current before-grouping split, or `None`
+            when the summary has not yet been built.
+    """
 
     test_start_byte_offset: int | None = None
     raw_entry_split_summary: RawEntrySplitSummary | None = None
@@ -64,7 +76,20 @@ class _BeforeGroupingRawReplayState:
 
 @dataclass(slots=True)
 class _BeforeGroupingRawEntrySummaryCounts:
-    """Accumulate raw-entry split diagnostics in one streaming pass."""
+    """Accumulate raw-entry split diagnostics in one streaming pass.
+
+    Attributes:
+        train_normal_entry_count (int): Number of normal raw entries assigned
+            to the training prefix.
+        train_anomalous_entry_count (int): Number of anomalous raw entries
+            assigned to the training prefix.
+        test_normal_entry_count (int): Number of normal raw entries assigned to
+            the test suffix.
+        test_anomalous_entry_count (int): Number of anomalous raw entries
+            assigned to the test suffix.
+        straddling_group_count (int): Number of grouped windows that crossed the
+            raw-entry split boundary.
+    """
 
     train_normal_entry_count: int = 0
     train_anomalous_entry_count: int = 0
@@ -89,6 +114,11 @@ def _count_before_grouping_raw_group_entries(
     cutoff_entry_index: int,
 ) -> tuple[int, int, int, int, int]:
     """Count the raw entries emitted by one grouped window.
+
+    Args:
+        rows (Collection[StructuredLine]): Grouped structured rows to inspect.
+        cutoff_entry_index (int): Raw-entry boundary where the test suffix
+            begins.
 
     Returns:
         tuple[int, int, int, int, int]: Train normal, train anomalous, test
@@ -131,6 +161,12 @@ def _count_before_grouping_raw_entry_summary(
 ) -> _BeforeGroupingRawEntrySummaryCounts:
     """Count raw-entry split diagnostics in one streaming pass.
 
+    Args:
+        groups (Iterable[Collection[StructuredLine]]): Grouped structured rows
+            to scan in source order.
+        cutoff_entry_index (int): Raw-entry boundary where the test suffix
+            begins.
+
     Returns:
         _BeforeGroupingRawEntrySummaryCounts: Accumulated diagnostics for the
             grouped raw-entry replay path.
@@ -162,7 +198,11 @@ class _SupportsEntityCount(Protocol):
     """Sink capability for providing an exact entity count."""
 
     def load_entity_count(self) -> int | None:
-        """Return a cached entity count when available."""
+        """Return a cached entity count when available.
+
+        Returns:
+            int | None: Cached entity count, or `None` when unavailable.
+        """
 
 
 @runtime_checkable
@@ -170,7 +210,12 @@ class _SupportsEntityChronologyIndex(Protocol):
     """Sink capability for exposing entity chronology metadata."""
 
     def load_entity_chronology_index(self) -> dict[str, EntityChronologyKey]:
-        """Return the materialised entity chronology index."""
+        """Return the materialised entity chronology index.
+
+        Returns:
+            dict[str, EntityChronologyKey]: Materialised entity chronology
+                metadata keyed by entity id.
+        """
 
 
 @runtime_checkable
@@ -178,7 +223,12 @@ class _SupportsInlineLabelCache(Protocol):
     """Sink capability for exposing sparse inline anomaly labels."""
 
     def load_inline_label_cache(self) -> tuple[dict[int, int], dict[str, int]]:
-        """Return sparse inline label caches keyed by line and group."""
+        """Return sparse inline label caches keyed by line and group.
+
+        Returns:
+            tuple[dict[int, int], dict[str, int]]: Sparse line-order and
+                entity-id anomaly label caches.
+        """
 
 
 @runtime_checkable
@@ -189,7 +239,16 @@ class _SupportsEntitySequenceSuffixScan(Protocol):
         self,
         min_line_order: int,
     ) -> Callable[[], Iterator[Collection[StructuredLine]]]:
-        """Return a suffix-only entity grouping iterator factory."""
+        """Return a suffix-only entity grouping iterator factory.
+
+        Args:
+            min_line_order (int): Inclusive lower bound on the raw line order
+                used to build the suffix grouping.
+
+        Returns:
+            Callable[[], Iterator[Collection[StructuredLine]]]: Zero-argument
+                callable yielding grouped suffix rows by entity.
+        """
 
 
 class SplitLabel(str, Enum):
@@ -236,7 +295,12 @@ class StraddlingGroupPolicy(str, Enum):
 
 
 class FixedWindowBasis(str, Enum):
-    """What positional basis to use for fixed-size windows."""
+    """What positional basis to use for fixed-size windows.
+
+    Attributes:
+        COMPACTED_ROWS: Build windows over compacted structured rows.
+        RAW_POSITIONS: Build windows over raw line positions.
+    """
 
     COMPACTED_ROWS = "compacted_rows"
     RAW_POSITIONS = "raw_positions"
@@ -520,11 +584,13 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         sink (StructuredSink): Structured sink supplying grouped rows.
         infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
             Template inference function for row message text.
-    label_for_group (Callable[[str], int | None]): Group-level anomaly label
-        lookup by entity id.
+        label_for_group (Callable[[str], int | None]): Group-level anomaly label
+            lookup by entity id.
         template_parser (TemplateParser | None): Optional parser object kept
             alongside `infer_template` so optimisation paths can inspect parser
             capabilities without peeking at bound-method metadata.
+        raw_replay_state (_BeforeGroupingRawReplayState): Mutable cache reused
+            by before-grouping raw-entry split paths.
         split_mode (RawEntrySplitMode | None): Raw-entry split mode used for
             special reproduction protocols. `None` preserves the legacy
             sequence-fraction split behaviour.
@@ -836,13 +902,21 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         return None
 
     def iter_training_sequences(self) -> Iterator[TemplateSequence]:
-        """Yield the training slice used by model fitting."""
+        """Yield the training slice used by model fitting.
+
+        Yields:
+            TemplateSequence: Sequences assigned to the training split.
+        """
         for sequence in self:
             if sequence.split_label is SplitLabel.TRAIN:
                 yield sequence
 
     def iter_test_sequences(self) -> Iterator[TemplateSequence]:
-        """Yield the test slice used by model scoring."""
+        """Yield the test slice used by model scoring.
+
+        Yields:
+            TemplateSequence: Sequences assigned to the test split.
+        """
         for sequence in self:
             if sequence.split_label is SplitLabel.TEST:
                 yield sequence
@@ -960,7 +1034,12 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
     def _build_before_grouping_raw_entry_split_summary(
         self,
     ) -> RawEntrySplitSummary | None:
-        """Return a specialised before-grouping summary when available."""
+        """Return a specialised before-grouping summary when available.
+
+        Returns:
+            RawEntrySplitSummary | None: Specialised before-grouping summary
+                when the subclass can compute one without full replay.
+        """
         del self
         return None
 
@@ -1665,6 +1744,13 @@ class EntitySequenceBuilder(SequenceBuilder):
     ) -> tuple[int, int, int, int]:
         """Count emitted sequences when straddlers are split into segments.
 
+        Args:
+            rows (Collection[StructuredLine]): Grouped structured rows.
+            row_label_values (dict[int, str]): Raw-entry split labels keyed by
+                ``line_order``.
+            label_for_group (Callable[[str], int | None]): Group-level anomaly
+                lookup used for normal-only training.
+
         Returns:
             tuple[int, int, int, int]: Total, train, ignored, and test emitted
                 sequence counts for the group.
@@ -1705,6 +1791,13 @@ class EntitySequenceBuilder(SequenceBuilder):
         label_for_group: Callable[[str], int | None],
     ) -> tuple[int, int, int, int]:
         """Count emitted sequences when straddlers resolve to one label.
+
+        Args:
+            rows (Collection[StructuredLine]): Grouped structured rows.
+            row_label_values (dict[int, str]): Raw-entry split labels keyed by
+                ``line_order``.
+            label_for_group (Callable[[str], int | None]): Group-level anomaly
+                lookup used for normal-only training.
 
         Returns:
             tuple[int, int, int, int]: Total, train, ignored, and test emitted
@@ -1761,6 +1854,10 @@ class EntitySequenceBuilder(SequenceBuilder):
         train population implied by the selected policy. We therefore avoid
         replaying the full suffix and instead materialise just the selected
         train entities or raw-prefix rows, depending on the straddler policy.
+
+        Yields:
+            TemplateSequence: Training-split sequences yielded by the
+                configured grouping strategy.
 
         Raises:
             ValueError: If the requested raw-entry split metadata is missing
@@ -2132,7 +2229,12 @@ class EntitySequenceBuilder(SequenceBuilder):
         yield from SequenceBuilder.iter_test_sequences(self)
 
     def _can_use_before_grouping_raw_source_test_path(self) -> bool:
-        """Return whether the raw source can resume from the test boundary."""
+        """Return whether the raw source can resume from the test boundary.
+
+        Returns:
+            bool: `True` when the before-grouping raw split can resume from a
+                cached byte offset in the raw source.
+        """
         return (
             self.split_mode is not None
             and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
@@ -2151,23 +2253,41 @@ class EntitySequenceBuilder(SequenceBuilder):
         )
 
     def _cache_before_grouping_test_start_byte_offset(self, offset: int) -> None:
-        """Remember where the test suffix starts in the raw source."""
+        """Remember where the test suffix starts in the raw source.
+
+        Args:
+            offset (int): Byte offset where the test suffix begins.
+        """
         if self.raw_replay_state.test_start_byte_offset is None:
             self.raw_replay_state.test_start_byte_offset = offset
 
     def _before_grouping_test_start_byte_offset(self) -> int | None:
-        """Return the cached raw-source offset for the test suffix, if known."""
+        """Return the cached raw-source offset for the test suffix, if known.
+
+        Returns:
+            int | None: Cached byte offset for the test suffix, or `None` when
+                the builder has not yet scanned the boundary.
+        """
         return self.raw_replay_state.test_start_byte_offset
 
     def _uses_identity_template_parser(self) -> bool:
-        """Return whether the builder is backed by the identity parser."""
+        """Return whether the builder is backed by the identity parser.
+
+        Returns:
+            bool: `True` when the builder carries an identity parser.
+        """
         return bool(
             self.template_parser is not None
             and self.template_parser.is_identity_parser,
         )
 
     def _uses_dense_raw_session_parser(self) -> bool:
-        """Return whether the raw compat source can be parsed directly."""
+        """Return whether the raw compat source can be parsed directly.
+
+        Returns:
+            bool: `True` when the source parser is the dense raw-session
+                parser used by the HDFS compat fixture.
+        """
         return self.sink.parser.__class__.__name__ == "DelimitedLabelledEventParser"
 
     def _iter_training_sequences_from_raw_source_prefix(  # noqa: C901
@@ -2178,6 +2298,17 @@ class EntitySequenceBuilder(SequenceBuilder):
         label_for_group: Callable[[str], int | None],
     ) -> Iterator[TemplateSequence]:
         """Yield train sequences by scanning the raw source up to the cutoff.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained prefix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Train-split sequences from the raw prefix only.
 
         The raw-source scan populates the cached test boundary offset so the
         paired test replay can resume at the exact cutoff without rescanning
@@ -2271,6 +2402,18 @@ class EntitySequenceBuilder(SequenceBuilder):
         label_for_group: Callable[[str], int | None],
     ) -> Iterator[TemplateSequence]:
         """Yield test sequences by resuming the raw source at the cutoff.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+            infer_template (Callable[[str], tuple[LogTemplate, ExtractedParameters]]):
+                Template inference function for the retained suffix rows.
+            label_for_group (Callable[[str], int | None]): Entity-level anomaly
+                label lookup.
+
+        Yields:
+            TemplateSequence: Test-side grouped sequences recovered from the
+            raw suffix.
 
         The compat session streams are already ordered by the raw-entry split
         key, so resuming from the raw file avoids rescanning the parquet cache
@@ -2369,6 +2512,13 @@ class EntitySequenceBuilder(SequenceBuilder):
         cutoff_entry_index: int,
     ) -> Iterator[TemplateSequence]:
         """Yield test sequences by slicing a dense raw session stream.
+
+        Args:
+            cutoff_entry_index (int): Raw-entry boundary where the test suffix
+                begins.
+
+        Yields:
+            TemplateSequence: Dense raw-session test-side sequences.
 
         The HDFS compat stream is a dense tab-separated session/event file and
         the identity template parser preserves the raw event text. In that
@@ -2476,10 +2626,7 @@ class EntitySequenceBuilder(SequenceBuilder):
         cutoff_entry_index: int,
         infer_template: Callable[[str], tuple[LogTemplate, ExtractedParameters]],
         label_for_group: Callable[[str], int | None],
-        suffix_group_iter_factory: Callable[
-            [int],
-            Callable[[], Iterator[Collection[StructuredLine]]],
-        ],
+        suffix_group_iter_factory: SuffixGroupIterFactory,
         chronology_index: dict[str, EntityChronologyKey],
     ) -> Iterator[TemplateSequence]:
         """Yield test sequences from a suffix-only grouped row scan.
@@ -2491,8 +2638,8 @@ class EntitySequenceBuilder(SequenceBuilder):
                 Template inference function for the retained suffix rows.
             label_for_group (Callable[[str], int | None]): Entity-level anomaly
                 label lookup.
-            suffix_group_iter_factory: Sink-level suffix iterator factory for
-                the suffix replay path.
+            suffix_group_iter_factory (SuffixGroupIterFactory):
+                Sink-level suffix iterator factory for the suffix replay path.
             chronology_index (dict[str, EntityChronologyKey]): Entity chronology
                 metadata used to exclude entities that started before the
                 cutoff when assign-by-first-event is active.
@@ -3073,7 +3220,14 @@ class NonEntitySequenceBuilder(SequenceBuilder):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class _RawPositionFixedWindow:
-    """Raw-position fixed-window payload used by Thunderbird reconstruction."""
+    """Raw-position fixed-window payload used by Thunderbird reconstruction.
+
+    Attributes:
+        window_id (int): Deterministic zero-based raw-position window index.
+        rows (tuple[StructuredLine, ...]): Structured rows retained for the
+            current raw-position window.
+        label (int): Binary anomaly label derived from the raw window.
+    """
 
     window_id: int
     rows: tuple[StructuredLine, ...]
@@ -3101,16 +3255,19 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
 
     @override
     def iter_grouped_rows(self) -> Iterator[Collection[StructuredLine]]:
-        """Yield rows grouped by fixed-size windows.
+        """Return rows grouped by fixed-size windows.
 
-        Yields:
-            Collection[StructuredLine]: Fixed-size row windows.
+        Returns:
+            Iterator[Collection[StructuredLine]]: Fixed-size row windows.
         """
         if self.window_basis is FixedWindowBasis.RAW_POSITIONS:
-            for window in self._iter_raw_position_windows_with_labels():
-                yield window.rows
-            return
-        yield from self.sink.iter_fixed_window_sequences(
+
+            def _iter() -> Iterator[Collection[StructuredLine]]:
+                for window in self._iter_raw_position_windows_with_labels():
+                    yield window.rows
+
+            return _iter()
+        return self.sink.iter_fixed_window_sequences(
             self.window_size,
             step_size=self.step,
         )()
@@ -3131,7 +3288,11 @@ class FixedSequenceBuilder(NonEntitySequenceBuilder):
         )
 
     def _count_raw_position_windows(self) -> int:
-        """Return the number of fixed windows over raw source positions."""
+        """Return the number of fixed windows over raw source positions.
+
+        Returns:
+            int: Count of raw-position windows implied by the source file.
+        """
         step = self._raw_position_window_step()
 
         raw_count = self._count_raw_positions()

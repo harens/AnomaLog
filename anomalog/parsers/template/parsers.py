@@ -46,6 +46,8 @@ class Drain3Parser(TemplateParser):
 
     Attributes:
         name (ClassVar[str]): Registry name for the built-in Drain3 parser.
+        is_identity_parser (ClassVar[bool]): Always `False`; Drain3 mines
+            templates rather than preserving the raw text.
 
     Args:
         dataset_name (str | None): Optional dataset name used to scope
@@ -269,6 +271,8 @@ class IdentityTemplateParser(TemplateParser):
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the identity parser.
+        is_identity_parser (ClassVar[bool]): Always `True`; the parser returns
+            the raw text unchanged.
         dataset_name (str | None): Optional dataset identifier kept only for
             parity with the shared template-parser contract.
     """
@@ -328,6 +332,8 @@ class SpellTemplateParser(TemplateParser):
 
     Attributes:
         name (ClassVar[str]): Registry/config name for the built-in parser.
+        is_identity_parser (ClassVar[bool]): Always `False`; Spell mines a
+            canonical template representation from the raw text.
         dataset_name (str | None): Optional dataset name used for cache paths.
         tau (float): Spell similarity threshold passed to Spell training.
         max_lcs_comparisons_per_line (int | None): Maximum number of LCS

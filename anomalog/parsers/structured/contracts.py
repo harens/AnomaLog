@@ -203,8 +203,9 @@ class StructuredSink(Protocol):
         """Return structured rows in the original raw-entry order.
 
         Args:
-            filter_expr (object | None): Optional sink-specific structured-row
-                filter expression applied before source-order merging.
+            filter_expr (ds.Expression | None): Optional sink-specific
+                structured-row filter expression applied before source-order
+                merging.
 
         Returns:
             Callable[[], Iterator[StructuredLine]]: Zero-argument callable that

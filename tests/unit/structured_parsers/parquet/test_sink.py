@@ -496,7 +496,13 @@ def test_sink_entity_grouping_from_line_order_filters_prefix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Entity grouping should honour the line-order suffix filter."""
+    """Entity grouping should honour the line-order suffix filter.
+
+    Args:
+        tmp_path (Path): Temporary directory used for the sink fixture.
+        monkeypatch (pytest.MonkeyPatch): Test double used to replace the
+            underlying row iterator.
+    """
     sink = _make_sink(tmp_path)
     seen_filter_exprs: list[ds.Expression | None] = []
 
