@@ -11,7 +11,12 @@ from tests.unit.sequences.test_sequences import _upper_template
 def test_thunderbird_raw_position_windows_preserve_skipped_labels(
     tmp_path: Path,
 ) -> None:
-    """Raw-position windows should keep skipped rows from shifting labels."""
+    """Raw-position windows should keep skipped rows from shifting labels.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root used to write the synthetic
+            Thunderbird log fixture.
+    """
     raw_lines = [
         "- 1131566461 2005.11.09 dn228 Nov 9 12:01:01 dn228/dn228 normal-1",
         "- 1131566462 2005.11.09 dn228 Nov 9 12:01:02 dn228/dn228 normal-2",

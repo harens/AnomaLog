@@ -61,6 +61,10 @@ class _OneShotSequenceView:
         self.token = token
         self._consumed = False
 
+    @property
+    def sequences(self) -> _OneShotSequenceView:
+        return self
+
     @staticmethod
     def split_count_hint() -> SimpleNamespace:
         return SimpleNamespace(train_count=1, test_count=1)
@@ -78,6 +82,9 @@ class _OneShotSequenceView:
             split_label=SimpleNamespace(value="train"),
             label=0,
         )
+
+    def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
+        return iter(self)
 
 
 @dataclass(frozen=True)
@@ -444,6 +451,10 @@ def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
         def train_sequence_count_unit_hint() -> str:
             return "sequences"
 
+        @staticmethod
+        def iter_training_sequences() -> Iterator[SimpleNamespace]:
+            return iter(())
+
     class _Logger:
         @staticmethod
         def info(message: str, *args: object) -> None:
@@ -544,6 +555,10 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
         @staticmethod
         def train_sequence_count_unit_hint() -> str:
             return "entities"
+
+        @staticmethod
+        def iter_training_sequences() -> Iterator[SimpleNamespace]:
+            return iter(())
 
     class _Templated:
         @staticmethod
@@ -1150,6 +1165,9 @@ def test_run_bundle_rebuilds_sequence_views_for_each_stage(
                 label=0,
             )
 
+        def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
+            return iter(self)
+
     class _TemplatedStub:
         def __init__(self) -> None:
             self.group_by_entity_calls = 0
@@ -1466,6 +1484,9 @@ def test_run_bundle_rerun_keeps_existing_attempts_and_writes_new_one(
                 split_label=SimpleNamespace(value="train"),
                 label=0,
             )
+
+        def iter_training_sequences(self) -> Iterator[SimpleNamespace]:
+            return iter(self)
 
     class _TemplatedStub:
         @staticmethod

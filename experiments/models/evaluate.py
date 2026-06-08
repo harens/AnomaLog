@@ -41,13 +41,26 @@ TrainProgressHint = ProgressHint
 
 @dataclass(frozen=True, slots=True)
 class SequenceFactory:
-    """Callable sequence stream plus an optional train-only replay."""
+    """Callable sequence stream plus an optional train-only replay.
+
+    Attributes:
+        factory (Callable[[], Iterator[TemplateSequence]]): Full sequence
+            stream used for scoring and generic replay.
+        train_factory (Callable[[], Iterator[TemplateSequence]] | None):
+            Optional bounded replay used when the protocol exposes a cheaper
+            fit-time training prefix.
+    """
 
     factory: Callable[[], Iterator[TemplateSequence]]
     train_factory: Callable[[], Iterator[TemplateSequence]] | None = None
 
     def __call__(self) -> Iterator[TemplateSequence]:
-        """Return the underlying lazy sequence stream."""
+        """Return the underlying lazy sequence stream.
+
+        Returns:
+            Iterator[TemplateSequence]: The full replay stream used by the
+                scoring pipeline.
+        """
         return self.factory()
 
     def train_sequences(self) -> Iterator[TemplateSequence]:

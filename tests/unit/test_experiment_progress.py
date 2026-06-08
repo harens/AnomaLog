@@ -165,7 +165,15 @@ def test_run_model_uses_bounded_train_factory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Model fitting should use the bounded train replay when provided."""
+    """Model fitting should use the bounded train replay when provided.
+
+    Args:
+        tmp_path (Path): Temporary filesystem root for the fabricated run
+            artefacts.
+        monkeypatch (pytest.MonkeyPatch): Replaces the model config and
+            detector construction so the test can observe the chosen training
+            stream directly.
+    """
 
     @dataclass(slots=True)
     class _RecordingDetector(ExperimentDetector):
