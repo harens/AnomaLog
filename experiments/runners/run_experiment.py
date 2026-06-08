@@ -430,12 +430,16 @@ def _run_bundle(
         run_name=bundle.concrete_name,
         console=options.console,
     ) as logger:
-        return _execute_bundle_run(
-            bundle=bundle,
-            options=options,
-            result_paths=result_paths,
-            logger=logger,
-        )
+        try:
+            return _execute_bundle_run(
+                bundle=bundle,
+                options=options,
+                result_paths=result_paths,
+                logger=logger,
+            )
+        except Exception:
+            logger.exception("Concrete experiment %s failed", bundle.concrete_name)
+            raise
 
 
 def _execute_bundle_run(
