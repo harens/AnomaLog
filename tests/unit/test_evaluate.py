@@ -7,9 +7,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
+from typing_extensions import override
 
 from anomalog.sequences import SplitLabel, TemplateSequence
-from experiments.models.base import ModelManifest, PredictionOutcome, SequenceSummary
+from experiments.models.base import (
+    BatchExperimentDetector,
+    ModelManifest,
+    PredictionOutcome,
+    SequenceSummary,
+)
 from experiments.models.deepcase.detector import DeepCasePredictionOutcome
 from experiments.models.deepcase.shared import DeepCaseSequenceDecision
 from experiments.models.evaluate import (
@@ -19,7 +25,7 @@ from experiments.models.evaluate import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
     from pathlib import Path
 
     from rich.progress import Progress
@@ -69,6 +75,43 @@ class _StubDetector:
         run_metrics: dict[str, int | float | dict[int, int]],
     ) -> None:
         del run_metrics
+
+
+@dataclass(slots=True)
+class _BulkStubDetector(_StubDetector, BatchExperimentDetector):
+    """Bulk detector double that records the sequences sent to batch scoring.
+
+    Attributes:
+        bulk_window_ids (list[int]): Window identifiers passed through the
+            bulk prediction hook during the test.
+    """
+
+    bulk_window_ids: list[int] = field(default_factory=list)
+
+    @override
+    def predict(self, sequence: TemplateSequence) -> DeepCasePredictionOutcome:
+        msg = f"unexpected per-sequence prediction for {sequence.window_id}"
+        raise AssertionError(msg)
+
+    @override
+    def predict_all(
+        self,
+        sequences: Iterable[TemplateSequence],
+    ) -> Iterator[tuple[TemplateSequence, DeepCasePredictionOutcome]]:
+        for sequence in sequences:
+            self.bulk_window_ids.append(sequence.window_id)
+            yield (
+                sequence,
+                DeepCasePredictionOutcome(
+                    predicted_label=sequence.label,
+                    score=float(sequence.window_id),
+                    findings=[],
+                    sequence_decision=DeepCaseSequenceDecision.CONFIDENT_NORMAL,
+                    confident_event_count=1,
+                    abstained_event_count=0,
+                    confident_anomaly_event_count=0,
+                ),
+            )
 
 
 def _sequence(*, label: int, window_id: int = 0) -> TemplateSequence:
@@ -258,6 +301,38 @@ def test_stream_predictions_counts_deepcase_automatic_decisions(
     assert summary["counted_predictions"] == expected_counted_predictions
     assert accumulator.test_sequence_count == expected_test_sequence_count
     assert accumulator.abstained_prediction_count == expected_abstained_predictions
+
+
+def test_stream_predictions_writes_predictions_for_bulk_detectors(
+    tmp_path: Path,
+) -> None:
+    """Bulk detectors should emit prediction records through the shared path.
+
+    Args:
+        tmp_path (Path): Temporary directory used to write the predictions
+            artefact.
+    """
+    expected_test_sequence_count = 2
+    detector = _BulkStubDetector(
+        outcomes={},
+    )
+    sequences = [
+        _sequence(label=0, window_id=0),
+        _sequence(label=1, window_id=1),
+    ]
+
+    summary = stream_predictions(
+        detector=detector,
+        sequence_factory=lambda: iter(sequences),
+        prediction_output=PredictionOutputConfig(
+            predictions_path=tmp_path / "predictions.jsonl",
+            write_predictions=True,
+        ),
+        logger=logging.getLogger("tests.evaluate.bulk"),
+    )
+
+    assert detector.bulk_window_ids == [0, 1]
+    assert summary.test_sequence_count == expected_test_sequence_count
 
 
 def test_stream_predictions_scores_train_labeled_mixed_sequences(

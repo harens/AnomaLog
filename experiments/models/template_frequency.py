@@ -318,7 +318,15 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         self,
         events: list[tuple[str, list[str], int | None]],
     ) -> float:
-        """Return the mean loss for a pure test sequence without mask setup."""
+        """Return the mean loss for a pure test sequence without mask setup.
+
+        Args:
+            events (list[tuple[str, list[str], int | None]]): Sequence events
+                already filtered to the pure test path.
+
+        Returns:
+            float: Mean negative log-probability across the sequence events.
+        """
         if not events:
             return 0.0
         loss_sum = 0.0
@@ -331,7 +339,17 @@ class TemplateFrequencyDetector(SingleFitMixin, ExperimentDetector):
         events: list[tuple[str, list[str], int | None]],
         event_labels: tuple[int | None, ...],
     ) -> float:
-        """Return a sequence score while updating event-level metrics."""
+        """Return a sequence score while updating event-level metrics.
+
+        Args:
+            events (list[tuple[str, list[str], int | None]]): Sequence events
+                to score.
+            event_labels (tuple[int | None, ...]): Ground-truth event labels
+                aligned with ``events``.
+
+        Returns:
+            float: Mean negative log-probability across the sequence events.
+        """
         if not events:
             return 0.0
         loss_sum = 0.0

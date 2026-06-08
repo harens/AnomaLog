@@ -754,7 +754,12 @@ def test_template_frequency_detector_predictions_are_repeatable() -> None:
 def test_template_frequency_detector_pure_test_predictions_skip_mask_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pure test predictions should not rebuild evaluation masks."""
+    """Pure test predictions should not rebuild evaluation masks.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to ensure the mask
+            helper is never called on a pure test sequence.
+    """
     detector = _template_frequency_config(name="template_frequency").build_detector()
     with Progress(disable=True) as progress:
         detector.fit(_supervised_train_sequences(), progress=progress)
@@ -779,6 +784,42 @@ def test_template_frequency_detector_pure_test_predictions_skip_mask_helpers(
     second = detector.predict(sequence)
 
     assert first == second
+
+
+def test_template_frequency_detector_scores_labelled_pure_test_sequences_in_one_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pure test sequences with labels should score and record metrics together.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to block the
+            evaluation-mask helper so the regression exercises the fast path.
+    """
+    expected_event_count = 2
+    detector = _template_frequency_config(name="template_frequency").build_detector()
+    with Progress(disable=True) as progress:
+        detector.fit(_supervised_train_sequences(), progress=progress)
+    sequence = _sequence(
+        22,
+        templates=["panic failure", "disk failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        event_labels=(1, 0),
+    )
+
+    monkeypatch.setattr(
+        template_frequency_module,
+        "_eligible_evaluation_templates",
+        lambda _sequence: pytest.fail(
+            "pure test sequences should not rebuild evaluation masks",
+        ),
+    )
+
+    prediction = detector.predict(sequence)
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+
+    assert prediction.predicted_label in {0, 1}
+    assert metrics["event_level_detection"]["events_seen"] == expected_event_count
 
 
 @pytest.mark.allow_no_new_coverage
@@ -1053,7 +1094,12 @@ def test_markov_detector_predictions_are_repeatable() -> None:
 def test_markov_detector_pure_test_predictions_skip_mask_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pure test predictions should not rebuild the evaluation mask."""
+    """Pure test predictions should not rebuild the evaluation mask.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to ensure the
+            evaluation mask helper is never called on a pure test sequence.
+    """
     detector = _markov_config(name="markov").build_detector()
     train_sequences = _supervised_train_sequences()
     with Progress(disable=True) as progress:
@@ -1238,7 +1284,12 @@ def test_markov_detector_reports_event_level_metrics() -> None:
 def test_markov_detector_predict_scores_labelled_sequence_in_one_transition_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Markov predictions should score and record event metrics in one pass."""
+    """Markov predictions should score and record event metrics in one pass.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to count transition
+            iteration without changing detector behaviour.
+    """
     detector = _markov_config(name="markov").build_detector()
     train_sequence = _sequence(
         90,
@@ -1294,6 +1345,69 @@ def test_markov_detector_predict_scores_labelled_sequence_in_one_transition_pass
         metrics["event_level_detection"]["events_seen"]
         == EXPECTED_MARKOV_LABELLED_TRANSITION_COUNT
     )
+
+
+def test_markov_detector_scores_labelled_pure_test_sequences_in_one_transition_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pure test Markov predictions should reuse the labelled transition pass.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Test double used to count transition
+            iteration without changing detector behaviour.
+    """
+    expected_event_count = EXPECTED_MARKOV_LABELLED_TRANSITION_COUNT
+    detector = _markov_config(name="markov").build_detector()
+    train_sequence = _sequence(
+        92,
+        templates=["A", "B", "C"],
+        label=0,
+        split_label=SplitLabel.TRAIN,
+        training_event_mask=(True, True, True),
+    )
+    test_sequence = _sequence(
+        93,
+        templates=["A", "B", "panic failure"],
+        label=1,
+        split_label=SplitLabel.TEST,
+        event_labels=(0, 0, 1),
+    )
+
+    with Progress(disable=True) as progress:
+        detector.fit([train_sequence], progress=progress)
+
+    original_sequence_transitions = inspect.getattr_static(
+        markov_module,
+        "_sequence_transitions",
+    )
+    call_count = 0
+
+    def counting_sequence_transitions(
+        templates: list[str],
+        order: int,
+        *,
+        prefix_templates: list[str] | None = None,
+    ) -> Iterator[tuple[int, tuple[str, ...], str]]:
+        nonlocal call_count
+        for transition in original_sequence_transitions(
+            templates,
+            order,
+            prefix_templates=prefix_templates,
+        ):
+            call_count += 1
+            yield transition
+
+    monkeypatch.setattr(
+        markov_module,
+        "_sequence_transitions",
+        counting_sequence_transitions,
+    )
+
+    detector.predict(test_sequence)
+
+    assert call_count == expected_event_count
+    metrics = msgspec.to_builtins(detector.run_metrics(run_metrics={}))
+    assert metrics["event_level_detection"]["events_seen"] == (expected_event_count)
 
 
 def test_markov_manifest_includes_shared_sequence_summary_fields() -> None:
