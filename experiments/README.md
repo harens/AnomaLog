@@ -219,10 +219,14 @@ To target one named variant on one resolved dataset from the registry:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
-  --experiment hdfs_deeplog_paper \
+  --experiment hdfs_wuyifan18_deepcase_table_iv_compat \
   --variant deeplog_short_session_padding_fidelity \
   --dataset hdfs/v1_deeplog_paper_entry100k_assign_first
 ```
+
+`--experiment` accepts a named registry experiment. The `experiment_sets`
+section in `configs/registry.toml` expands into concrete experiment names, so
+use the generated dataset-specific entry when you want one resolved run.
 
 To list the curated registry:
 
