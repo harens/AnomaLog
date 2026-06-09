@@ -126,6 +126,14 @@ class ParquetStructuredSink(StructuredSink):
         """
         return self.cache_paths.cache_root / dataset_name / self.cache_dir
 
+    def structured_cache_path(self) -> Path:
+        """Return the structured parquet cache path for this sink.
+
+        Returns:
+            Path: Directory containing the materialised structured dataset.
+        """
+        return self.structured_data_cache(self.dataset_name)
+
     def write_structured_lines(
         self,
         _workers: int | None = None,

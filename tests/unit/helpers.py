@@ -148,7 +148,17 @@ class InMemoryStructuredSink(StructuredSink):
     raw_dataset_path: Path
     parser: StructuredParser
     rows: list[StructuredLine]
+    _structured_cache_path: Path | None = None
     anomalies_inline: bool | None = None
+
+    def structured_cache_path(self) -> Path | None:
+        """Return the optional synthetic structured cache path for tests.
+
+        Returns:
+            Path | None: Synthetic structured cache path supplied by the test,
+                or `None` when the helper should behave like an in-memory sink.
+        """
+        return self._structured_cache_path
 
     def write_structured_lines(self) -> bool:
         """Report whether the sink should be treated as having inline labels.

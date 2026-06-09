@@ -106,6 +106,50 @@ def test_structured_dataset_mine_templates_trains_parser_from_sink_rows() -> Non
     assert templated.template_parser is parser
 
 
+def test_structured_dataset_mine_templates_includes_structured_cache_dependency(
+    tmp_path: Path,
+) -> None:
+    """mine_templates_with should fingerprint the structured cache artefact too.
+
+    Args:
+        tmp_path (Path): Per-test filesystem sandbox for the synthetic cache
+            artefact paths.
+    """
+    expected_asset_dep_count = 2
+    sink = InMemoryStructuredSink(
+        dataset_name="demo",
+        raw_dataset_path=tmp_path / "raw.log",
+        parser=NullStructuredParser(),
+        rows=[
+            structured_line(
+                line_order=0,
+                timestamp_unix_ms=1_000,
+                entity_id="node-a",
+                untemplated_message_text="first",
+                anomalous=None,
+            ),
+        ],
+        _structured_cache_path=tmp_path / "structured" / "demo",
+    )
+    parser = _RecordingTemplateParser(seen_lines=[])
+    dataset = StructuredDataset(
+        sink=sink,
+        cache_paths=_cache_paths(),
+        anomaly_labels=_labels(),
+    )
+
+    dataset.mine_templates_with(parser)
+
+    assert parser.seen_asset_deps is not None
+    assert len(parser.seen_asset_deps) == expected_asset_dep_count
+    assert {
+        asset.properties.url for asset in parser.seen_asset_deps if asset.properties
+    } == {
+        (tmp_path / "raw.log").as_uri(),
+        (tmp_path / "structured" / "demo").as_uri(),
+    }
+
+
 def test_templated_dataset_grouping_helpers_configure_sequences() -> None:
     """Grouping helpers delegate to the expected SequenceBuilder types."""
     sink = InMemoryStructuredSink(

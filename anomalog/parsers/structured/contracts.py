@@ -170,6 +170,14 @@ class StructuredSink(Protocol):
     raw_dataset_path: Path
     parser: StructuredParser
 
+    def structured_cache_path(self) -> Path | None:
+        """Return the local structured-cache path if the sink persists one.
+
+        Returns:
+            Path | None: Filesystem path for the materialised structured
+                dataset, or `None` when the sink is purely in-memory.
+        """
+
     # Returns whether any line carries an inline anomaly label.
     def write_structured_lines(self) -> bool:
         """Persist structured lines and report whether inline labels exist.

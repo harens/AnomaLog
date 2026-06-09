@@ -60,6 +60,9 @@ class StructuredDataset:
             TemplatedDataset: Structured dataset paired with the trained parser.
         """
         asset_deps = [asset_from_local_path(self.sink.raw_dataset_path)]
+        structured_cache_path = self.sink.structured_cache_path()
+        if structured_cache_path is not None:
+            asset_deps.append(asset_from_local_path(structured_cache_path))
         template_parser.train(
             self._iter_untemplated_text,
             asset_deps=asset_deps,

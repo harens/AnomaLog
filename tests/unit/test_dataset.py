@@ -153,6 +153,9 @@ class _RecordingSink(StructuredSink):
     def parser(self) -> StructuredParser:
         return self._sink.parser
 
+    def structured_cache_path(self) -> Path | None:
+        return self._sink.structured_cache_path()
+
     def write_structured_lines(self) -> bool:
         return self._sink.write_structured_lines()
 
