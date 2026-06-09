@@ -357,20 +357,33 @@ class KeyLSTM(nn.Module):
     log-key vectors and predicting the next key with a softmax output layer.
     This module follows that structure directly:
 
-    - input shape: `(batch, history_size, vocab_size)`
+    - input shape: `(batch, history_size, input_vocab_size)`
     - recurrent core: stacked LSTM layers
     - output shape: `(batch, vocab_size)` logits for the next key
 
     Args:
-        vocab_size (int): Size of the one-hot key vocabulary.
+        vocab_size (int): Size of the prediction vocabulary.
         hidden_size (int): Hidden width of each LSTM layer.
         num_layers (int): Number of stacked LSTM layers.
+        input_vocab_size (int | None): Size of the one-hot input vocabulary.
+            Defaults to `vocab_size` for strict-history DeepLog behaviour.
     """
 
-    def __init__(self, *, vocab_size: int, hidden_size: int, num_layers: int) -> None:
+    def __init__(
+        self,
+        *,
+        vocab_size: int,
+        hidden_size: int,
+        num_layers: int,
+        input_vocab_size: int | None = None,
+    ) -> None:
         super().__init__()
+        self.output_vocab_size = vocab_size
+        self.input_vocab_size = (
+            vocab_size if input_vocab_size is None else input_vocab_size
+        )
         self.lstm = nn.LSTM(
-            input_size=vocab_size,
+            input_size=self.input_vocab_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,

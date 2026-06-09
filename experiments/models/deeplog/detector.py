@@ -1030,9 +1030,6 @@ class DeepLogDetector(SingleFitMixin, ExperimentDetector):
                 top_g=max(self.config.top_g_values),
             ),
             prefix_templates=self._prediction_prefix_templates(sequence),
-            include_short_session_padding_fallback=(
-                self.config.short_session_padding_fidelity
-            ),
         )
         self._record_key_top_g_replay(
             sequence=sequence,

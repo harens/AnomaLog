@@ -82,10 +82,10 @@ false negatives under the current key-only scorer.
 The older `0.87474878 / 0.8013422` sequence result corresponds to the legacy
 DeepLog prediction-script behaviour, not to the strict fixed-history default.
 That older path left-pads short standalone sessions so they still contribute
-one final key decision. The
+event-level key decisions at the early positions too. The
 `short_session_padding_fidelity = true` model-set variant restores that
-behaviour as an explicit compatibility view and is now exposed in the HDFS
-DeepLog paper registry.
+event-centred padded scoring as an explicit compatibility view and is now
+exposed in the HDFS DeepLog paper registry.
 
 For the `wuyifan18` archive, that compatibility mode matters because the
 abnormal split contains `6,193` sessions of length `<= 10`, and the current

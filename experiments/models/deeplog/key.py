@@ -88,10 +88,13 @@ class _KeyTrainingExampleMaterialisationConfig:
     Attributes:
         template_to_index (dict[str, int]): Template vocabulary mapping.
         history_size (int): Number of prior keys required for each example.
+        short_session_padding_fidelity (bool): Whether to left-pad missing
+            history positions with a sentinel input token.
     """
 
     template_to_index: dict[str, int]
     history_size: int
+    short_session_padding_fidelity: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +109,6 @@ class _KeyTrainingRun:
         epochs (int): Number of training epochs.
         batch_size (int): Training batch size.
         device (torch.device): Torch device used for the run.
-        vocab_size (int): Number of known key indexes.
     """
 
     criterion: nn.CrossEntropyLoss
@@ -115,7 +117,6 @@ class _KeyTrainingRun:
     epochs: int
     batch_size: int
     device: torch.device
-    vocab_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,19 +124,17 @@ class _KeyEventScoreInput:
     """Materialised inputs for one key-model event score.
 
     Attributes:
-        templates (list[str]): Full template sequence being scored.
-        target_index (int): Target index within the scored sequence.
+        event_index (int): Event index within the scored sequence.
+        history_templates (list[str]): History window used for the prediction.
         probabilities (torch.Tensor): Model probabilities for the target
             event.
         actual_rank (int | None): Exact rank of the observed key, if known.
-        prefix_length (int): Number of carried-over prefix templates.
     """
 
-    templates: list[str]
-    target_index: int
+    event_index: int
+    history_templates: list[str]
     probabilities: torch.Tensor
     actual_rank: int | None
-    prefix_length: int
 
 
 def fit_key_model(
@@ -163,6 +162,9 @@ def fit_key_model(
         template: idx for idx, template in enumerate(training_corpus.templates)
     }
     index_to_template = {idx: template for template, idx in template_to_index.items()}
+    input_vocab_size = len(template_to_index) + (
+        1 if config.short_session_padding_fidelity else 0
+    )
 
     prepare_task: TaskID | None = None
     if progress is not None:
@@ -181,6 +183,7 @@ def fit_key_model(
             materialisation_config=_KeyTrainingExampleMaterialisationConfig(
                 template_to_index=template_to_index,
                 history_size=config.history_size,
+                short_session_padding_fidelity=config.short_session_padding_fidelity,
             ),
             progress=progress,
             prepare_task=prepare_task,
@@ -191,6 +194,7 @@ def fit_key_model(
 
     model = KeyLSTM(
         vocab_size=len(template_to_index),
+        input_vocab_size=input_vocab_size,
         hidden_size=config.hidden_size,
         num_layers=config.num_layers,
     )
@@ -206,7 +210,6 @@ def fit_key_model(
             epochs=config.epochs,
             batch_size=config.batch_size,
             device=device,
-            vocab_size=len(template_to_index),
         ),
         progress=progress,
     )
@@ -237,6 +240,7 @@ def _materialise_key_training_examples(
     """
     template_to_index = materialisation_config.template_to_index
     history_size = materialisation_config.history_size
+    padding_fidelity = materialisation_config.short_session_padding_fidelity
     sequence_examples: list[_KeyTrainingSequenceExamples] = []
     has_examples = False
     for sequence in sequences:
@@ -245,33 +249,60 @@ def _materialise_key_training_examples(
             dtype=torch.long,
         )
         eligible_target_indexes = torch.tensor(
-            [
-                target_index
-                for target_index in training_event_index_mask(sequence)
-                if target_index >= history_size
-            ],
+            list(training_event_index_mask(sequence)),
             dtype=torch.long,
         )
-        if template_indexes.numel() > history_size and eligible_target_indexes.numel():
-            has_examples = True
-            history_windows = template_indexes.unfold(
-                0,
-                history_size,
-                1,
-            ).index_select(
-                0,
-                eligible_target_indexes - history_size,
-            )
-            target_indexes = template_indexes.index_select(
-                0,
-                eligible_target_indexes,
-            )
+        if padding_fidelity:
+            if eligible_target_indexes.numel():
+                has_examples = True
+                history_windows = _padded_key_history_windows(
+                    template_indexes=template_indexes,
+                    target_indexes=eligible_target_indexes,
+                    history_size=history_size,
+                    no_event_index=len(template_to_index),
+                )
+                target_indexes = template_indexes.index_select(
+                    0,
+                    eligible_target_indexes,
+                )
+            else:
+                history_windows = torch.empty(
+                    (0, history_size),
+                    dtype=torch.long,
+                )
+                target_indexes = torch.empty((0,), dtype=torch.long)
         else:
-            history_windows = torch.empty(
-                (0, history_size),
+            eligible_target_indexes = torch.tensor(
+                [
+                    target_index
+                    for target_index in eligible_target_indexes.tolist()
+                    if target_index >= history_size
+                ],
                 dtype=torch.long,
             )
-            target_indexes = torch.empty((0,), dtype=torch.long)
+            if (
+                template_indexes.numel() > history_size
+                and eligible_target_indexes.numel()
+            ):
+                has_examples = True
+                history_windows = template_indexes.unfold(
+                    0,
+                    history_size,
+                    1,
+                ).index_select(
+                    0,
+                    eligible_target_indexes - history_size,
+                )
+                target_indexes = template_indexes.index_select(
+                    0,
+                    eligible_target_indexes,
+                )
+            else:
+                history_windows = torch.empty(
+                    (0, history_size),
+                    dtype=torch.long,
+                )
+                target_indexes = torch.empty((0,), dtype=torch.long)
         sequence_examples.append(
             _KeyTrainingSequenceExamples(
                 template_indexes=template_indexes,
@@ -324,6 +355,34 @@ def iter_key_examples(
                 template_indexes[start : start + history_size],
                 template_indexes[target_index],
             )
+
+
+def _padded_key_history_windows(
+    *,
+    template_indexes: torch.Tensor,
+    target_indexes: torch.Tensor,
+    history_size: int,
+    no_event_index: int,
+) -> torch.Tensor:
+    """Build left-padded DeepLog history windows for every eligible target.
+
+    Args:
+        template_indexes (torch.Tensor): Encoded templates for one sequence.
+        target_indexes (torch.Tensor): Zero-based target indexes to score.
+        history_size (int): Number of prior keys per example.
+        no_event_index (int): Sentinel input index used for missing history.
+
+    Returns:
+        torch.Tensor: Left-padded history windows aligned with the targets.
+    """
+    history_windows: list[list[int]] = []
+    template_indexes_list = template_indexes.tolist()
+    for target_index in target_indexes.tolist():
+        history_start = max(0, target_index - history_size)
+        history = template_indexes_list[history_start:target_index]
+        padding = [no_event_index] * (history_size - len(history))
+        history_windows.append(padding + history)
+    return torch.tensor(history_windows, dtype=torch.long)
 
 
 def _train_key_model(
@@ -450,7 +509,7 @@ def _optimise_key_training_batch(
                 logits = model(
                     _one_hot_history_indexes(
                         history_indexes=batch_histories[start:end],
-                        vocab_size=training_run.vocab_size,
+                        vocab_size=model.input_vocab_size,
                     ),
                 )
                 loss = training_run.criterion(
@@ -516,12 +575,11 @@ def _is_cuda_oom_error(exc: RuntimeError) -> bool:
     return "out of memory" in str(exc).lower()
 
 
-def score_key_sequence(  # noqa: C901
+def score_key_sequence(
     *,
     sequence: TemplateSequence,
     context: KeyScoringContext,
     prefix_templates: list[str] | None = None,
-    include_short_session_padding_fallback: bool = False,
 ) -> dict[int, DeepLogKeyFinding]:
     """Score one sequence with the DeepLog key model.
 
@@ -530,8 +588,6 @@ def score_key_sequence(  # noqa: C901
         context (KeyScoringContext): Fitted key-model state and settings.
         prefix_templates (list[str] | None): Optional templates from the
             immediately preceding chronological context.
-        include_short_session_padding_fallback (bool): Whether to score one
-            padded top-`g` decision for short standalone sessions.
 
     Returns:
         dict[int, DeepLogKeyFinding]: Event index to key-model finding.
@@ -539,66 +595,94 @@ def score_key_sequence(  # noqa: C901
     findings: dict[int, DeepLogKeyFinding] = {}
     templates = sequence.templates
     prefix_templates = [] if prefix_templates is None else prefix_templates
-    combined_templates = prefix_templates + templates
     prefix_length = len(prefix_templates)
-    if len(templates) <= context.history_size:
-        if len(combined_templates) <= context.history_size:
-            if not include_short_session_padding_fallback or not templates:
-                return findings
-            short_finding = _score_short_session_with_padding(
-                templates=templates,
-                context=context,
-            )
-            if short_finding is not None:
-                findings[short_finding.event_index] = short_finding
-            return findings
-        templates = combined_templates
-        prefix_length = len(prefix_templates)
-    elif prefix_templates:
-        templates = combined_templates
-        prefix_length = len(prefix_templates)
+    if not templates:
+        return findings
+    use_padding = context.model.input_vocab_size > len(context.template_to_index)
+    combined_templates = prefix_templates + templates
 
+    known_event_indexes: list[int] = []
+    known_history_templates: list[list[str]] = []
     known_history_indexes: list[list[int]] = []
-    known_target_indexes: list[int] = []
-    for target_index in range(context.history_size, len(templates)):
-        history_templates = templates[
-            target_index - context.history_size : target_index
+    for local_event_index, actual_template in enumerate(sequence.templates):
+        absolute_event_index = prefix_length + local_event_index
+        history_templates = combined_templates[
+            max(0, absolute_event_index - context.history_size) : absolute_event_index
         ]
-        if target_index < prefix_length:
+        if not use_padding and len(history_templates) < context.history_size:
             continue
-        local_target_index = target_index - prefix_length
         unknown_history_templates = [
             template
             for template in history_templates
             if template not in context.template_to_index
         ]
         if unknown_history_templates:
-            # We fail closed here. Passing an unseen history through a synthetic
-            # token would ask the model to make a confident prediction for a
-            # situation it was never trained on.
-            findings[local_target_index] = DeepLogKeyFinding(
-                event_index=local_target_index,
+            findings[local_event_index] = DeepLogKeyFinding(
+                event_index=local_event_index,
                 history_templates=history_templates,
                 unknown_history_templates=unknown_history_templates,
-                actual_template=templates[target_index],
+                actual_template=actual_template,
                 actual_probability=None,
                 actual_rank=None,
                 is_anomalous=True,
-                is_oov=templates[target_index] not in context.template_to_index,
+                is_oov=actual_template not in context.template_to_index,
                 top_predictions=[],
             )
             continue
-        known_target_indexes.append(local_target_index)
-        known_history_indexes.append(
-            [context.template_to_index[template] for template in history_templates],
-        )
+        known_event_indexes.append(local_event_index)
+        known_history_templates.append(history_templates)
+        if use_padding:
+            known_history_indexes.append(
+                _pad_history_indexes(
+                    history_templates=history_templates,
+                    context=context,
+                ),
+            )
+        else:
+            known_history_indexes.append(
+                [context.template_to_index[template] for template in history_templates],
+            )
 
-    if not known_history_indexes:
-        return findings
+    findings.update(
+        _score_key_events_from_history_indexes(
+            sequence=sequence,
+            context=context,
+            event_indexes=known_event_indexes,
+            history_templates_by_event=known_history_templates,
+            history_indexes_by_event=known_history_indexes,
+        ),
+    )
+    return findings
+
+
+def _score_key_events_from_history_indexes(
+    *,
+    sequence: TemplateSequence,
+    context: KeyScoringContext,
+    event_indexes: list[int],
+    history_templates_by_event: list[list[str]],
+    history_indexes_by_event: list[list[int]],
+) -> dict[int, DeepLogKeyFinding]:
+    """Materialise key findings for a batch of known history windows.
+
+    Args:
+        sequence (TemplateSequence): Sequence being scored.
+        context (KeyScoringContext): Fitted key-model state and settings.
+        event_indexes (list[int]): Event indexes whose histories are known.
+        history_templates_by_event (list[list[str]]): Per-event history
+            templates aligned to ``event_indexes``.
+        history_indexes_by_event (list[list[int]]): Per-event encoded history
+            windows aligned to ``event_indexes``.
+
+    Returns:
+        dict[int, DeepLogKeyFinding]: Event index to key-model finding.
+    """
+    if not event_indexes:
+        return {}
 
     history_tensor = _one_hot_histories(
-        histories=known_history_indexes,
-        vocab_size=len(context.template_to_index),
+        histories=history_indexes_by_event,
+        vocab_size=context.model.input_vocab_size,
         device=next(context.model.parameters()).device,
     )
     with torch.inference_mode():
@@ -610,148 +694,86 @@ def score_key_sequence(  # noqa: C901
         torch.argsort(probabilities_by_event, dim=1, descending=True),
         dim=1,
     )
-
-    for event_position, (target_index, probabilities) in enumerate(
-        zip(known_target_indexes, probabilities_by_event, strict=True),
+    findings: dict[int, DeepLogKeyFinding] = {}
+    for event_position, (event_index, history_templates, probabilities) in enumerate(
+        zip(
+            event_indexes,
+            history_templates_by_event,
+            probabilities_by_event,
+            strict=True,
+        ),
     ):
-        findings[target_index] = _score_key_event(
+        actual_template = sequence.templates[event_index]
+        actual_index = context.template_to_index.get(actual_template)
+        findings[event_index] = _score_key_event(
             score_input=_KeyEventScoreInput(
-                templates=templates,
-                target_index=target_index,
+                event_index=event_index,
+                history_templates=history_templates,
                 probabilities=probabilities,
                 actual_rank=(
                     None
-                    if templates[target_index] not in context.template_to_index
-                    else int(
-                        rank_positions_by_event[
-                            event_position,
-                            context.template_to_index[templates[target_index]],
-                        ],
-                    )
-                    + 1
+                    if actual_index is None
+                    else int(rank_positions_by_event[event_position, actual_index]) + 1
                 ),
-                prefix_length=prefix_length,
             ),
             context=context,
+            actual_template=actual_template,
         )
     return findings
 
 
-def _score_short_session_with_padding(  # noqa: PLR0914
+def _pad_history_indexes(
     *,
-    templates: list[str],
+    history_templates: list[str],
     context: KeyScoringContext,
-) -> DeepLogKeyFinding | None:
-    """Score one short standalone sequence with left-padded key history.
-
-    This mirrors the original DeepLog reference script behaviour where sessions
-    shorter than `window_size + 1` are padded during prediction so they still
-    contribute one top-`g` anomaly decision.
+) -> list[int]:
+    """Return a left-padded history window for one event.
 
     Args:
-        templates (list[str]): Sequence templates for one standalone session.
+        history_templates (list[str]): Available history templates in
+            chronological order.
         context (KeyScoringContext): Fitted key-model state and settings.
 
     Returns:
-        DeepLogKeyFinding | None: Decision for the last event, or `None` when
-            no target can be formed.
+        list[int]: Encoded history window aligned to the right.
+
+    Raises:
+        ValueError: If padding fidelity is requested without a sentinel input
+            index.
     """
-    if not templates:
-        return None
-    target_index = len(templates) - 1
-    history_templates = templates[:-1]
-    padded_history_indexes = [-1] * context.history_size
-    history_tail = history_templates[-context.history_size :]
-    start = context.history_size - len(history_tail)
-    for offset, template in enumerate(history_tail):
-        index = context.template_to_index.get(template)
-        if index is None:
-            continue
-        padded_history_indexes[start + offset] = index
-
-    history_tensor = torch.zeros(
-        (1, context.history_size, len(context.template_to_index)),
-        dtype=torch.float32,
-        device=next(context.model.parameters()).device,
-    )
-    for pos, idx in enumerate(padded_history_indexes):
-        if idx >= 0:
-            history_tensor[0, pos, idx] = 1.0
-
-    with torch.inference_mode():
-        probabilities = torch.softmax(context.model(history_tensor), dim=1).cpu()[0]
-    rank_positions = torch.argsort(
-        torch.argsort(probabilities.unsqueeze(0), dim=1, descending=True),
-        dim=1,
-    )
-
-    top_probabilities, top_indexes = _top_key_predictions(
-        probabilities=probabilities,
-        vocabulary_size=len(context.template_to_index),
-        top_g=context.top_g,
-    )
-    top_predictions = [
-        DeepLogTopPrediction(
-            template=context.index_to_template[int(index)],
-            probability=float(probability),
-        )
-        for probability, index in zip(
-            top_probabilities.tolist(),
-            top_indexes.tolist(),
-            strict=True,
-        )
+    padding_index = context.model.input_vocab_size - len(context.template_to_index)
+    if padding_index <= 0:
+        msg = "padding fidelity requires a sentinel input index"
+        raise ValueError(msg)
+    history_indexes = [
+        context.template_to_index[template] for template in history_templates
     ]
-    actual_template = templates[target_index]
-    actual_index = context.template_to_index.get(actual_template)
-    is_oov = actual_index is None
-    actual_rank = (
-        None if actual_index is None else int(rank_positions[0, actual_index]) + 1
-    )
-    actual_probability = (
-        None if actual_index is None else float(probabilities[actual_index])
-    )
-    top_index_set = {int(index) for index in top_indexes.tolist()}
-    return DeepLogKeyFinding(
-        event_index=target_index,
-        history_templates=history_templates,
-        unknown_history_templates=[
-            template
-            for template in history_tail
-            if template not in context.template_to_index
-        ],
-        actual_template=actual_template,
-        actual_probability=actual_probability,
-        actual_rank=actual_rank,
-        is_anomalous=is_oov or (actual_index not in top_index_set),
-        is_oov=is_oov,
-        top_predictions=top_predictions,
-    )
+    padding = [padding_index] * (context.history_size - len(history_indexes))
+    return padding + history_indexes
 
 
 def _score_key_event(
     *,
     score_input: _KeyEventScoreInput,
     context: KeyScoringContext,
+    actual_template: str,
 ) -> DeepLogKeyFinding:
     """Build one key-model finding from predicted next-key probabilities.
 
     Args:
         score_input (_KeyEventScoreInput): Materialised event-scoring inputs.
         context (KeyScoringContext): Fitted key-model state and settings.
+        actual_template (str): Observed template for the target event.
 
     Returns:
         DeepLogKeyFinding: Serialised decision payload for one target event.
     """
-    absolute_target_index = score_input.target_index + score_input.prefix_length
-    history_templates = score_input.templates[
-        absolute_target_index - context.history_size : absolute_target_index
-    ]
+    history_templates = score_input.history_templates
     unknown_history_templates = [
         template
         for template in history_templates
         if template not in context.template_to_index
     ]
-    actual_template = score_input.templates[absolute_target_index]
     actual_index = context.template_to_index.get(actual_template)
     top_probabilities, top_indexes = _top_key_predictions(
         probabilities=score_input.probabilities,
@@ -775,7 +797,7 @@ def _score_key_event(
     )
     top_index_set = {int(index) for index in top_indexes.tolist()}
     return DeepLogKeyFinding(
-        event_index=score_input.target_index,
+        event_index=score_input.event_index,
         history_templates=history_templates,
         unknown_history_templates=unknown_history_templates,
         actual_template=actual_template,

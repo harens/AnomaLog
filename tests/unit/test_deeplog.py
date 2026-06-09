@@ -209,10 +209,22 @@ class _StaticKeyModel(KeyLSTM):
 
     Args:
         logits (list[float]): One logit per template id in the fake vocabulary.
+        input_vocab_size (int | None): Optional input vocabulary size used to
+            model padding-aware scoring.
     """
 
-    def __init__(self, logits: list[float]) -> None:
-        super().__init__(vocab_size=len(logits), hidden_size=1, num_layers=1)
+    def __init__(
+        self,
+        logits: list[float],
+        *,
+        input_vocab_size: int | None = None,
+    ) -> None:
+        super().__init__(
+            vocab_size=len(logits),
+            hidden_size=1,
+            num_layers=1,
+            input_vocab_size=input_vocab_size,
+        )
         self._logits = torch.tensor([logits], dtype=torch.float32)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -658,6 +670,7 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
         materialisation_config=materialisation_config_type(
             template_to_index={"A": 0, "B": 1, "C": 2, "D": 3},
             history_size=2,
+            short_session_padding_fidelity=False,
         ),
         progress=None,
         prepare_task=None,
@@ -669,6 +682,35 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
     assert sequence_examples[1].target_indexes.shape == (0,)
     assert sequence_examples[0].history_windows.device.type == "cpu"
     assert sequence_examples[1].history_windows.device.type == "cpu"
+
+
+def test_materialise_key_training_examples_with_padding_keeps_early_targets() -> None:
+    """Padding fidelity should keep early target positions eligible."""
+    materialise_key_training_examples = (
+        deeplog_key._materialise_key_training_examples  # noqa: SLF001
+    )
+    materialisation_config_type = vars(deeplog_key)[
+        "_KeyTrainingExampleMaterialisationConfig"
+    ]
+    sequence_examples = materialise_key_training_examples(
+        sequences=[
+            _sequence(
+                templates=["A", "B", "D"],
+                split_label=SplitLabel.TRAIN,
+            ),
+        ],
+        materialisation_config=materialisation_config_type(
+            template_to_index={"A": 0, "B": 1, "D": 2},
+            history_size=2,
+            short_session_padding_fidelity=True,
+        ),
+        progress=None,
+        prepare_task=None,
+    )
+
+    assert sequence_examples[0].eligible_target_indexes.tolist() == [0, 1, 2]
+    assert sequence_examples[0].history_windows.tolist() == [[3, 3], [3, 0], [0, 1]]
+    assert sequence_examples[0].target_indexes.tolist() == [0, 1, 2]
 
 
 def test_fit_key_model_materialises_one_hot_histories_per_minibatch(
@@ -2025,8 +2067,8 @@ def test_deeplog_next_event_prediction_counts_independent_segments() -> None:
     )
 
 
-def test_deeplog_short_session_padding_fidelity_scores_last_event() -> None:
-    """Legacy short-session fidelity should emit one padded key decision."""
+def test_deeplog_short_session_padding_fidelity_scores_all_events() -> None:
+    """Padding fidelity should score every event in a short session."""
     detector = DeepLogDetector(
         config=_deep_log_config(
             name="deeplog",
@@ -2039,7 +2081,10 @@ def test_deeplog_short_session_padding_fidelity_scores_last_event() -> None:
             short_session_padding_fidelity=True,
         ),
     )
-    detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    detector.key_model = _StaticKeyModel(
+        logits=[-5.0, -5.0, 2.0, 1.0],
+        input_vocab_size=5,
+    )
     assert detector.key_model is not None
     detector.template_to_index = {
         "A": 0,
@@ -2055,12 +2100,88 @@ def test_deeplog_short_session_padding_fidelity_scores_last_event() -> None:
     metrics = detector.run_metrics(run_metrics={"test_sequence_count": 1})
 
     assert outcome.findings
-    assert outcome.findings[0].event_index == 2
-    assert outcome.findings[0].key_model_finding is not None
+    assert [finding.event_index for finding in outcome.findings] == [0, 1, 2]
+    assert all(finding.key_model_finding is not None for finding in outcome.findings)
     assert metrics.next_event_prediction is not None
     assert metrics.next_event_prediction.totals.events_seen == 3
-    assert metrics.next_event_prediction.totals.events_eligible == 1
-    assert metrics.next_event_prediction.exclusions.insufficient_history == 2
+    assert metrics.next_event_prediction.totals.events_eligible == 3
+    assert metrics.next_event_prediction.totals.coverage == pytest.approx(1.0)
+    assert metrics.next_event_prediction.exclusions.insufficient_history == 0
+
+
+def test_deeplog_short_session_padding_fidelity_handles_ten_events() -> None:
+    """Padding fidelity should keep all ten short-session events eligible."""
+    padded_detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=10,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            short_session_padding_fidelity=True,
+        ),
+    )
+    padded_detector.key_model = _StaticKeyModel(
+        logits=[-5.0, -5.0, 2.0, 1.0],
+        input_vocab_size=5,
+    )
+    assert padded_detector.key_model is not None
+    padded_detector.template_to_index = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+    }
+    padded_detector.index_to_template = {
+        index: template for template, index in padded_detector.template_to_index.items()
+    }
+
+    padded_outcome = padded_detector.predict(
+        _sequence(templates=["A"] * 10),
+    )
+    padded_metrics = padded_detector.run_metrics(run_metrics={"test_sequence_count": 1})
+
+    assert padded_outcome.findings
+    assert len(padded_outcome.findings) == 10
+    assert [finding.event_index for finding in padded_outcome.findings] == list(
+        range(10),
+    )
+    assert padded_metrics.next_event_prediction is not None
+    assert padded_metrics.next_event_prediction.totals.events_seen == 10
+    assert padded_metrics.next_event_prediction.totals.events_eligible == 10
+    assert padded_metrics.next_event_prediction.totals.coverage == pytest.approx(1.0)
+    assert padded_metrics.next_event_prediction.exclusions.insufficient_history == 0
+
+    strict_detector = DeepLogDetector(
+        config=_deep_log_config(
+            name="deeplog",
+            history_size=10,
+            top_g=1,
+            hidden_size=4,
+            num_layers=1,
+            epochs=1,
+            batch_size=1,
+            short_session_padding_fidelity=False,
+        ),
+    )
+    strict_detector.key_model = _StaticKeyModel(logits=[-5.0, -5.0, 2.0, 1.0])
+    assert strict_detector.key_model is not None
+    strict_detector.template_to_index = padded_detector.template_to_index
+    strict_detector.index_to_template = padded_detector.index_to_template
+
+    strict_outcome = strict_detector.predict(
+        _sequence(templates=["A"] * 10),
+    )
+    strict_metrics = strict_detector.run_metrics(run_metrics={"test_sequence_count": 1})
+
+    assert not strict_outcome.findings
+    assert strict_metrics.next_event_prediction is not None
+    assert strict_metrics.next_event_prediction.totals.events_seen == 10
+    assert strict_metrics.next_event_prediction.totals.events_eligible == 0
+    assert strict_metrics.next_event_prediction.totals.coverage == pytest.approx(0.0)
+    assert strict_metrics.next_event_prediction.exclusions.insufficient_history == 10
 
 
 def test_next_event_prediction_state_top_k_is_monotonic() -> None:

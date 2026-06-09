@@ -51,7 +51,7 @@ diverge is short-session handling:
 
 | Topic | Paper | Attached scripts | AnomaLog DeepLog |
 | --- | --- | --- | --- |
-| Short-session scoring | Fixed-length history windows; no explicit padding rule is stated | `LogKeyModel_predict.py` left-pads short test sessions so they still produce one decision | No padding: sessions shorter than `history_size + 1` yield no key decision, which matches the paper more closely |
+| Short-session scoring | Fixed-length history windows; no explicit padding rule is stated | `LogKeyModel_predict.py` left-pads short test sessions so every event can still be scored | `short_session_padding_fidelity = true` uses the same event-centred padded windows; the default strict mode still drops events without a full history |
 | Training windows | Sliding windows from normal sequences | `LogKeyModel_train.py` also uses sliding windows only | Same core training shape, expressed through AnomaLog's sequence abstractions |
 | Benchmark scope | HDFS key-model benchmark; parameter modelling is described separately | Key-model script only | Key model plus optional parameter anomaly modelling, richer diagnostics, and explicit run metrics |
 
@@ -82,8 +82,9 @@ diverge is short-session handling:
   shorter than `history_size + 1` therefore do not yield a key-model decision,
   matching the fixed-window interpretation in the paper more closely. The
   optional `short_session_padding_fidelity = true` model-set variant restores
-  the attached legacy prediction script's padded last-event decision for
-  compatibility with historical DeepLog artefacts.
+  the attached legacy prediction script's event-centred padded scoring, so
+  early positions remain eligible and missing history is represented with the
+  sentinel `NO_EVENT` token.
 - Next-event diagnostics:
   default to `full_dataset` so the diagnostic output is directly comparable
   with DeepCASE. The diagnostic vocabulary policy is configurable on
