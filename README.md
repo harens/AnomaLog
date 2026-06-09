@@ -178,12 +178,20 @@ uv run python -m experiments.runners.run_experiment \
 ```
 
 To run one concrete model on one dataset, pass `--model` alongside either
-`--config` or `--experiment`:
+`--config` or `--experiment`. To narrow a registry experiment to a specific
+variant and dataset, add `--variant` and `--dataset`:
 
 ```bash
 uv run python -m experiments.runners.run_experiment \
   --config experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_assign_first.toml \
   --model deeplog_default
+```
+
+```bash
+uv run python -m experiments.runners.run_experiment \
+  --experiment hdfs_deeplog_paper \
+  --variant deeplog_short_session_padding_fidelity \
+  --dataset hdfs/v1_deeplog_paper_entry100k_assign_first
 ```
 
 Local execution is the canonical reproducibility path. Experiment runs reuse

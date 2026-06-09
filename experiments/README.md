@@ -39,7 +39,9 @@ registry alias. The runner still executes one concrete run at a time, but the
 registry now expands the listed model configs directly.
 For ad hoc work, the runner also accepts `--model` so you can execute one
 concrete model against one dataset manifest without creating a new registry
-entry first.
+entry first. When you need one concrete variant on one specific dataset from a
+registry-expanded run, combine `--model`, `--variant`, and `--dataset` to
+filter the resolved bundles before execution.
 Manifest execution defaults `max_workers` to `"auto"`, which uses up to the
 concrete run count and local CPU count. Set an explicit positive integer when a
 manifest needs a stricter cap.
@@ -211,6 +213,15 @@ To run one model on one dataset manifest, add `--model`:
 uv run python -m experiments.runners.run_experiment \
   --config experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_assign_first.toml \
   --model deeplog_default
+```
+
+To target one named variant on one resolved dataset from the registry:
+
+```bash
+uv run python -m experiments.runners.run_experiment \
+  --experiment hdfs_deeplog_paper \
+  --variant deeplog_short_session_padding_fidelity \
+  --dataset hdfs/v1_deeplog_paper_entry100k_assign_first
 ```
 
 To list the curated registry:

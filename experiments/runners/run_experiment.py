@@ -62,6 +62,8 @@ _PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
 class _BundleGroupRequest:
     config_path: Path
     model_name: str | None
+    variant_name: str | None
+    dataset_name: str | None
     bundles: list[ExperimentBundle]
     bundle_indexes: list[int]
     force: bool
@@ -98,6 +100,8 @@ class RegisteredExperimentRunRequest:
         repo_root (Path | None): Repository root used to resolve relative
             paths.
         model_name (str | None): Optional concrete model config name to run.
+        variant_name (str | None): Optional run-group or model-set name to run.
+        dataset_name (str | None): Optional resolved dataset config name to run.
         force (bool): Whether to replace existing deterministic run outputs and
             clear cached dataset materialisations before rebuilding.
         rerun (bool): Whether to create a fresh numbered attempt beneath the
@@ -112,6 +116,8 @@ class RegisteredExperimentRunRequest:
     registry_path: Path = Path("experiments/configs/registry.toml")
     repo_root: Path | None = None
     model_name: str | None = None
+    variant_name: str | None = None
+    dataset_name: str | None = None
     force: bool = False
     rerun: bool = False
     write_predictions: bool = False
@@ -160,6 +166,8 @@ def run_experiment(  # noqa: PLR0913
     config_path: Path,
     *,
     model_name: str | None = None,
+    variant_name: str | None = None,
+    dataset_name: str | None = None,
     force: bool = False,
     rerun: bool = False,
     write_predictions: bool = False,
@@ -170,6 +178,8 @@ def run_experiment(  # noqa: PLR0913
     Args:
         config_path (Path): Dataset manifest TOML path to execute.
         model_name (str | None): Optional concrete model config name to run.
+        variant_name (str | None): Optional run-group or model-set name to run.
+        dataset_name (str | None): Optional resolved dataset config name to run.
         force (bool): Whether to replace an existing deterministic result
             directory and clear the dataset build cache before rebuilding.
         rerun (bool): Whether to create a fresh numbered attempt beneath the
@@ -189,9 +199,11 @@ def run_experiment(  # noqa: PLR0913
     Raises:
         ConfigError: If the manifest does not expand to any concrete runs.
     """
-    bundles = _select_model_bundles(
+    bundles = _select_bundles(
         load_experiment_bundles(config_path),
         model_name=model_name,
+        variant_name=variant_name,
+        dataset_name=dataset_name,
         context=f"dataset manifest {config_path}",
     )
     if not bundles:
@@ -210,6 +222,8 @@ def run_experiment(  # noqa: PLR0913
                 _BundleGroupRequest(
                     config_path=config_path,
                     model_name=model_name,
+                    variant_name=variant_name,
+                    dataset_name=dataset_name,
                     bundles=bundles,
                     bundle_indexes=bundle_indexes,
                     force=run_options.force,
@@ -237,9 +251,11 @@ def run_registered_experiment(request: RegisteredExperimentRunRequest) -> list[P
         registry_path=request.registry_path,
         repo_root=resolved_repo_root,
     )
-    bundles = _select_model_bundles(
+    bundles = _select_bundles(
         list(resolved.bundles),
         model_name=request.model_name,
+        variant_name=request.variant_name,
+        dataset_name=request.dataset_name,
         context=f"registry experiment {request.experiment_name!r}",
     )
     run_options = _BundleRunOptions(
@@ -272,20 +288,34 @@ def _resolve_max_workers(
 
 
 def _run_bundle_from_manifest_payload(
-    payload: tuple[Path, int, str | None, bool, bool, bool, bool],
+    payload: tuple[
+        Path,
+        int,
+        str | None,
+        str | None,
+        str | None,
+        bool,
+        bool,
+        bool,
+        bool,
+    ],
 ) -> Path:
     (
         config_path,
         index,
         model_name,
+        variant_name,
+        dataset_name,
         force,
         rerun,
         write_predictions,
         debug_reporting,
     ) = payload
-    bundle = _select_model_bundles(
+    bundle = _select_bundles(
         load_experiment_bundles(config_path),
         model_name=model_name,
+        variant_name=variant_name,
+        dataset_name=dataset_name,
         context=f"dataset manifest {config_path}",
     )[index]
     options = _BundleRunOptions(
@@ -317,17 +347,31 @@ def _group_bundle_indexes_by_run_group(
     return [grouped_indexes[run_group] for run_group in run_group_order]
 
 
-def _select_model_bundles(
+def _select_bundles(
     bundles: list[ExperimentBundle],
     *,
     model_name: str | None,
+    variant_name: str | None,
+    dataset_name: str | None,
     context: str,
 ) -> list[ExperimentBundle]:
-    if model_name is None:
+    if model_name is None and variant_name is None and dataset_name is None:
         return bundles
-    selected = [bundle for bundle in bundles if bundle.model.name == model_name]
+    selected = [
+        bundle
+        for bundle in bundles
+        if (model_name is None or bundle.model.name == model_name)
+        and (variant_name is None or bundle.run_group == variant_name)
+        and (dataset_name is None or bundle.dataset.name == dataset_name)
+    ]
     if not selected:
-        msg = f"No bundles matched model {model_name!r} in {context}."
+        criteria = [
+            f"model={model_name!r}" if model_name is not None else None,
+            f"variant={variant_name!r}" if variant_name is not None else None,
+            f"dataset={dataset_name!r}" if dataset_name is not None else None,
+        ]
+        joined = ", ".join(item for item in criteria if item is not None)
+        msg = f"No bundles matched {joined} in {context}."
         raise ConfigError(msg)
     return selected
 
@@ -401,6 +445,8 @@ def _run_bundle_group_parallel(
                         request.config_path,
                         index,
                         request.model_name,
+                        request.variant_name,
+                        request.dataset_name,
                         request.force,
                         request.rerun,
                         request.write_predictions,
@@ -418,6 +464,8 @@ def _run_bundle_group_parallel(
                         request.config_path,
                         index,
                         request.model_name,
+                        request.variant_name,
+                        request.dataset_name,
                         request.force,
                         request.rerun,
                         request.write_predictions,
@@ -868,6 +916,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--variant",
+        help=(
+            "Run-group or model-set name to run. When supplied, only matching "
+            "bundles are executed."
+        ),
+    )
+    parser.add_argument(
+        "--dataset",
+        help=(
+            "Resolved dataset config name to run. When supplied, only matching "
+            "bundles are executed."
+        ),
+    )
+    parser.add_argument(
         "--registry",
         type=Path,
         default=Path("experiments/configs/registry.toml"),
@@ -925,6 +987,8 @@ def main() -> int:
                     ),
                     repo_root=getattr(args, "repo_root", None),
                     model_name=getattr(args, "model", None),
+                    variant_name=getattr(args, "variant", None),
+                    dataset_name=getattr(args, "dataset", None),
                     force=getattr(args, "force", False),
                     rerun=getattr(args, "rerun", False),
                     write_predictions=getattr(args, "write_predictions", False),
@@ -935,6 +999,8 @@ def main() -> int:
             run_experiment(
                 args.config,
                 model_name=getattr(args, "model", None),
+                variant_name=getattr(args, "variant", None),
+                dataset_name=getattr(args, "dataset", None),
                 force=getattr(args, "force", False),
                 rerun=getattr(args, "rerun", False),
                 write_predictions=getattr(args, "write_predictions", False),
