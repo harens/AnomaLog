@@ -37,6 +37,9 @@ If a manifest mixes heavyweight and lightweight detectors, keep the detector
 family next to the dataset manifest rather than hiding it behind another
 registry alias. The runner still executes one concrete run at a time, but the
 registry now expands the listed model configs directly.
+For ad hoc work, the runner also accepts `--model` so you can execute one
+concrete model against one dataset manifest without creating a new registry
+entry first.
 Manifest execution defaults `max_workers` to `"auto"`, which uses up to the
 concrete run count and local CPU count. Set an explicit positive integer when a
 manifest needs a stricter cap.
@@ -200,6 +203,14 @@ From the repository root:
 ```bash
 uv run python -m experiments.runners.run_experiment \
   --experiment bgl_entity_chronological
+```
+
+To run one model on one dataset manifest, add `--model`:
+
+```bash
+uv run python -m experiments.runners.run_experiment \
+  --config experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_assign_first.toml \
+  --model deeplog_default
 ```
 
 To list the curated registry:

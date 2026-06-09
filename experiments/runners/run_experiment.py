@@ -61,6 +61,7 @@ _PREFECT_LOGGING_CONFIG = load_logging_config(DEFAULT_LOGGING_SETTINGS_PATH)
 @dataclass(frozen=True, slots=True)
 class _BundleGroupRequest:
     config_path: Path
+    model_name: str | None
     bundles: list[ExperimentBundle]
     bundle_indexes: list[int]
     force: bool
@@ -96,6 +97,7 @@ class RegisteredExperimentRunRequest:
         registry_path (Path): Path to the registry TOML file.
         repo_root (Path | None): Repository root used to resolve relative
             paths.
+        model_name (str | None): Optional concrete model config name to run.
         force (bool): Whether to replace existing deterministic run outputs and
             clear cached dataset materialisations before rebuilding.
         rerun (bool): Whether to create a fresh numbered attempt beneath the
@@ -109,6 +111,7 @@ class RegisteredExperimentRunRequest:
     experiment_name: str
     registry_path: Path = Path("experiments/configs/registry.toml")
     repo_root: Path | None = None
+    model_name: str | None = None
     force: bool = False
     rerun: bool = False
     write_predictions: bool = False
@@ -153,9 +156,10 @@ def build_prefect_standard_formatter() -> PrefectFormatter:
     )
 
 
-def run_experiment(
+def run_experiment(  # noqa: PLR0913
     config_path: Path,
     *,
+    model_name: str | None = None,
     force: bool = False,
     rerun: bool = False,
     write_predictions: bool = False,
@@ -165,6 +169,7 @@ def run_experiment(
 
     Args:
         config_path (Path): Dataset manifest TOML path to execute.
+        model_name (str | None): Optional concrete model config name to run.
         force (bool): Whether to replace an existing deterministic result
             directory and clear the dataset build cache before rebuilding.
         rerun (bool): Whether to create a fresh numbered attempt beneath the
@@ -184,7 +189,11 @@ def run_experiment(
     Raises:
         ConfigError: If the manifest does not expand to any concrete runs.
     """
-    bundles = load_experiment_bundles(config_path)
+    bundles = _select_model_bundles(
+        load_experiment_bundles(config_path),
+        model_name=model_name,
+        context=f"dataset manifest {config_path}",
+    )
     if not bundles:
         msg = f"Manifest {config_path} did not expand to any concrete runs."
         raise ConfigError(msg)
@@ -200,6 +209,7 @@ def run_experiment(
             _run_bundle_group(
                 _BundleGroupRequest(
                     config_path=config_path,
+                    model_name=model_name,
                     bundles=bundles,
                     bundle_indexes=bundle_indexes,
                     force=run_options.force,
@@ -227,6 +237,11 @@ def run_registered_experiment(request: RegisteredExperimentRunRequest) -> list[P
         registry_path=request.registry_path,
         repo_root=resolved_repo_root,
     )
+    bundles = _select_model_bundles(
+        list(resolved.bundles),
+        model_name=request.model_name,
+        context=f"registry experiment {request.experiment_name!r}",
+    )
     run_options = _BundleRunOptions(
         force=request.force,
         rerun=request.rerun,
@@ -239,7 +254,7 @@ def run_registered_experiment(request: RegisteredExperimentRunRequest) -> list[P
             bundle,
             options=run_options,
         )
-        for bundle in resolved.bundles
+        for bundle in bundles
     ]
 
 
@@ -257,10 +272,22 @@ def _resolve_max_workers(
 
 
 def _run_bundle_from_manifest_payload(
-    payload: tuple[Path, int, bool, bool, bool, bool],
+    payload: tuple[Path, int, str | None, bool, bool, bool, bool],
 ) -> Path:
-    config_path, index, force, rerun, write_predictions, debug_reporting = payload
-    bundle = load_experiment_bundles(config_path)[index]
+    (
+        config_path,
+        index,
+        model_name,
+        force,
+        rerun,
+        write_predictions,
+        debug_reporting,
+    ) = payload
+    bundle = _select_model_bundles(
+        load_experiment_bundles(config_path),
+        model_name=model_name,
+        context=f"dataset manifest {config_path}",
+    )[index]
     options = _BundleRunOptions(
         force=force,
         rerun=rerun,
@@ -288,6 +315,21 @@ def _group_bundle_indexes_by_run_group(
             grouped_indexes[run_group] = []
         grouped_indexes[run_group].append(index)
     return [grouped_indexes[run_group] for run_group in run_group_order]
+
+
+def _select_model_bundles(
+    bundles: list[ExperimentBundle],
+    *,
+    model_name: str | None,
+    context: str,
+) -> list[ExperimentBundle]:
+    if model_name is None:
+        return bundles
+    selected = [bundle for bundle in bundles if bundle.model.name == model_name]
+    if not selected:
+        msg = f"No bundles matched model {model_name!r} in {context}."
+        raise ConfigError(msg)
+    return selected
 
 
 def _run_bundle_group(
@@ -358,6 +400,7 @@ def _run_bundle_group_parallel(
                     (
                         request.config_path,
                         index,
+                        request.model_name,
                         request.force,
                         request.rerun,
                         request.write_predictions,
@@ -374,6 +417,7 @@ def _run_bundle_group_parallel(
                     (
                         request.config_path,
                         index,
+                        request.model_name,
                         request.force,
                         request.rerun,
                         request.write_predictions,
@@ -398,18 +442,6 @@ def _run_bundle(
     *,
     options: _BundleRunOptions,
 ) -> Path:
-    """Execute one concrete run derived from a dataset manifest.
-
-    Args:
-        bundle (ExperimentBundle): Concrete run bundle to execute.
-        options (_BundleRunOptions): Execution flags for the concrete run.
-
-    Returns:
-        Path: Deterministic run directory containing the written artefacts.
-
-    Raises:
-        FileExistsError: If the result path exists but is not a directory.
-    """
     if options.rerun:
         result_paths = _reserve_rerun_result_paths(bundle)
     else:
@@ -829,6 +861,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--model",
+        help=(
+            "Concrete model config name to run. When supplied, only matching "
+            "bundles are executed."
+        ),
+    )
+    parser.add_argument(
         "--registry",
         type=Path,
         default=Path("experiments/configs/registry.toml"),
@@ -885,6 +924,7 @@ def main() -> int:
                         Path("experiments/configs/registry.toml"),
                     ),
                     repo_root=getattr(args, "repo_root", None),
+                    model_name=getattr(args, "model", None),
                     force=getattr(args, "force", False),
                     rerun=getattr(args, "rerun", False),
                     write_predictions=getattr(args, "write_predictions", False),
@@ -894,6 +934,7 @@ def main() -> int:
         else:
             run_experiment(
                 args.config,
+                model_name=getattr(args, "model", None),
                 force=getattr(args, "force", False),
                 rerun=getattr(args, "rerun", False),
                 write_predictions=getattr(args, "write_predictions", False),

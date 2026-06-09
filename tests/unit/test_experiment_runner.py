@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 import pytest
 from typing_extensions import Self
 
+from experiments import ConfigError
 from experiments.config import (
     DatasetVariantConfig,
     EntitySequenceConfig,
@@ -257,17 +258,19 @@ def test_main_does_not_print_the_run_directory(
     def _build_arg_parser() -> _Parser:
         return _Parser()
 
+    def _run_experiment(*args: object, **kwargs: object) -> Path:
+        config_path = args[0]
+        force = bool(kwargs["force"])
+        rerun = bool(kwargs["rerun"])
+        write_predictions = bool(kwargs["write_predictions"])
+        debug_reporting = bool(kwargs.get("debug_reporting"))
+        seen.append(
+            (config_path, force, rerun, write_predictions, debug_reporting),
+        )
+        return tmp_path / "result-dir"
+
     monkeypatch.setattr(runner, "build_arg_parser", _build_arg_parser)
-    monkeypatch.setattr(
-        runner,
-        "run_experiment",
-        lambda config_path, *, force, rerun, write_predictions, debug_reporting=False: (
-            seen.append(
-                (config_path, force, rerun, write_predictions, debug_reporting),
-            )
-            or tmp_path / "result-dir"
-        ),
-    )
+    monkeypatch.setattr(runner, "run_experiment", _run_experiment)
 
     exit_code = runner.main()
 
@@ -283,6 +286,7 @@ def test_build_arg_parser_exposes_config_and_registry_inputs() -> None:
 
     assert "--config" in help_text
     assert "--experiment" in help_text
+    assert "--model" in help_text
     assert "--registry" in help_text
     assert "--repo-root" in help_text
     assert "--force" in help_text
@@ -344,6 +348,53 @@ def test_run_registered_experiment_forwards_rerun_options(
     ]
 
 
+def test_run_registered_experiment_filters_to_requested_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Registry-backed runs should only execute bundles for the chosen model.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces registry resolution and
+            bundle execution so the test can inspect the filtered selection.
+        tmp_path (Path): Temporary filesystem root used to fabricate outputs.
+    """
+    bundles = [
+        SimpleNamespace(model=SimpleNamespace(name="deeplog_default")),
+        SimpleNamespace(model=SimpleNamespace(name="deepcase")),
+    ]
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        runner,
+        "resolve_registry_experiment",
+        lambda *_args, **_kwargs: SimpleNamespace(bundles=bundles),
+    )
+
+    def _run_bundle(
+        bundle: SimpleNamespace,
+        *,
+        options: object,
+    ) -> Path:
+        del options
+        seen.append(bundle.model.name)
+        return tmp_path / bundle.model.name
+
+    monkeypatch.setattr(runner, "_run_bundle", _run_bundle)
+
+    result = runner.run_registered_experiment(
+        runner.RegisteredExperimentRunRequest(
+            experiment_name="demo",
+            repo_root=tmp_path,
+            model_name="deepcase",
+            console=False,
+        ),
+    )
+
+    assert result == [tmp_path / "deepcase"]
+    assert seen == ["deepcase"]
+
+
 def test_run_bundle_from_manifest_payload_forwards_rerun_options(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -377,6 +428,7 @@ def test_run_bundle_from_manifest_payload_forwards_rerun_options(
         (
             tmp_path / "sweep.toml",
             0,
+            None,
             True,
             True,
             False,
@@ -393,6 +445,73 @@ def test_run_bundle_from_manifest_payload_forwards_rerun_options(
             debug_reporting=True,
         ),
     ]
+
+
+def test_run_experiment_filters_to_requested_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dataset manifest runs should only execute bundles for the chosen model.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading and group
+            execution so the test can inspect the filtered selection.
+        tmp_path (Path): Temporary path used to fabricate result outputs.
+    """
+    bundles = [
+        SimpleNamespace(
+            run_group="deeplog",
+            model=SimpleNamespace(name="deeplog_default"),
+        ),
+        SimpleNamespace(
+            run_group="deepcase",
+            model=SimpleNamespace(name="deepcase"),
+        ),
+    ]
+    seen: list[list[str]] = []
+
+    def _run_bundle_group(request: runner._BundleGroupRequest) -> list[Path]:
+        seen.append([bundle.model.name for bundle in request.bundles])
+        return [tmp_path / request.bundles[0].model.name]
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+    monkeypatch.setattr(runner, "_run_bundle_group", _run_bundle_group)
+
+    result = runner.run_experiment(
+        tmp_path / "sweep.toml",
+        model_name="deepcase",
+        force=True,
+    )
+
+    assert result == [tmp_path / "deepcase"]
+    assert seen == [["deepcase"]]
+
+
+def test_run_experiment_rejects_missing_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Selecting a missing model should fail before any work starts.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces bundle loading so the test
+            can exercise the missing-model branch without running anything.
+        tmp_path (Path): Temporary path used to fabricate the input config.
+    """
+    bundles = [
+        SimpleNamespace(
+            run_group="deeplog",
+            model=SimpleNamespace(name="deeplog_default"),
+        ),
+    ]
+
+    monkeypatch.setattr(runner, "load_experiment_bundles", lambda _path: bundles)
+
+    with pytest.raises(ConfigError, match="No bundles matched model 'deepcase'"):
+        runner.run_experiment(
+            tmp_path / "sweep.toml",
+            model_name="deepcase",
+        )
 
 
 def test_failure_helpers_format_bundle_exceptions(
@@ -691,7 +810,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
         SimpleNamespace(sweep=SimpleNamespace(max_workers=2)),
     ]
-    submitted_payloads: list[tuple[Path, int, bool, bool, bool, bool]] = []
+    submitted_payloads: list[tuple[Path, int, str | None, bool, bool, bool, bool]] = []
 
     class _FakeExecutor:
         def __init__(self, *, max_workers: int) -> None:
@@ -711,7 +830,7 @@ def test_run_experiment_submits_plain_worker_payloads(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool, bool, bool, bool]],
+            payloads: list[tuple[Path, int, str | None, bool, bool, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == len(bundles)
             del func
@@ -725,8 +844,8 @@ def test_run_experiment_submits_plain_worker_payloads(
 
     assert result == [tmp_path / "result-0", tmp_path / "result-1"]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True, False, False, False),
-        (tmp_path / "sweep.toml", 1, True, False, False, False),
+        (tmp_path / "sweep.toml", 0, None, True, False, False, False),
+        (tmp_path / "sweep.toml", 1, None, True, False, False, False),
     ]
 
 
@@ -891,7 +1010,9 @@ def test_run_experiment_batches_groups_sequentially(
             sweep=SimpleNamespace(max_workers=expected_max_workers),
         ),
     ]
-    submitted_payloads: list[list[tuple[Path, int, bool, bool, bool, bool]]] = []
+    submitted_payloads: list[
+        list[tuple[Path, int, str | None, bool, bool, bool, bool]]
+    ] = []
     serial_runs: list[int] = []
 
     class _FakeExecutor:
@@ -912,7 +1033,7 @@ def test_run_experiment_batches_groups_sequentially(
         def map(
             self,
             func: object,
-            payloads: list[tuple[Path, int, bool, bool, bool, bool]],
+            payloads: list[tuple[Path, int, str | None, bool, bool, bool, bool]],
         ) -> list[Path]:
             assert self.max_workers == expected_max_workers
             del func
@@ -942,8 +1063,8 @@ def test_run_experiment_batches_groups_sequentially(
     ]
     assert submitted_payloads == [
         [
-            (tmp_path / "sweep.toml", 0, True, False, False, False),
-            (tmp_path / "sweep.toml", 1, True, False, False, False),
+            (tmp_path / "sweep.toml", 0, None, True, False, False, False),
+            (tmp_path / "sweep.toml", 1, None, True, False, False, False),
         ],
     ]
     assert serial_runs == [2]
@@ -987,7 +1108,7 @@ def test_run_experiment_parallelises_baselines_with_nb_before_deepcase(
             sweep=SimpleNamespace(max_workers=expected_max_workers),
         ),
     ]
-    submitted_payloads: list[tuple[Path, int, bool, bool, bool, bool]] = []
+    submitted_payloads: list[tuple[Path, int, str | None, bool, bool, bool, bool]] = []
     serial_runs: list[int] = []
 
     class _FakeExecutor:
@@ -1008,7 +1129,7 @@ def test_run_experiment_parallelises_baselines_with_nb_before_deepcase(
         @staticmethod
         def submit(
             func: object,
-            payload: tuple[Path, int, bool, bool, bool, bool],
+            payload: tuple[Path, int, str | None, bool, bool, bool, bool],
         ) -> Future[Path]:
             del func
             submitted_payloads.append(payload)
@@ -1040,9 +1161,9 @@ def test_run_experiment_parallelises_baselines_with_nb_before_deepcase(
         tmp_path / "serial-3",
     ]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True, False, False, False),
-        (tmp_path / "sweep.toml", 1, True, False, False, False),
-        (tmp_path / "sweep.toml", 2, True, False, False, False),
+        (tmp_path / "sweep.toml", 0, None, True, False, False, False),
+        (tmp_path / "sweep.toml", 1, None, True, False, False, False),
+        (tmp_path / "sweep.toml", 2, None, True, False, False, False),
     ]
     assert serial_runs == [3]
 
@@ -1078,7 +1199,7 @@ def test_run_experiment_logs_bundle_failures_and_keeps_running(
             sweep=SimpleNamespace(max_workers=2),
         ),
     ]
-    submitted_payloads: list[tuple[Path, int, bool, bool, bool, bool]] = []
+    submitted_payloads: list[tuple[Path, int, str | None, bool, bool, bool, bool]] = []
 
     class _FakeExecutor:
         def __init__(self, *, max_workers: int) -> None:
@@ -1098,7 +1219,7 @@ def test_run_experiment_logs_bundle_failures_and_keeps_running(
         @staticmethod
         def submit(
             func: object,
-            payload: tuple[Path, int, bool, bool, bool, bool],
+            payload: tuple[Path, int, str | None, bool, bool, bool, bool],
         ) -> Future[Path]:
             del func
             submitted_payloads.append(payload)
@@ -1118,9 +1239,9 @@ def test_run_experiment_logs_bundle_failures_and_keeps_running(
 
     assert result == [tmp_path / "result-0", tmp_path / "result-2"]
     assert submitted_payloads == [
-        (tmp_path / "sweep.toml", 0, True, False, False, False),
-        (tmp_path / "sweep.toml", 1, True, False, False, False),
-        (tmp_path / "sweep.toml", 2, True, False, False, False),
+        (tmp_path / "sweep.toml", 0, None, True, False, False, False),
+        (tmp_path / "sweep.toml", 1, None, True, False, False, False),
+        (tmp_path / "sweep.toml", 2, None, True, False, False, False),
     ]
     output_lines = capsys.readouterr().out.splitlines()
     assert output_lines[0] == "One or more runs in this group failed:"

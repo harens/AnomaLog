@@ -8,6 +8,8 @@
 
 **AnomaLog turns raw logs into reproducible, model-ready datasets for anomaly detection.**
 
+![Prefect UI](docs/images/prefect.png)
+
 It is designed for research workflows where preprocessing is not incidental, but part of the experimental artifact. Parsing, template mining, labeling, and sequence construction are made explicit, composable, and reproducible.
 
 Benchmark results in log anomaly detection often depend on hidden preprocessing decisions. AnomaLog surfaces those decisions and makes them first-class, enabling fair comparison and repeatable experiments.
@@ -173,6 +175,15 @@ Built-in experiment detectors include Template Frequency, [Naive Bayes](https://
 ```bash
 uv run python -m experiments.runners.run_experiment \
   --experiment bgl_entity_chronological_template_frequency
+```
+
+To run one concrete model on one dataset, pass `--model` alongside either
+`--config` or `--experiment`:
+
+```bash
+uv run python -m experiments.runners.run_experiment \
+  --config experiments/configs/datasets/hdfs/v1_deeplog_paper_entry100k_assign_first.toml \
+  --model deeplog_default
 ```
 
 Local execution is the canonical reproducibility path. Experiment runs reuse
