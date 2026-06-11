@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.6.0](https://github.com/harens/AnomaLog/compare/v0.5.0...v0.6.0) (2026-06-11)
+
+
+### Features
+
+* **experiments:** add dataset and variant selectors ([46676e6](https://github.com/harens/AnomaLog/commit/46676e6b32cfb173903d62bec50ebbf1fb6bee66))
+* **experiments:** add model selector for single-run execution ([518d954](https://github.com/harens/AnomaLog/commit/518d95425277acf8c7fdd3e06e6317a6c67825b3))
+* **experiments:** add rerun attempts for repeated runs ([8f19746](https://github.com/harens/AnomaLog/commit/8f19746f60841ec5afdab44c6a697015b086679a))
+* **experiments:** reuse cached sequence summaries ([c87c5c2](https://github.com/harens/AnomaLog/commit/c87c5c2cc6a7483dfc5e96f2dee5574a029977ab))
+* **experiments:** reuse cached sequence summaries ([0589ce2](https://github.com/harens/AnomaLog/commit/0589ce2310dbf04450602b973c205b722216d09d))
+* **sequences:** cache raw-entry split summaries ([7613d8b](https://github.com/harens/AnomaLog/commit/7613d8b914cdaaaddd533fb65161add06297af08))
+* **sequences:** cache raw-entry split summaries ([efa8dcb](https://github.com/harens/AnomaLog/commit/efa8dcba47d7f58c694054ca20481ee3b6acc6ce))
+* **thunderbird:** switch fixed windows to raw positions ([105b2c3](https://github.com/harens/AnomaLog/commit/105b2c39f8f6abe7809013c36cc468e7c8d66490))
+
+
+### Bug Fixes
+
+* avoid super in HDFS train replay ([2dcae63](https://github.com/harens/AnomaLog/commit/2dcae63054a6477464377fdbaa6ca84651abe741))
+* bound HDFS train replay to the prefix ([dd5dcba](https://github.com/harens/AnomaLog/commit/dd5dcbad32d2928f80b35bf3828371a87c4f87d2))
+* cache structured sidecars for entity counts ([7cdaff9](https://github.com/harens/AnomaLog/commit/7cdaff95c882f139c411c7a08b54305dc9204158))
+* **deeplog:** avoid caching dense Thunderbird key windows ([5fb204f](https://github.com/harens/AnomaLog/commit/5fb204f52b8bdea95a39c4e1f65c8866adac6cfc))
+* **deeplog:** enable padded short-session scoring ([c0da589](https://github.com/harens/AnomaLog/commit/c0da58981ff882aa7ebddea86f42e0457bb89c99))
+* **deeplog:** skip expensive raw-entry split replay ([832717a](https://github.com/harens/AnomaLog/commit/832717a3ea8a185781767608934c9a315193fac8))
+* **experiments:** add error handling for bundle execution failures ([bfba538](https://github.com/harens/AnomaLog/commit/bfba538264dcb6cc66b771032034efdd9736f026))
+* **experiments:** speed up template-frequency fitting ([4b72315](https://github.com/harens/AnomaLog/commit/4b72315f47e5e0e48d0dd0102cafe60abe78dd8d))
+* preserve bounded HDFS fraction splits ([c1af95b](https://github.com/harens/AnomaLog/commit/c1af95ba9f379002e35b4fd79bec126ef3bd45ff))
+* reduce DeepLog and DeepCase GPU peak memory ([9d4b9d5](https://github.com/harens/AnomaLog/commit/9d4b9d5ec43ca835fe3bb1c55d89c5ac2e4b8c6b))
+* restore deepcase table iv registry entries ([2d018b0](https://github.com/harens/AnomaLog/commit/2d018b0ddee6ff48650464c72805dbcccd1949c3))
+* reuse derived dataset streams ([34e96d5](https://github.com/harens/AnomaLog/commit/34e96d515b73c45b3763637fc7d2a584b4962907))
+* reuse derived HDFS raw logs ([8280033](https://github.com/harens/AnomaLog/commit/828003347af64de4736744715938ea07f5cf7209))
+* stream entity buckets lazily for DeepCase ([aa75134](https://github.com/harens/AnomaLog/commit/aa75134c629412155ed00eae62f5f7fe48f0a05a))
+* **structured:** fingerprint template mining cache inputs ([fe86995](https://github.com/harens/AnomaLog/commit/fe869950ce8ea6e4881abdc4465c97295ab7c982))
+* tighten HDFS replay typing ([85ddb22](https://github.com/harens/AnomaLog/commit/85ddb22f1c5256a03c67ad3060940936b82b50e9))
+
+
+### Performance Improvements
+
+* **anomalog:** speed up shared sequence materialisation ([0281897](https://github.com/harens/AnomaLog/commit/028189774555c7ec7ca07bb40ce931e80ab9f4b0))
+* bound split-aware experiment replay ([b54e3ad](https://github.com/harens/AnomaLog/commit/b54e3ada3235249619d4c3edf87a5c5f5594ac1e))
+* cache DeepLog and DeepCase training inputs ([a93afa4](https://github.com/harens/AnomaLog/commit/a93afa414c2b83cceb5b45f3f5c5368250615bf0))
+* cache deeplog one-hot training windows ([e0f1f8b](https://github.com/harens/AnomaLog/commit/e0f1f8b3b921b79d0f4e4acbdb38aeccb397abe8))
+* **deepcase:** reuse cached training batches during fit ([a72713f](https://github.com/harens/AnomaLog/commit/a72713f75a7a6830194e395f2ee4f19bf7dc44e7))
+* **experiments:** fast-path normal training corpora ([8194020](https://github.com/harens/AnomaLog/commit/819402009ecaa627e4de5a1c3485beb104c3dfb0))
+* **models:** lock in single-pass scoring paths ([23a5432](https://github.com/harens/AnomaLog/commit/23a5432b09f52ff255c1f8415077a6757ca50651))
+* **models:** remove duplicate scoring passes ([7fff549](https://github.com/harens/AnomaLog/commit/7fff549f05767e315de985a9e946354f5f88f7c7))
+* skip deeplog parameter stream context on key-only runs ([536c887](https://github.com/harens/AnomaLog/commit/536c887b4ee9a8dd7a7a2d7bf0a61f805101f4c4))
+
+
+### Documentation
+
+* add prefect image ([6d821a2](https://github.com/harens/AnomaLog/commit/6d821a29b2159b418b150f9e0606c9befc0fbb14))
+* **readme:** add Zenodo DOI badge ([ff0c3d8](https://github.com/harens/AnomaLog/commit/ff0c3d8033f236f0f06bd72c88f1f86f5a16bf80))
+* **thunderbird:** record raw-position count methodology ([9ec9e5d](https://github.com/harens/AnomaLog/commit/9ec9e5d1663a97b8f8f31378dc6d0f30c13e605d))
+
 ## [0.5.0](https://github.com/harens/AnomaLog/compare/v0.4.0...v0.5.0) (2026-06-03)
 
 
