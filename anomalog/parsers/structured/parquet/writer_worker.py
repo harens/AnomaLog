@@ -7,7 +7,9 @@ import json
 import shutil
 from dataclasses import asdict, dataclass
 from hashlib import blake2s
-from pathlib import Path  # noqa: TC003 - used at runtime for file IO
+from pathlib import (
+    Path,  # ruff: ignore[typing-only-standard-library-import] - used at runtime for file IO
+)
 from time import perf_counter
 from typing import TYPE_CHECKING
 

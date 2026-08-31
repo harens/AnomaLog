@@ -553,7 +553,7 @@ class ParquetStructuredSink(StructuredSink):
 
         min_ts: int | None = None
         max_ts: int | None = None
-        pc_min_max = getattr(pc, "min_max")  # noqa: B009 - stubs miss this function
+        pc_min_max = getattr(pc, "min_max")  # ruff: ignore[get-attr-with-constant] - stubs miss this function
 
         for batch in ts_scanner.to_batches():
             col = batch.column(0)
