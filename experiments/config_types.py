@@ -36,7 +36,9 @@ from anomalog.sources import (
 )
 from anomalog.split_validation import validate_split_fractions
 from experiments import ConfigError
-from experiments.models.metric_schema import EvaluationUnit  # noqa: TC001
+from experiments.models.metric_schema import (
+    EvaluationUnit,  # ruff: ignore[typing-only-first-party-import]
+)
 
 if TYPE_CHECKING:
     from anomalog.labels import AnomalyLabelReader

@@ -20,7 +20,9 @@ from typing_extensions import Self
 
 from anomalog.representations import TemplatePhraseRepresentation
 from experiments import ConfigError
-from experiments.models.metric_schema import MetricScope  # noqa: TC001
+from experiments.models.metric_schema import (
+    MetricScope,  # ruff: ignore[typing-only-first-party-import]
+)
 
 if TYPE_CHECKING:
     import logging

@@ -120,7 +120,7 @@ def test_remote_zip_source_materialise_downloads_and_extracts_archive(
         return Progress()
 
     with disable_run_logger():
-        source._download_dataset(  # noqa: SLF001 - exercising the download side effect directly
+        source._download_dataset(  # ruff: ignore[private-member-access] - exercising the download side effect directly
             zip_path,
             progress_factory=_progress_factory,
         )
@@ -194,7 +194,7 @@ def test_remote_zip_source_materialise_downloads_and_extracts_tarball(
         return Progress()
 
     with disable_run_logger():
-        source._download_dataset(  # noqa: SLF001 - exercising the download side effect directly
+        source._download_dataset(  # ruff: ignore[private-member-access] - exercising the download side effect directly
             zip_path,
             progress_factory=_progress_factory,
         )
@@ -254,7 +254,7 @@ def test_remote_zip_source_materialise_downloads_and_extracts_gzip_archive(
         return Progress()
 
     with disable_run_logger():
-        source._download_dataset(  # noqa: SLF001 - exercising the gzip branch directly
+        source._download_dataset(  # ruff: ignore[private-member-access] - exercising the gzip branch directly
             zip_path,
             progress_factory=_progress_factory,
         )
@@ -289,7 +289,7 @@ def test_remote_zip_source_rejects_gzip_archives_without_raw_logs_relpath(
             match=error_message,
         ),
     ):
-        source._extract_gzip(archive_path)  # noqa: SLF001 - regression coverage
+        source._extract_gzip(archive_path)  # ruff: ignore[private-member-access] - regression coverage
 
     assert list(archive_path.with_suffix("").iterdir()) == []
 
@@ -312,7 +312,7 @@ def test_remote_zip_source_extracts_real_tarball_members(
 
     source = RemoteZipSource(url="https://example.com/OpenStack.tar.gz")
     with disable_run_logger():
-        source._extract_tarball(archive_path)  # noqa: SLF001 - regression coverage
+        source._extract_tarball(archive_path)  # ruff: ignore[private-member-access] - regression coverage
 
     assert (archive_path.with_suffix("") / "preprocessed/demo.log").read_text(
         encoding="utf-8",
@@ -383,7 +383,7 @@ def test_remote_zip_source_finalise_download_removes_bad_archive(
     monkeypatch.setattr("anomalog.sources.remote_zip.extract_zip", _fake_extract_zip)
 
     with disable_run_logger(), pytest.raises(zipfile.BadZipFile):
-        source._finalise_download(zip_path)  # noqa: SLF001 - regression coverage
+        source._finalise_download(zip_path)  # ruff: ignore[private-member-access] - regression coverage
 
     assert not zip_path.exists()
 

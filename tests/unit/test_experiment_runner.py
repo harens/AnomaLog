@@ -340,7 +340,7 @@ def test_run_registered_experiment_forwards_rerun_options(
 
     assert result == [tmp_path / "result"]
     assert seen == [
-        runner._BundleRunOptions(  # noqa: SLF001
+        runner._BundleRunOptions(  # ruff: ignore[private-member-access]
             force=True,
             rerun=True,
             write_predictions=True,
@@ -487,7 +487,7 @@ def test_run_bundle_from_manifest_payload_forwards_rerun_options(
         )[1],
     )
 
-    result = runner._run_bundle_from_manifest_payload(  # noqa: SLF001
+    result = runner._run_bundle_from_manifest_payload(  # ruff: ignore[private-member-access]
         (
             tmp_path / "sweep.toml",
             0,
@@ -503,7 +503,7 @@ def test_run_bundle_from_manifest_payload_forwards_rerun_options(
 
     assert result == tmp_path / "result"
     assert seen == [
-        runner._BundleRunOptions(  # noqa: SLF001
+        runner._BundleRunOptions(  # ruff: ignore[private-member-access]
             force=True,
             rerun=True,
             write_predictions=False,
@@ -640,24 +640,24 @@ def test_failure_helpers_format_bundle_exceptions(
     """
     bundle = _make_bundle(tmp_path, concrete_name="demo")
 
-    failure = runner._run_bundle_with_failure_capture(  # noqa: SLF001
+    failure = runner._run_bundle_with_failure_capture(  # ruff: ignore[private-member-access]
         bundle,
-        options=runner._BundleRunOptions(),  # noqa: SLF001
+        options=runner._BundleRunOptions(),  # ruff: ignore[private-member-access]
     )
     assert failure[1] is not None
     assert "Traceback (most recent call last):" in failure[1]
 
     future: Future[Path] = Future()
     future.set_exception(RuntimeError("boom"))
-    captured = runner._capture_future_result(future, bundle)  # noqa: SLF001
+    captured = runner._capture_future_result(future, bundle)  # ruff: ignore[private-member-access]
     assert captured[0] is None
     assert captured[1] is not None
     assert captured[1].startswith("demo: boom")
     assert "Traceback (most recent call last):" in captured[1]
-    assert runner._format_bundle_failure(bundle, RuntimeError()) == "demo: RuntimeError"  # noqa: SLF001
+    assert runner._format_bundle_failure(bundle, RuntimeError()) == "demo: RuntimeError"  # ruff: ignore[private-member-access]
 
 
-def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
+def test_run_bundle_logs_traceback_before_reraising(  # ruff: ignore[complex-structure]
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -752,9 +752,9 @@ def test_run_bundle_logs_traceback_before_reraising(  # noqa: C901
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        runner._run_bundle(  # noqa: SLF001
+        runner._run_bundle(  # ruff: ignore[private-member-access]
             bundle,
-            options=runner._BundleRunOptions(),  # noqa: SLF001
+            options=runner._BundleRunOptions(),  # ruff: ignore[private-member-access]
         )
 
     assert any(kind == "exception" for kind, _ in logger_messages)
@@ -888,9 +888,9 @@ def test_execute_bundle_skips_exact_split_count_hint_for_raw_entry_split(
     monkeypatch.setattr(runner, "_finalise_bundle_run", lambda **_kwargs: None)
 
     with caplog.at_level(logging.INFO):
-        returned = runner._execute_bundle_run(  # noqa: SLF001
+        returned = runner._execute_bundle_run(  # ruff: ignore[private-member-access]
             bundle=bundle,
-            options=runner._BundleRunOptions(console=False),  # noqa: SLF001
+            options=runner._BundleRunOptions(console=False),  # ruff: ignore[private-member-access]
             result_paths=result_paths,
             logger=logger,
         )
@@ -1006,7 +1006,7 @@ def test_prepare_result_paths_returns_base_paths_when_not_rerunning(
 
     monkeypatch.setattr(runner, "prepare_result_paths", _prepare_result_paths)
 
-    result = runner._prepare_result_paths(  # noqa: SLF001
+    result = runner._prepare_result_paths(  # ruff: ignore[private-member-access]
         bundle,
         rerun=False,
     )
@@ -1056,7 +1056,7 @@ def test_prepare_result_paths_allocates_next_attempt_for_reruns(
     monkeypatch.setattr(runner, "prepare_result_paths", _prepare_result_paths)
 
     fake_bundle = _make_bundle(tmp_path, concrete_name="demo")
-    rerun_paths = runner._prepare_result_paths(  # noqa: SLF001
+    rerun_paths = runner._prepare_result_paths(  # ruff: ignore[private-member-access]
         fake_bundle,
         rerun=True,
     )
@@ -1099,7 +1099,7 @@ def test_reserve_rerun_result_paths_retries_when_directory_already_exists(
 
     monkeypatch.setattr(runner, "_prepare_result_paths", _prepare_result_paths)
 
-    result = runner._reserve_rerun_result_paths(bundle)  # noqa: SLF001
+    result = runner._reserve_rerun_result_paths(bundle)  # ruff: ignore[private-member-access]
 
     assert result.run_dir == second_run_dir
     expected_attempt_count = 2
@@ -1430,7 +1430,7 @@ def test_next_run_attempt_ignores_invalid_attempt_directories(
     (run_root / "misc").mkdir()
 
     expected_next_attempt = 3
-    assert runner._next_run_attempt(run_root) == expected_next_attempt  # noqa: SLF001
+    assert runner._next_run_attempt(run_root) == expected_next_attempt  # ruff: ignore[private-member-access]
 
 
 def test_run_bundle_rebuilds_sequence_views_for_each_stage(
@@ -1659,9 +1659,9 @@ def test_run_bundle_rejects_non_directory_result_path(
         FileExistsError,
         match="Result path exists but is not a directory",
     ):
-        runner._run_bundle(  # noqa: SLF001
+        runner._run_bundle(  # ruff: ignore[private-member-access]
             bundle,
-            options=runner._BundleRunOptions(),  # noqa: SLF001
+            options=runner._BundleRunOptions(),  # ruff: ignore[private-member-access]
         )
 
 
@@ -1868,9 +1868,9 @@ def test_run_bundle_rerun_keeps_existing_attempts_and_writes_new_one(
     monkeypatch.setattr(runner, "write_run_outputs", lambda **_kwargs: None)
     monkeypatch.setattr(runner.shutil, "rmtree", _recording_rmtree)
 
-    result = runner._run_bundle(  # noqa: SLF001
+    result = runner._run_bundle(  # ruff: ignore[private-member-access]
         bundle,
-        options=runner._BundleRunOptions(rerun=True),  # noqa: SLF001
+        options=runner._BundleRunOptions(rerun=True),  # ruff: ignore[private-member-access]
     )
 
     assert result == run_paths.run_dir

@@ -181,7 +181,7 @@ def verify_md5(
 
     file_size = file_path.stat().st_size
 
-    hash_md5 = hashlib.md5()  # noqa: S324 - MD5 is used by default for zenodo datasets
+    hash_md5 = hashlib.md5()  # ruff: ignore[hashlib-insecure-hash-function] - MD5 is used by default for zenodo datasets
     chunk_size = 4 * 1024 * 1024
 
     with progress_factory() as progress:
