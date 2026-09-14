@@ -1273,9 +1273,9 @@ def test_fit_context_builder_reuses_cached_training_batches(
     monkeypatch.setattr(model.context_builder, "forward", fake_forward)
     # Test the chunking helper directly so the caching regression stays focused.
     fit_context_builder_in_chunks = (
-        deepcase_detector._fit_context_builder_in_chunks  # noqa: SLF001
+        deepcase_detector._fit_context_builder_in_chunks  # ruff: ignore[private-member-access]
     )
-    cached_batches = deepcase_detector._materialise_context_builder_training_batches(  # noqa: SLF001
+    cached_batches = deepcase_detector._materialise_context_builder_training_batches(  # ruff: ignore[private-member-access]
         train_sequences=(sequence,),
         event_id_map=event_id_map,
         context_length=config.context_length,
@@ -2232,7 +2232,7 @@ def test_predict_next_event_batch_in_chunks_moves_confidence_to_cpu(
         parent_sequence_fallback_count=0,
     )
 
-    confidence = deepcase_detector._predict_next_event_batch_in_chunks(  # noqa: SLF001
+    confidence = deepcase_detector._predict_next_event_batch_in_chunks(  # ruff: ignore[private-member-access]
         model=model,
         batch=batch,
         device=torch.device("cpu"),
