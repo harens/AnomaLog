@@ -937,7 +937,7 @@ def _event_detection_inputs(
 
 
 def _event_detection_inputs_from_stream(
-    event_level_detection: Any,  # noqa: ANN401
+    event_level_detection: Any,  # ruff: ignore[any-type]
 ) -> tuple[int, int, int, int, int, int, int, int, int, dict[str, Any], bool] | None:
     event_level_detection_mapping = _as_metric_mapping(event_level_detection)
     events_seen = _int_value(event_level_detection_mapping, "events_seen")
@@ -977,7 +977,7 @@ def _event_detection_inputs_from_stream(
 
 
 def _event_detection_inputs_from_prediction_diagnostics(
-    prediction_diagnostics: Any,  # noqa: ANN401
+    prediction_diagnostics: Any,  # ruff: ignore[any-type]
 ) -> tuple[int, int, int, int, int, int, int, int, int, dict[str, Any], bool] | None:
     prediction_diagnostics_mapping = _as_metric_mapping(prediction_diagnostics)
     event_decision_metrics = _mapping_value(
@@ -1351,7 +1351,7 @@ def _metric_count(metrics: dict[str, object], key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _as_metric_mapping(mapping: object) -> Any:  # noqa: ANN401
+def _as_metric_mapping(mapping: object) -> Any:  # ruff: ignore[any-type]
     builtins_mapping = msgspec.to_builtins(mapping)
     if not isinstance(builtins_mapping, dict):
         msg = "Expected mapping-like metric payload."
@@ -1359,7 +1359,7 @@ def _as_metric_mapping(mapping: object) -> Any:  # noqa: ANN401
     return builtins_mapping
 
 
-def _mapping_value(mapping: Any, key: str) -> Any:  # noqa: ANN401
+def _mapping_value(mapping: Any, key: str) -> Any:  # ruff: ignore[any-type]
     return mapping.get(key)
 
 
@@ -1371,7 +1371,7 @@ def _require_int(value: int | None) -> int:
 
 
 def _int_value(
-    mapping: Any,  # noqa: ANN401
+    mapping: Any,  # ruff: ignore[any-type]
     key: str,
     *,
     default: int | None = None,
@@ -1396,7 +1396,7 @@ def _int_count_map(raw_counts: object | None) -> dict[int, int] | None:
     return counts
 
 
-def _nested_float(mapping: Any, key: str) -> float | None:  # noqa: ANN401
+def _nested_float(mapping: Any, key: str) -> float | None:  # ruff: ignore[any-type]
     if not isinstance(mapping, dict):
         return None
     value = mapping.get(key)

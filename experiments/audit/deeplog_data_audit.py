@@ -1406,7 +1406,7 @@ def _collect_hdfs_session_observations(
     return observations
 
 
-def _hdfs_segments_for_policy(  # noqa: C901, PLR0911, PLR0912
+def _hdfs_segments_for_policy(  # ruff: ignore[complex-structure, too-many-return-statements, too-many-branches]
     *,
     policy_name: str,
     session: HDFSSessionObservation,

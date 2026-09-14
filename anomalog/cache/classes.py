@@ -39,7 +39,7 @@ def class_source(cls: type) -> str:
         )
 
 
-def cache_class_key_fn(context: TaskRunContext, params: dict[str, Any]) -> str:  # noqa: ARG001 - context is not used, but part of the interface
+def cache_class_key_fn(context: TaskRunContext, params: dict[str, Any]) -> str:  # ruff: ignore[unused-function-argument] - context is not used, but part of the interface
     """Build a stable hash for cache keying based on class definitions.
 
     Builtins and routines are ignored, and the result is independent of
