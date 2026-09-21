@@ -25,7 +25,7 @@ def test_pytest_runtest_makereport_stashes_call_report(
             current test item and its stash.
     """
     item = request.node
-    reports_key = unit_conftest._TEST_REPORTS_KEY  # noqa: SLF001
+    reports_key = unit_conftest._TEST_REPORTS_KEY  # ruff: ignore[private-member-access]
     call = pytest.CallInfo.from_call(lambda: None, "call")
     report = pytest.TestReport.from_item_and_call(item, call)
 
