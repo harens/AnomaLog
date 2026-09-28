@@ -87,7 +87,7 @@ def _markov_config(**values: ConfigValue) -> MarkovModelConfig:
     )
 
 
-def _sequence(  # noqa: PLR0913
+def _sequence(  # ruff: ignore[too-many-arguments]
     window_id: int,
     *,
     templates: list[str],
@@ -108,7 +108,7 @@ def _sequence(  # noqa: PLR0913
         evaluation_event_mask=evaluation_event_mask,
     )
     if label is None:
-        object.__setattr__(sequence, "label", None)  # noqa: PLC2801
+        object.__setattr__(sequence, "label", None)  # ruff: ignore[unnecessary-dunder-call]
     return sequence
 
 

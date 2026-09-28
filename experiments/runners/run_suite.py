@@ -192,7 +192,7 @@ def _run_parallel_suite(
                     f"[suite] finished {experiment_name} -> "
                     f"{', '.join(str(path) for path in result_paths)}",
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # ruff: ignore[blind-except]
                 failures.append(f"{experiment_name}: {exc}")
 
     if failures:
