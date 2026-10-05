@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import re
 import shlex
-import subprocess  # noqa: S404
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,7 +217,7 @@ def submit_experiments(request: SlurmSubmitRequest) -> list[str]:
         _write_line(_format_sbatch_command_preview(command))
         return []
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
             command,
             check=True,
             capture_output=True,

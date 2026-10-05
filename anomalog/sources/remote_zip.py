@@ -180,7 +180,7 @@ class RemoteZipSource(DatasetSource):
 
         try:
             with progress_factory() as pbar:
-                urlretrieve(  # noqa: S310 - Validation is done in _validate_remote_url
+                urlretrieve(  # ruff: ignore[suspicious-url-open-usage] - Validation is done in _validate_remote_url
                     self.url,
                     temp_zip_path,
                     reporthook=self._make_progress_hook(
