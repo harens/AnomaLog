@@ -54,7 +54,7 @@ def _write_slurm_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Pat
     return registry_path, defaults_path
 
 
-def _make_submission(  # noqa: PLR0913
+def _make_submission(  # ruff: ignore[too-many-arguments]
     *,
     repo_root: pathlib.Path,
     force: bool = False,
@@ -86,9 +86,9 @@ def _make_submission(  # noqa: PLR0913
             groups=("demo_two", "baselines"),
         ),
     )
-    return slurm._SlurmSubmission(  # noqa: SLF001
+    return slurm._SlurmSubmission(  # ruff: ignore[private-member-access]
         experiments=experiments,
-        defaults=slurm._SlurmDefaults(  # noqa: SLF001
+        defaults=slurm._SlurmDefaults(  # ruff: ignore[private-member-access]
             time="01:00:00",
             cpus_per_task=2,
             mem="8G",
@@ -100,7 +100,7 @@ def _make_submission(  # noqa: PLR0913
         / "experiments"
         / "results"
         / "slurm-logs"
-        / slurm._build_submission_label(experiments),  # noqa: SLF001
+        / slurm._build_submission_label(experiments),  # ruff: ignore[private-member-access]
         force=force,
         rerun=rerun,
         write_predictions=write_predictions,
@@ -159,7 +159,7 @@ def test_build_wrap_script_indexes_embedded_array_by_task_id() -> None:
         repo_root=pathlib.Path("/repo with spaces"),
     )
 
-    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+    wrap_script = slurm._build_wrap_script(submission)  # ruff: ignore[private-member-access]
 
     assert "set -- \\" in wrap_script
     assert "  demo" in wrap_script
@@ -190,7 +190,7 @@ def test_build_wrap_script_runs_under_posix_shell_and_exports_experiment(
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     submission = _make_submission(repo_root=repo_root)
-    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+    wrap_script = slurm._build_wrap_script(submission)  # ruff: ignore[private-member-access]
 
     home_dir = tmp_path / "home"
     bin_dir = home_dir / ".local" / "bin"
@@ -240,7 +240,7 @@ def test_build_wrap_script_propagates_run_flags() -> None:
         debug_reporting=True,
     )
 
-    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+    wrap_script = slurm._build_wrap_script(submission)  # ruff: ignore[private-member-access]
 
     assert "--force" in wrap_script
     assert "--rerun" in wrap_script
@@ -258,7 +258,7 @@ def test_build_wrap_script_exports_cluster_cache_roots() -> None:
         ),
     )
 
-    wrap_script = slurm._build_wrap_script(submission)  # noqa: SLF001
+    wrap_script = slurm._build_wrap_script(submission)  # ruff: ignore[private-member-access]
 
     assert "export ANOMALOG_DATA_ROOT=/data/hs1822" in wrap_script
     assert "export ANOMALOG_CACHE_ROOT=/data/hs1822/.cache" in wrap_script
@@ -385,7 +385,7 @@ def test_submit_experiments_dry_run_prints_command_and_skips_subprocess(
         / "experiments"
         / "results"
         / "slurm-logs"
-        / slurm._build_submission_label(  # noqa: SLF001
+        / slurm._build_submission_label(  # ruff: ignore[private-member-access]
             (
                 RegisteredExperiment(
                     name="demo",
