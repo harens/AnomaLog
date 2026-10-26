@@ -162,7 +162,7 @@ def build_prefect_standard_formatter() -> PrefectFormatter:
     )
 
 
-def run_experiment(  # noqa: PLR0913
+def run_experiment(  # ruff: ignore[too-many-arguments]
     config_path: Path,
     *,
     model_name: str | None = None,
@@ -1070,7 +1070,7 @@ def _run_bundle_with_failure_capture(
             ),
             None,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # ruff: ignore[blind-except]
         return None, _format_bundle_failure(bundle, exc)
 
 
@@ -1080,7 +1080,7 @@ def _capture_future_result(
 ) -> tuple[Path | None, str | None]:
     try:
         result = future.result()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # ruff: ignore[blind-except]
         return None, _format_bundle_failure(bundle, exc)
     return result, None
 
