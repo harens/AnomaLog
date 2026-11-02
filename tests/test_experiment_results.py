@@ -109,7 +109,7 @@ def test_build_dataset_statistics_keeps_combined_ait_ads_summary(
         rows=[],
     )
 
-    stats = experiment_results._build_dataset_statistics(  # noqa: SLF001
+    stats = experiment_results._build_dataset_statistics(  # ruff: ignore[private-member-access]
         bundle=_Bundle(
             dataset=DatasetVariantConfig(
                 name="ait_ads",
@@ -184,7 +184,7 @@ def test_build_dataset_statistics_reports_thunderbird_parse_counts(
         window_count=2,
     )
 
-    stats = experiment_results._build_dataset_statistics(  # noqa: SLF001
+    stats = experiment_results._build_dataset_statistics(  # ruff: ignore[private-member-access]
         bundle=_Bundle(
             dataset=DatasetVariantConfig(
                 name="thunderbird",
@@ -217,7 +217,7 @@ def test_build_dataset_statistics_reports_thunderbird_parse_counts(
 def test_ait_ads_suppresses_sequence_level_headline_metrics() -> None:
     """AIT-ADS should report alert-level metrics without sequence-level heads."""
     assert (
-        experiment_results._should_emit_sequence_level_detection(  # noqa: SLF001
+        experiment_results._should_emit_sequence_level_detection(  # ruff: ignore[private-member-access]
             DatasetVariantConfig(
                 name="ait_ads",
                 dataset_name="AIT_ADS",
@@ -227,7 +227,7 @@ def test_ait_ads_suppresses_sequence_level_headline_metrics() -> None:
         is False
     )
     assert (
-        experiment_results._should_emit_sequence_level_detection(  # noqa: SLF001
+        experiment_results._should_emit_sequence_level_detection(  # ruff: ignore[private-member-access]
             DatasetVariantConfig(
                 name="bgl",
                 dataset_name="BGL",
