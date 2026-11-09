@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0913, PLR2004
+# ruff: file-ignore[too-many-arguments, magic-value-comparison]
 """Tests for the scoped DeepLog experiment implementation."""
 
 from __future__ import annotations
@@ -651,7 +651,7 @@ def test_iter_key_examples_respects_eligible_target_indexes() -> None:
 def test_materialise_key_training_examples_caches_history_windows() -> None:
     """Key training should cache per-sequence indexed histories and targets once."""
     materialise_key_training_examples = (
-        deeplog_key._materialise_key_training_examples  # noqa: SLF001
+        deeplog_key._materialise_key_training_examples  # ruff: ignore[private-member-access]
     )
     materialisation_config_type = vars(deeplog_key)[
         "_KeyTrainingExampleMaterialisationConfig"
@@ -687,7 +687,7 @@ def test_materialise_key_training_examples_caches_history_windows() -> None:
 def test_materialise_key_training_examples_with_padding_keeps_early_targets() -> None:
     """Padding fidelity should keep early target positions eligible."""
     materialise_key_training_examples = (
-        deeplog_key._materialise_key_training_examples  # noqa: SLF001
+        deeplog_key._materialise_key_training_examples  # ruff: ignore[private-member-access]
     )
     materialisation_config_type = vars(deeplog_key)[
         "_KeyTrainingExampleMaterialisationConfig"
@@ -723,7 +723,7 @@ def test_fit_key_model_materialises_one_hot_histories_per_minibatch(
             during key-model fitting.
     """
     one_hot_shapes: list[tuple[int, int]] = []
-    original_one_hot_history_indexes = deeplog_key._one_hot_history_indexes  # noqa: SLF001
+    original_one_hot_history_indexes = deeplog_key._one_hot_history_indexes  # ruff: ignore[private-member-access]
 
     def _recording_one_hot_history_indexes(
         *,
@@ -807,7 +807,7 @@ def test_move_key_training_batch_to_device_pins_cuda_transfers(
     histories = torch.tensor([[1, 0]], dtype=torch.long)
     targets = torch.tensor([1], dtype=torch.long)
 
-    moved_histories, moved_targets = deeplog_key._move_key_training_batch_to_device(  # noqa: SLF001
+    moved_histories, moved_targets = deeplog_key._move_key_training_batch_to_device(  # ruff: ignore[private-member-access]
         batch_histories=histories,
         batch_targets=targets,
         device=torch.device("cuda"),
@@ -1712,7 +1712,7 @@ def test_deeplog_stream_context_skips_parameter_tails_when_disabled() -> None:
         continuous_context=True,
     )
 
-    detector._update_stream_context(  # noqa: SLF001
+    detector._update_stream_context(  # ruff: ignore[private-member-access]
         sequence=sequence,
         stream_context=stream_context,
     )
