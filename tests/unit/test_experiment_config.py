@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004
+# ruff: file-ignore[magic-value-comparison]
 """Tests for experiment config loading and validation."""
 
 import zipfile

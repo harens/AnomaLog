@@ -1,4 +1,4 @@
-# ruff: noqa: D101
+# ruff: file-ignore[undocumented-public-class]
 """DeepLog detector orchestration and manifest reporting."""
 
 from __future__ import annotations

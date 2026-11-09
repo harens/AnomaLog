@@ -634,7 +634,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
     train_frac: float = 0.2
     test_frac: float = 0.8
 
-    def __post_init__(self) -> None:  # noqa: C901, PLR0912
+    def __post_init__(self) -> None:  # ruff: ignore[complex-structure, too-many-branches]
         """Validate the requested split fractions and raw-entry split inputs.
 
         Raises:
@@ -705,18 +705,14 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         elif (
             self.split_mode is not None
             and self.split_application_order == SplitApplicationOrder.BEFORE_GROUPING
-        ):
-            if self.straddling_group_policy not in {
-                StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
-                StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
-                StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT,
-                StraddlingGroupPolicy.DROP_STRADDLERS,
-            }:
-                msg = (
-                    "Unsupported straddling policy: "
-                    f"{self.straddling_group_policy.value}"
-                )
-                raise ValueError(msg)
+        ) and self.straddling_group_policy not in {
+            StraddlingGroupPolicy.SPLIT_PARTIAL_SEQUENCES,
+            StraddlingGroupPolicy.ASSIGN_BY_FIRST_EVENT,
+            StraddlingGroupPolicy.ASSIGN_BY_LAST_EVENT,
+            StraddlingGroupPolicy.DROP_STRADDLERS,
+        }:
+            msg = f"Unsupported straddling policy: {self.straddling_group_policy.value}"
+            raise ValueError(msg)
         if self.stream_chunk_size is not None and self.stream_chunk_size <= 0:
             msg = "stream_chunk_size must be a positive integer."
             raise ValueError(msg)
@@ -1053,7 +1049,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
         """
         ...
 
-    def _build_sequence(  # noqa: C901, PLR0913
+    def _build_sequence(  # ruff: ignore[complex-structure, too-many-arguments]
         self,
         window_id: int,
         rows: Collection[StructuredLine],
@@ -1156,7 +1152,7 @@ class SequenceBuilder(ABC, Iterable[TemplateSequence]):
             continuous_context=continuous_context,
         )
 
-    def _build_sequences_for_group(  # noqa: C901, PLR0913
+    def _build_sequences_for_group(  # ruff: ignore[complex-structure, too-many-arguments]
         self,
         *,
         window_id: int,
@@ -2290,7 +2286,7 @@ class EntitySequenceBuilder(SequenceBuilder):
         """
         return self.sink.parser.__class__.__name__ == "DelimitedLabelledEventParser"
 
-    def _iter_training_sequences_from_raw_source_prefix(  # noqa: C901
+    def _iter_training_sequences_from_raw_source_prefix(  # ruff: ignore[complex-structure]
         self,
         *,
         cutoff_entry_index: int,
@@ -2394,7 +2390,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             if seq is not None:
                 yield seq
 
-    def _iter_before_grouping_test_sequences_from_raw_source(  # noqa: C901
+    def _iter_before_grouping_test_sequences_from_raw_source(  # ruff: ignore[complex-structure]
         self,
         *,
         cutoff_entry_index: int,
@@ -2506,7 +2502,7 @@ class EntitySequenceBuilder(SequenceBuilder):
             if seq is not None:
                 yield seq
 
-    def _iter_before_grouping_test_sequences_from_dense_raw_source(  # noqa: C901, PLR0912, PLR0914
+    def _iter_before_grouping_test_sequences_from_dense_raw_source(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals]
         self,
         *,
         cutoff_entry_index: int,
@@ -2926,7 +2922,7 @@ class EntitySequenceBuilder(SequenceBuilder):
                 yield seq
                 window_id += 1
 
-    def __iter__(self) -> Iterator[TemplateSequence]:  # noqa: C901, PLR0912
+    def __iter__(self) -> Iterator[TemplateSequence]:  # ruff: ignore[complex-structure, too-many-branches]
         """Iterate over template sequences yielded by the configured grouping.
 
         Yields:
