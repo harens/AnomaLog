@@ -203,7 +203,7 @@ class AITADSScenarioSource(DatasetSource):
             return
 
         labels_path.parent.mkdir(parents=True, exist_ok=True)
-        urlretrieve(  # noqa: S310 - fixed Zenodo URL owned by the dataset preset
+        urlretrieve(  # ruff: ignore[suspicious-url-open-usage] - fixed Zenodo URL owned by the dataset preset
             self.labels_url,
             labels_path,
         )

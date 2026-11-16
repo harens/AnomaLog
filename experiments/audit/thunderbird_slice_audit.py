@@ -208,7 +208,7 @@ def count_fixed_window_flags(
     )
 
 
-def find_matching_offsets(  # noqa: PLR0913
+def find_matching_offsets(  # ruff: ignore[too-many-arguments]
     flags: Sequence[bool] | np.ndarray,
     *,
     target_train_anomalous: int,
@@ -277,7 +277,7 @@ def audit_thunderbird_slice(
         parser=ThunderbirdParser(),
         cache_paths=CachePathsConfig(cache_root=resolved_cache_root),
     )
-    dataset = sink._dataset()  # noqa: SLF001
+    dataset = sink._dataset()  # ruff: ignore[private-member-access]
     filter_expr = (ds.field("line_order") >= start_line_order) & (
         ds.field("line_order") <= end_line_order
     )

@@ -632,7 +632,7 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
         labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
     )
 
-    assert source._derived_raw_logs_path(  # noqa: SLF001
+    assert source._derived_raw_logs_path(  # ruff: ignore[private-member-access]
         dataset_name="demo",
         dataset_root=source_root,
     ) == (source_root / "preprocessed" / "ait_ads_alerts.jsonl")
@@ -644,7 +644,7 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
         labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
     )
     with pytest.raises(ValueError, match="must be relative to the dataset root"):
-        source_absolute._derived_raw_logs_path(  # noqa: SLF001
+        source_absolute._derived_raw_logs_path(  # ruff: ignore[private-member-access]
             dataset_name="demo",
             dataset_root=source_root,
         )
@@ -656,7 +656,7 @@ def test_ait_ads_source_validates_label_download_and_raw_log_paths(
         labels_md5_checksum="8bc6f42a54490b43c2a0c6e7fb7532cf",
     )
     with pytest.raises(ValueError, match="must stay within the dataset root"):
-        source_with_escape._derived_raw_logs_path(  # noqa: SLF001
+        source_with_escape._derived_raw_logs_path(  # ruff: ignore[private-member-access]
             dataset_name="demo",
             dataset_root=source_root,
         )
@@ -711,7 +711,7 @@ def test_ait_ads_helper_branches_cover_validation_and_canonicalisation(
     with pytest.raises(FileNotFoundError, match="Missing AIT-ADS source file"):
         ait_ads_source.find_scenario_file(tmp_path, "fox", "aminer")
 
-    assigner = ait_ads_source._IntervalLabelAssigner(())  # noqa: SLF001
+    assigner = ait_ads_source._IntervalLabelAssigner(())  # ruff: ignore[private-member-access]
     assert assigner.assign(None) == (0, None)
 
     blank_source = tmp_path / "fox_aminer.json"
@@ -748,8 +748,8 @@ def test_ait_ads_helper_branches_cover_validation_and_canonicalisation(
     )
     assert len(alerts) == 1
     assert alerts[0].timestamp_unix_ms is None
-    assert ait_ads_source._first_epoch_us_from_list(["bad"]) is None  # noqa: SLF001
-    assert ait_ads_source._parse_iso_timestamp_us("bad") is None  # noqa: SLF001
+    assert ait_ads_source._first_epoch_us_from_list(["bad"]) is None  # ruff: ignore[private-member-access]
+    assert ait_ads_source._parse_iso_timestamp_us("bad") is None  # ruff: ignore[private-member-access]
     assert (
         ait_ads_source.classify_wazuh_ids_source(
             {
