@@ -27,7 +27,7 @@ from anomalog.parsers.structured.parquet import sink as parquet_sink
 from anomalog.parsers.structured.parquet import writer_worker
 from anomalog.parsers.structured.parquet.sink import (
     ParquetStructuredSink,
-    _EntityGroup,  # noqa: PLC2701
+    _EntityGroup,  # ruff: ignore[import-private-name]
 )
 from anomalog.parsers.structured.parquet.writer_worker import (
     ENTITY_BUCKET_FIELD,
@@ -39,7 +39,7 @@ from anomalog.parsers.structured.parquet.writer_worker import (
 from anomalog.sequences import EntitySequenceBuilder
 from tests.unit.helpers import structured_line
 
-_track_inline_label_entries = writer_worker._track_inline_label_entries  # noqa: SLF001
+_track_inline_label_entries = writer_worker._track_inline_label_entries  # ruff: ignore[private-member-access]
 
 
 class _Parser(StructuredParser):
@@ -273,7 +273,7 @@ def test_rows_from_batch_applies_defaults_for_missing_and_null_columns(
         names=[LINE_FIELD, TIMESTAMP_FIELD, UNTEMPLATED_FIELD],
     )
 
-    rows = list(sink._rows_from_batch(batch))  # noqa: SLF001
+    rows = list(sink._rows_from_batch(batch))  # ruff: ignore[private-member-access]
 
     assert rows == WINDOW_AND_BATCH_ROWS[:2]
 
@@ -335,7 +335,7 @@ def test_parquet_dataset_schema_exposes_timestamp_and_partition_fields(
         WINDOW_AND_BATCH_ROWS[2:4],
     )
 
-    dataset = sink._dataset()  # noqa: SLF001
+    dataset = sink._dataset()  # ruff: ignore[private-member-access]
 
     assert TIMESTAMP_FIELD in dataset.schema.names
     assert ENTITY_BUCKET_FIELD in dataset.schema.names
@@ -934,7 +934,7 @@ def test_dataset_lookup_retries_after_missing_structured_dataset(
         lambda _self: rebuilds.append(True),
     )
 
-    assert sink._dataset() is sentinel  # noqa: SLF001
+    assert sink._dataset() is sentinel  # ruff: ignore[private-member-access]
     assert rebuilds == [True]
 
 
@@ -954,7 +954,7 @@ def test_repair_structured_cache_handles_empty_and_invalid_directories(
     empty_cache_dir.mkdir(parents=True, exist_ok=True)
 
     with disable_run_logger():
-        sink._repair_structured_cache_if_needed()  # noqa: SLF001
+        sink._repair_structured_cache_if_needed()  # ruff: ignore[private-member-access]
 
     invalid_cache_dir = (
         tmp_path / "cache" / sink.dataset_name / "structured_parquet_invalid"
@@ -975,7 +975,7 @@ def test_repair_structured_cache_handles_empty_and_invalid_directories(
     )
 
     with disable_run_logger():
-        sink._repair_structured_cache_if_needed()  # noqa: SLF001
+        sink._repair_structured_cache_if_needed()  # ruff: ignore[private-member-access]
 
     assert rebuilds == [True]
 
@@ -1027,7 +1027,7 @@ def test_rebuild_structured_cache_removes_existing_cache_root(
     )
 
     with disable_run_logger():
-        sink._rebuild_structured_cache()  # noqa: SLF001
+        sink._rebuild_structured_cache()  # ruff: ignore[private-member-access]
 
     assert rebuilds == [True]
     assert cache_root.exists()
@@ -1615,6 +1615,6 @@ def test_projected_columns_preserves_order_while_deduplicating(
 
     # Keep this direct assertion because higher-level projection tests would not
     # clearly pinpoint a regression in the order-preserving deduplication logic.
-    assert sink._projected_columns(  # noqa: SLF001
+    assert sink._projected_columns(  # ruff: ignore[private-member-access]
         [TIMESTAMP_FIELD, LINE_FIELD, TIMESTAMP_FIELD],
     ) == [TIMESTAMP_FIELD, LINE_FIELD]
